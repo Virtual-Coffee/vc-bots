@@ -1,0 +1,86 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A single Cloudflare Worker (`vc-bots`) hosting all of VirtualCoffee's Slack/Zoom automation:
+the co-working room, the new-member welcome, the App Home tab, and event reminders. Everything
+runs on the edge runtime (`workerd`) — **no `node:*` modules**. Use Web APIs only: `fetch`,
+`crypto.subtle`, `btoa`, `URLSearchParams`, etc.
+
+## Commands
+
+```bash
+pnpm dev          # wrangler dev — local server on workerd
+pnpm test         # vitest run (all tests, inside the real workerd runtime via Miniflare)
+pnpm typecheck    # tsc --noEmit
+pnpm cf-types     # regenerate worker-configuration.d.ts from wrangler.jsonc after binding changes
+pnpm deploy       # wrangler deploy
+
+pnpm vitest run test/coworking-do.test.ts   # a single test file
+pnpm vitest -t "name of test"               # tests matching a name
+```
+
+Tests run inside `workerd` (via `@cloudflare/vitest-pool-workers`), so Web Crypto, the Durable
+Object, and bindings behave exactly as in production. Bindings/migrations come from
+`wrangler.jsonc`. Tests stub network by spying on `fetch` (see `test/coworking-do.test.ts`); use
+`runInDurableObject` / `runDurableObjectAlarm` from `cloudflare:test` to drive the DO.
+
+## Architecture
+
+**Request flow.** `src/index.ts` is the Worker entrypoint (`fetch` + `scheduled` cron). `fetch`
+delegates to `src/router.ts`, a plain `method + path` switch (no router lib) over ~4 routes:
+`/zoom/webhook`, `/slack/events`, `/slack/interactivity`, `/slack/commands` (plus `/health`).
+
+**Two invariants every route follows, in order:**
+
+1. **Verify the provider signature against the *raw* body first**, before parsing JSON
+   (`verifySlackRequest` / `verifyZoomRequest`). All HMAC goes through `src/crypto.ts` using
+   `crypto.subtle` — never hand-roll a timing-safe compare.
+2. **Handle the provider URL-verification handshake**, then dispatch.
+
+**ACK fast, work later.** Slack/Zoom impose a ~3s response window. Routes return `200`
+immediately and run the actual bot work via `ctx.waitUntil(...)` (Slack events, interactivity,
+slash commands). Final user-facing replies go back through Slack's `response_url`
+(`respondEphemeral`) rather than the HTTP response.
+
+**Co-working room = the one stateful piece.** `CoworkingRoom` (`src/bots/coworking/durable-object.ts`)
+is a SQLite-backed Durable Object, **one instance per Zoom meeting ID**, addressed with
+`env.COWORKING_ROOM.getByName(meetingId)`. Routing all of a meeting's webhooks through a single
+instance serializes them, so there are no eventual-consistency races (a registrant row is always
+written before the join that reads it). The DO must be re-exported from `src/index.ts` for the
+runtime to bind it. Schema (`session` / `registrant` / `participant`) is created idempotently in
+`migrate()` under `blockConcurrencyWhile`. A stale-session `alarm()` force-closes sessions that
+never received `meeting.ended`.
+
+The room mirrors a live **Slack Call** in the channel: Zoom `meeting.started` →
+`calls.add` + post message; `participant_joined/left` → `calls.participants.add/remove`;
+`meeting.ended` → `calls.end` + edit message. Zoom participants are correlated to Slack members
+via the registrant table (by `registrant_id`, then email); uncorrelated people show as external
+guests. If `calls.add` fails, it falls back to a plain announcement.
+
+**Reminders** (`src/bots/reminders/`) run from the cron `scheduled()` handler. ⚠️ The cron
+strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
+wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons
+fire in **UTC**. Events come from the VirtualCoffee CMS over GraphQL. The same `sendReminder`
+is reused by the `/vc-bot-admin` slash command for manual previews.
+
+**Slack client.** Always `createSlackClient(env)` (wraps `slack-web-api-client`). The Calls API
+isn't typed by that package, so `src/bots/coworking/slack-call.ts` reaches it via the generic
+`client.call("calls.add", …)` escape hatch — **do not add `@slack/web-api`**.
+
+## Conventions
+
+- **Config vs secrets.** Non-secret config (channel IDs, meeting ID, log level) lives in
+  `wrangler.jsonc` `vars` and is typed in `src/env.ts` (`Env`). Secrets (`SLACK_BOT_TOKEN`,
+  `*_SECRET`, etc.) go via `wrangler secret put` in prod and `.dev.vars` locally (see
+  `.dev.vars.example`). `src/env.ts` is the hand-maintained `Env` the app imports; keep it in
+  sync with `wrangler.jsonc` and rerun `pnpm cf-types`.
+- **Logging.** Use the leveled `log` from `src/log.ts` (`log.info("event.name", { key: val })`),
+  not bare `console.*`. Threshold is set per request/DO via `setLogLevel(env.LOG_LEVEL)`; the DO
+  sets it in its own constructor since it runs in a separate isolate.
+- **TS is strict** with `noUncheckedIndexedAccess` and `verbatimModuleSyntax` — use
+  `import type` for type-only imports.
+- `slackify-html` is **edge-incompatible** (throws on workerd); a local `html-to-mrkdwn`
+  converter replaces it. Don't re-add it.
