@@ -1,0 +1,42 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "vc-bots",
+  "main": "src/index.ts",
+  // Pinned past date for stable runtime behavior. Bump deliberately, not casually.
+  "compatibility_date": "2026-01-01",
+
+  // Co-working room state. One DO instance per Zoom meeting ID (addressed via getByName).
+  "durable_objects": {
+    "bindings": [{ "name": "COWORKING_ROOM", "class_name": "CoworkingRoom" }]
+  },
+  // SQLite-backed DO storage (GA, included on the Workers free plan).
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] }],
+
+  // Event reminders. Cron triggers fire in UTC — translate intended local send-times.
+  // TODO(reminders): replace these placeholder expressions with the real UTC times once
+  // the intended local send-times are supplied (note: fixed UTC shifts ±1h across DST).
+  "triggers": {
+    "crons": [
+      "0 * * * *", // TODO hourly  — placeholder
+      "0 13 * * *", // TODO daily   — placeholder UTC time
+      "0 13 * * MON" // TODO weekly  — placeholder UTC time
+    ]
+  },
+
+  "observability": { "enabled": true },
+
+  // Non-secret config (single room). Secrets go via `wrangler secret put` / `.dev.vars`.
+  "vars": {
+    "ZOOM_MEETING_ID": "4669259563",
+    "SLACK_COWORKING_CHANNEL_ID": "C0B6C3BFEDD",
+    "ZOOM_MEETING_INVITE_URL": "https://us05web.zoom.us/j/4669259563?pwd=ZGdlYjlpSTFqZWRXZGpURmNtRHRSUT09",
+    "ROOM_TITLE": "Co-Working Room",
+    // Slack Call creator (calls.add requires created_by with a bot token).
+    "SLACK_BOT_USER_ID": "U0B6XMLNXK6", // TODO: the bot's own Slack user id (auth.test → user_id)
+    // Event reminders (Phase 3).
+    "SLACK_REMINDERS_CHANNEL_ID": "C09B0QURPB2", // TODO: real #events-style channel
+    "CMS_GRAPHQL_URL": "https://virtualcoffee.io/graphql", // TODO: confirm CMS GraphQL endpoint
+    "LOG_LEVEL": "info" // debug | info | warn | error (set LOG_LEVEL=debug in .dev.vars locally)
+    // TODO(config): port remaining message/notice strings from the old rooms config.
+  }
+}

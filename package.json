@@ -1,0 +1,30 @@
+{
+  "name": "vc-bots",
+  "version": "1.0.0",
+  "description": "VirtualCoffee Slack/Zoom bots — a single Cloudflare Worker (co-working room, welcome, App Home, event reminders).",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "cf-types": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "graphql": "^16.14.0",
+    "graphql-request": "^7.4.0",
+    "luxon": "^3.7.2",
+    "slack-web-api-client": "^1.1.12"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.16.10",
+    "@types/luxon": "^3.7.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.95.0"
+  }
+}
