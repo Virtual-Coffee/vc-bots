@@ -35,7 +35,8 @@ export async function handleJoinClick(
   try {
     log.debug("join.profile.fetch", { user: slackUserId });
     const res = await client.users.profile.get({ user: slackUserId });
-    email = res.profile?.email || undefined;
+    // email = res.profile?.email || undefined;
+    email =  undefined;
     displayName = res.profile?.real_name || res.profile?.display_name || displayName;
   } catch {
     // Keep defaults; the DO falls back to the generic invite link when email is absent.
