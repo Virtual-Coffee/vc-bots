@@ -27,8 +27,8 @@
 
   // Non-secret config (single room). Secrets go via `wrangler secret put` / `.dev.vars`.
   "vars": {
-    "ZOOM_MEETING_ID": "4669259563", // personal
-    // "ZOOM_MEETING_ID": "82832550878",
+
+    "ZOOM_MEETING_ID": "82832550878",
     "SLACK_COWORKING_CHANNEL_ID": "C0B6C3BFEDD",
     "ROOM_TITLE": "Co-Working Room",
     // Event reminders (Phase 3).

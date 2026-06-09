@@ -79,8 +79,15 @@ async function handleZoomWebhook(
 
   // Meeting events → the co-working DO, keyed by meeting ID so all events for one meeting
   // serialize through a single instance (race-free). Awaited so ordering is preserved.
+  // The subscription is account-wide, so events arrive for every meeting under the account;
+  // only the configured co-working meeting is ours — ignore the rest (still 200: Zoom retries
+  // non-2xx responses and can eventually deactivate the endpoint).
   if (isZoomMeetingEvent(body)) {
     const meeting = String(body.payload.object.id);
+    if (meeting !== env.ZOOM_MEETING_ID) {
+      log.info("zoom.webhook.ignored", { event: body.event, meeting });
+      return new Response(null, { status: 200 });
+    }
     log.info("zoom.webhook", { event: body.event, meeting });
     const stub = env.COWORKING_ROOM.getByName(meeting);
     await stub.handleZoomEvent(body);

@@ -47,7 +47,9 @@ slash commands). Final user-facing replies go back through Slack's `response_url
 
 **Co-working room = the one stateful piece.** `CoworkingRoom` (`src/bots/coworking/durable-object.ts`)
 is a SQLite-backed Durable Object, **one instance per Zoom meeting ID**, addressed with
-`env.COWORKING_ROOM.getByName(meetingId)`. Routing all of a meeting's webhooks through a single
+`env.COWORKING_ROOM.getByName(meetingId)`. The Zoom webhook subscription is account-wide, so the
+router drops events whose meeting ID isn't `ZOOM_MEETING_ID` (other meetings under the account)
+before any DO is touched. Routing all of a meeting's webhooks through a single
 instance serializes them, so there are no eventual-consistency races (a member_link row is always
 written before the join that reads it). The DO must be re-exported from `src/index.ts` for the
 runtime to bind it. Schema (`session` / `member_link` / `participant`) is created idempotently in
