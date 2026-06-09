@@ -22,7 +22,8 @@ const USAGE = [
   "• `hourly` · `daily` · `weekly` — post that event reminder now",
   "• `welcome` — DM you the welcome message (preview)",
   "• `home` — publish your App Home (preview)",
-  "• `coworking open` · `coworking close` — announce the co-working room (no Slack Call)",
+  "• `coworking open` · `coworking close` — announce the co-working room",
+  "• `coworking invite` — post the 'start a session' invite to the co-working channel",
 ].join("\n");
 
 /** Parse the form-encoded slash-command body into a typed payload. */
@@ -110,7 +111,15 @@ export async function handleAdminCommand(cmd: SlackSlashCommand, env: Env): Prom
         );
         return;
       }
-      await respondEphemeral(cmd.response_url, `Usage: \`coworking open\` or \`coworking close\`.\n\n${USAGE}`);
+      if (arg === "invite") {
+        await stub.adminPostInvite();
+        await respondEphemeral(cmd.response_url, ":white_check_mark: Posted the co-working invite.");
+        return;
+      }
+      await respondEphemeral(
+        cmd.response_url,
+        `Usage: \`coworking open\`, \`coworking close\`, or \`coworking invite\`.\n\n${USAGE}`,
+      );
       return;
     }
 
