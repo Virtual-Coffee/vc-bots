@@ -1,23 +1,29 @@
 import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
-import { respondEphemeral } from "../../slack/response";
 import type { SlackBlockActionsPayload } from "../../slack/types";
-import { JOIN_ACTION_ID } from "./slack-call";
+import {
+  JOIN_ACTION_ID,
+  buildJoinErrorModal,
+  buildJoinLoadingModal,
+  buildJoinModal,
+} from "./slack-call";
 
 /**
- * Interactivity handler for the "Join the co-working room" button.
+ * Interactivity handler for the room "Join" button.
  *
- * The route ACKs Slack within 3s and calls this via `ctx.waitUntil`, so the Zoom registrant
- * work happens after the ACK. We look up the member's email (for registrant correlation),
- * ask the DO to mint a per-user join link, and deliver it privately via `response_url`.
+ * The route ACKs Slack within 3s and calls this via `ctx.waitUntil`. A channel button's url is
+ * identical for every viewer, so it can't carry a per-user link; instead the click opens a modal
+ * (a per-user surface). We open a loading modal immediately — while the `trigger_id` is still
+ * fresh — then mint the member's Zoom invite link and `views.update` the modal with their personal
+ * join link (or an error modal if minting fails).
  */
 
-/** Does this interactivity payload represent a click of our Join button? */
+/** Does this interactivity payload represent a click of the room "Join" button? */
 export function isJoinClick(payload: SlackBlockActionsPayload): boolean {
   return (
     payload.type === "block_actions" &&
-    payload.actions?.some((a) => a.action_id === JOIN_ACTION_ID)
+    Boolean(payload.actions?.some((a) => a.action_id === JOIN_ACTION_ID))
   );
 }
 
@@ -26,31 +32,43 @@ export async function handleJoinClick(
   env: Env,
 ): Promise<void> {
   const slackUserId = payload.user.id;
+  const triggerId = payload.trigger_id;
   const client = createSlackClient(env);
 
-  // Resolve email (scope users:read.email) for clean member↔registrant correlation;
-  // fall back to display name if it's missing.
-  let email: string | undefined;
+  if (!triggerId) {
+    log.warn("join.no_trigger", { user: slackUserId });
+    return;
+  }
+
+  // Open the loading modal first, while the trigger_id is fresh (Slack's ~3s window).
+  let viewId: string | undefined;
+  try {
+    log.debug("join.modal.open", { user: slackUserId });
+    const opened = await client.views.open({ trigger_id: triggerId, view: buildJoinLoadingModal() });
+    viewId = opened.view?.id;
+  } catch (err) {
+    log.warn("join.modal.open_failed", { user: slackUserId, err: String(err) });
+    return; // no modal → nothing more we can do for this click
+  }
+
+  // Resolve a display name to pre-fill on the invite link (and to correlate the Zoom join later).
   let displayName = "VirtualCoffee member";
   try {
-    log.debug("join.profile.fetch", { user: slackUserId });
     const res = await client.users.profile.get({ user: slackUserId });
-    // email = res.profile?.email || undefined;
-    email =  undefined;
     displayName = res.profile?.real_name || res.profile?.display_name || displayName;
   } catch {
-    // Keep defaults; the DO falls back to the generic invite link when email is absent.
+    // Keep the default; a missing display name shouldn't block registration.
   }
-  log.debug("join.profile.resolved", { user: slackUserId, hasEmail: Boolean(email) });
 
-  log.debug("join.request", { user: slackUserId });
-  const stub = env.COWORKING_ROOM.getByName(env.ZOOM_MEETING_ID);
-  const { joinUrl } = await stub.handleJoinRequest({ slackUserId, email, displayName });
-  log.info("join.registered", { user: slackUserId, hasEmail: Boolean(email) });
-
-  log.debug("join.respond", { user: slackUserId });
-  await respondEphemeral(
-    payload.response_url,
-    `:coffee: Here's your personal join link for the *${env.ROOM_TITLE}*:\n${joinUrl}`,
-  );
+  // Mint the invite link and swap the loading modal for the personal-link modal.
+  try {
+    log.debug("join.request", { user: slackUserId });
+    const stub = env.COWORKING_ROOM.getByName(env.ZOOM_MEETING_ID);
+    const { joinUrl } = await stub.handleJoinRequest({ slackUserId, displayName });
+    log.info("join.linked", { user: slackUserId }); // never log joinUrl — it's a credential
+    await client.views.update({ view_id: viewId, view: buildJoinModal(env, joinUrl) });
+  } catch (err) {
+    log.error("join.failed", { user: slackUserId, err: String(err) });
+    await client.views.update({ view_id: viewId, view: buildJoinErrorModal(env) });
+  }
 }

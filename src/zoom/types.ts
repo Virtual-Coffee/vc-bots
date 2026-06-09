@@ -10,10 +10,7 @@ export interface ZoomParticipant {
   participant_user_id?: string;
   /** Ephemeral per-meeting uuid. */
   participant_uuid?: string;
-  /** Correlation key set when the person joined via a registrant link (Phase 5). */
-  registrant_id?: string;
   user_name?: string;
-  email?: string;
   join_time?: string;
   leave_time?: string;
 }

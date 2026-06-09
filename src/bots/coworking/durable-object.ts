@@ -3,24 +3,20 @@ import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { getCachedZoomToken } from "../../zoom/oauth";
-import { addMeetingRegistrant } from "../../zoom/registrants";
+import { createInviteLink } from "../../zoom/invite-links";
 import type { ZoomMeetingEvent } from "../../zoom/types";
 import {
-  type CallUser,
+  type PresenceUser,
+  buildRoomClosedBlocks,
+  buildRoomIdleBlocks,
   buildRoomOpenBlocks,
-  callsAdd,
-  callsEnd,
-  callsParticipantsAdd,
-  callsParticipantsRemove,
-  toCallUser,
 } from "./slack-call";
 import {
-  type ParticipantIdentity,
   eventTimeMs,
   instanceUuid,
-  meetingId,
   participantIdentity,
   roomClosedText,
+  roomIdleText,
   roomOpenText,
 } from "./zoom-events";
 
@@ -29,8 +25,8 @@ import {
  * serialize through this single instance, so the session row is always written before a join
  * is processed (no eventual-consistency race).
  *
- * Renders a live Slack Call in the channel, mints per-user Zoom registrant links, and keeps
- * the Call's participant list in sync as people join/leave.
+ * Mints per-user Zoom invite links (name pre-filled), posts a self-managed room message, and keeps
+ * its presence list in sync as people join/leave.
  */
 
 /** Force-end a session this long after it started if `meeting.ended` was never received. */
@@ -39,22 +35,22 @@ const STALE_SESSION_MS = 6 * 60 * 60 * 1000;
 /** DO storage key for the ts of an admin-posted (announce-only) room message. */
 const ADMIN_ANNOUNCEMENT_KEY = "admin_announcement_ts";
 
+/** DO storage key for the ts of the standing idle-invite message, edited in place when a
+ *  session starts so the channel message walks invite → active → ended. */
+const IDLE_INVITE_KEY = "idle_invite_ts";
+
 // Type aliases (not interfaces) so they satisfy `exec<T>`'s `Record<string, SqlStorageValue>`.
 type SessionRow = {
   instance_uuid: string;
-  slack_call_id: string | null;
   slack_message_ts: string | null;
-  zoom_meeting_id: string;
   started_at: number | null;
   ended_at: number | null;
   status: string;
+  peak_participants: number | null;
 };
 
-type RegistrantRow = {
-  registrant_id: string;
-  instance_uuid: string | null;
-  slack_user_id: string | null;
-  email: string | null;
+type MemberLinkRow = {
+  slack_user_id: string;
   display_name: string | null;
   created_at: number | null;
 };
@@ -62,11 +58,11 @@ type RegistrantRow = {
 type ParticipantRow = {
   zoom_user_id: string;
   instance_uuid: string;
-  registrant_id: string | null;
   slack_user_id: string | null;
   external_id: string | null;
   display_name: string | null;
   joined_at: number | null;
+  left_at: number | null;
 };
 
 export class CoworkingRoom extends DurableObject<Env> {
@@ -83,89 +79,87 @@ export class CoworkingRoom extends DurableObject<Env> {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS session (
         instance_uuid     TEXT PRIMARY KEY,
-        slack_call_id     TEXT,
         slack_message_ts  TEXT,
-        zoom_meeting_id   TEXT NOT NULL,
         started_at        INTEGER,
         ended_at          INTEGER,
-        status            TEXT NOT NULL
+        status            TEXT NOT NULL,
+        peak_participants INTEGER NOT NULL DEFAULT 0
       );
-      CREATE TABLE IF NOT EXISTS registrant (
-        registrant_id   TEXT PRIMARY KEY,
-        instance_uuid   TEXT,
-        slack_user_id   TEXT,
-        email           TEXT,
+      CREATE TABLE IF NOT EXISTS member_link (
+        slack_user_id   TEXT PRIMARY KEY,
         display_name    TEXT,
         created_at      INTEGER
       );
       CREATE TABLE IF NOT EXISTS participant (
         zoom_user_id    TEXT,
         instance_uuid   TEXT,
-        registrant_id   TEXT,
         slack_user_id   TEXT,
         external_id     TEXT,
         display_name    TEXT,
         joined_at       INTEGER,
+        left_at         INTEGER,
         PRIMARY KEY (zoom_user_id, instance_uuid)
       );
     `);
+    // Backfill columns for DOs created before these were added. ADD COLUMN throws on an existing
+    // column, so guard with table_info to keep migrate() idempotent under blockConcurrencyWhile.
+    this.addColumnIfMissing("session", "peak_participants", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumnIfMissing("participant", "left_at", "INTEGER");
+  }
+
+  /** Add a column only if it's not already present (idempotent schema migration). */
+  private addColumnIfMissing(table: string, column: string, definition: string): void {
+    const exists = this.sql
+      .exec<{ name: string }>(`PRAGMA table_info(${table})`)
+      .toArray()
+      .some((c) => c.name === column);
+    if (!exists) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
   // --- RPC surface ---
 
   /**
-   * Slack Join click → register the member with Zoom and return their per-user join link.
-   * Records `registrant_id ↔ slack_user_id` up front so later correlation is reliable.
+   * Slack Join click → mint a per-user Zoom invite link (name pre-filled) and return it.
+   *
+   * We store `slack_user_id ↔ display_name` so we can correlate the member later. Correlation is
+   * best-effort: an invite-link joiner's `participant_joined` carries no registrant id, only the
+   * `user_name` we baked in here — so we match on that name (and fall back to a plain guest when a
+   * signed-in member's own Zoom name overrides the pre-fill). No member PII is sent to Zoom.
    */
   async handleJoinRequest(input: {
     slackUserId: string;
-    email?: string;
     displayName: string;
   }): Promise<{ joinUrl: string }> {
-    // No email → can't mint a registrant link; hand back the generic invite.
-    if (!input.email) {
-      log.debug("coworking.join.no_email", { user: input.slackUserId });
-      return { joinUrl: this.env.ZOOM_MEETING_INVITE_URL };
-    }
-
     log.debug("coworking.join.token", { user: input.slackUserId });
     const token = await getCachedZoomToken(this.env, this.ctx.storage);
-    log.debug("coworking.join.registrant", { user: input.slackUserId });
-    const registrant = await addMeetingRegistrant(token, this.env.ZOOM_MEETING_ID, {
-      email: input.email,
-      firstName: input.displayName,
-    });
+    log.debug("coworking.join.invite_link", { user: input.slackUserId });
+    const { joinUrl } = await createInviteLink(token, this.env.ZOOM_MEETING_ID, input.displayName);
 
-    log.debug("coworking.join.store", { user: input.slackUserId, registrant: registrant.registrant_id });
-    const active = this.getActiveSession();
+    log.debug("coworking.join.store", { user: input.slackUserId });
     this.sql.exec(
-      `INSERT INTO registrant (registrant_id, instance_uuid, slack_user_id, email, display_name, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(registrant_id) DO UPDATE SET
-         slack_user_id = excluded.slack_user_id, email = excluded.email,
-         display_name = excluded.display_name, instance_uuid = excluded.instance_uuid`,
-      registrant.registrant_id,
-      active?.instance_uuid ?? null,
+      `INSERT INTO member_link (slack_user_id, display_name, created_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(slack_user_id) DO UPDATE SET
+         display_name = excluded.display_name, created_at = excluded.created_at`,
       input.slackUserId,
-      input.email,
       input.displayName,
       Date.now(),
     );
 
-    log.info("coworking.registrant", { user: input.slackUserId, registrant: registrant.registrant_id });
-    return { joinUrl: registrant.join_url };
+    log.info("coworking.member_link", { user: input.slackUserId });
+    return { joinUrl };
   }
 
   /**
    * Admin (`/vc-bot-admin coworking open`) announce-only: post a plain room-open message — the
-   * Join button still works, but there's no Slack Call or tracked session, so this never
+   * Join button still works, but there's no tracked session, so this never
    * collides with the Zoom-driven flow. Remembers the message ts so `close` can update it.
    */
   async adminAnnounceOpen(): Promise<void> {
     const res = await createSlackClient(this.env).chat.postMessage({
       channel: this.env.SLACK_COWORKING_CHANNEL_ID,
       text: roomOpenText(this.env),
-      blocks: buildRoomOpenBlocks(this.env),
+      blocks: buildRoomOpenBlocks(this.env, []),
     });
     if (res.ts) await this.ctx.storage.put(ADMIN_ANNOUNCEMENT_KEY, res.ts);
     log.info("coworking.admin_announce", { action: "open", ts: res.ts });
@@ -184,6 +178,12 @@ export class CoworkingRoom extends DurableObject<Env> {
     await this.ctx.storage.delete(ADMIN_ANNOUNCEMENT_KEY);
     log.info("coworking.admin_announce", { action: "close" });
     return { closed: true };
+  }
+
+  /** Admin (`/vc-bot-admin coworking invite`): post a standing "start a session" invite now. */
+  async adminPostInvite(): Promise<void> {
+    await this.postRoomIdle();
+    log.info("coworking.admin_invite");
   }
 
   async handleZoomEvent(event: ZoomMeetingEvent): Promise<void> {
@@ -219,49 +219,45 @@ export class CoworkingRoom extends DurableObject<Env> {
     const startedAt = eventTimeMs(event);
     const client = createSlackClient(this.env);
 
-    let callId: string | undefined;
-    try {
-      log.debug("coworking.started.calls_add", { instance: uuid });
-      callId = await callsAdd(client, {
-        externalUniqueId: uuid,
-        joinUrl: this.env.ZOOM_MEETING_INVITE_URL,
-        title: this.env.ROOM_TITLE,
-        createdBy: this.env.SLACK_BOT_USER_ID,
-        dateStartSec: Math.floor(startedAt / 1000),
+    // Prefer editing the standing idle-invite message in place so the channel message walks
+    // invite → active → ended. Fall back to a fresh post if no invite is pending (first session,
+    // or someone joined Zoom directly).
+    const inviteTs = await this.ctx.storage.get<string>(IDLE_INVITE_KEY);
+    let messageTs: string | null;
+    if (inviteTs) {
+      log.debug("coworking.started.update_invite", { instance: uuid, ts: inviteTs });
+      await client.chat.update({
+        channel: this.env.SLACK_COWORKING_CHANNEL_ID,
+        ts: inviteTs,
+        text: roomOpenText(this.env),
+        blocks: buildRoomOpenBlocks(this.env, []),
       });
-      log.debug("coworking.started.call_created", { instance: uuid, call: callId });
-    } catch (err) {
-      // Calls unavailable — fall back to a plain announcement (parity) without the widget.
-      log.error("coworking.calls_add_failed", { instance: uuid, err: String(err) });
+      await this.ctx.storage.delete(IDLE_INVITE_KEY);
+      messageTs = inviteTs;
+    } else {
+      log.debug("coworking.started.post", { instance: uuid });
+      const res = await client.chat.postMessage({
+        channel: this.env.SLACK_COWORKING_CHANNEL_ID,
+        text: roomOpenText(this.env),
+        blocks: buildRoomOpenBlocks(this.env, []),
+      });
+      messageTs = res.ts ?? null;
     }
-
-    log.debug("coworking.started.post", { instance: uuid, call: callId ?? null });
-    const res = await client.chat.postMessage({
-      channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-      text: roomOpenText(this.env),
-      blocks: buildRoomOpenBlocks(this.env, callId),
-    });
 
     log.debug("coworking.started.session_row", { instance: uuid });
     this.sql.exec(
-      `INSERT INTO session (instance_uuid, zoom_meeting_id, slack_call_id, slack_message_ts, started_at, status)
-       VALUES (?, ?, ?, ?, ?, 'active')
+      `INSERT INTO session (instance_uuid, slack_message_ts, started_at, status)
+       VALUES (?, ?, ?, 'active')
        ON CONFLICT(instance_uuid) DO UPDATE SET
-         status = 'active', slack_call_id = excluded.slack_call_id,
-         slack_message_ts = excluded.slack_message_ts, started_at = excluded.started_at,
-         ended_at = NULL`,
+         status = 'active', slack_message_ts = excluded.slack_message_ts,
+         started_at = excluded.started_at, ended_at = NULL, peak_participants = 0`,
       uuid,
-      meetingId(event),
-      callId ?? null,
-      res.ts ?? null,
+      messageTs,
       startedAt,
     );
 
-    // Attach any registrants created before the session started to this instance.
-    this.sql.exec("UPDATE registrant SET instance_uuid = ? WHERE instance_uuid IS NULL", uuid);
-
     await this.ctx.storage.setAlarm(Date.now() + STALE_SESSION_MS);
-    log.info("coworking.started", { instance: uuid, call: callId ?? null });
+    log.info("coworking.started", { instance: uuid });
   }
 
   private async onParticipantJoined(event: ZoomMeetingEvent): Promise<void> {
@@ -274,48 +270,38 @@ export class CoworkingRoom extends DurableObject<Env> {
     const id = participantIdentity(participant);
     if (!id.zoomUserId) return;
 
-    log.debug("coworking.join.correlate", { instance: uuid, registrantId: id.registrantId ?? null });
-    const registrant = this.findRegistrant(id);
-    const callUser = toCallUser(registrant, id);
-    log.debug("coworking.join.correlated", {
-      instance: uuid,
-      as: "slack_id" in callUser ? "member" : "guest",
-    });
-
-    const alreadyHere =
-      this.sql
-        .exec(
-          "SELECT 1 FROM participant WHERE zoom_user_id = ? AND instance_uuid = ?",
-          id.zoomUserId,
-          uuid,
-        )
-        .toArray().length > 0;
+    log.debug("coworking.join.correlate", { instance: uuid });
+    // Best-effort: match the Zoom display name to a member who minted an invite link.
+    const member = this.findMember(id.displayName);
+    const slackUserId = member?.slack_user_id ?? null;
+    const externalId = slackUserId ? null : id.zoomUserId;
+    log.debug("coworking.join.correlated", { instance: uuid, as: slackUserId ? "member" : "guest" });
 
     this.sql.exec(
       `INSERT INTO participant
-         (zoom_user_id, instance_uuid, registrant_id, slack_user_id, external_id, display_name, joined_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+         (zoom_user_id, instance_uuid, slack_user_id, external_id, display_name, joined_at, left_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL)
        ON CONFLICT(zoom_user_id, instance_uuid) DO UPDATE SET
          display_name = excluded.display_name, slack_user_id = excluded.slack_user_id,
-         external_id = excluded.external_id, registrant_id = excluded.registrant_id`,
+         external_id = excluded.external_id, left_at = NULL`,
       id.zoomUserId,
       uuid,
-      registrant?.registrant_id ?? id.registrantId ?? null,
-      "slack_id" in callUser ? callUser.slack_id : null,
-      "external_id" in callUser ? callUser.external_id : null,
+      slackUserId,
+      externalId,
       id.displayName,
       eventTimeMs(event),
     );
 
-    if (!alreadyHere && session.slack_call_id) {
-      log.debug("coworking.join.calls_add", { instance: uuid, call: session.slack_call_id });
-      await callsParticipantsAdd(createSlackClient(this.env), session.slack_call_id, [callUser]);
-    }
-    log.info("coworking.joined", {
-      instance: uuid,
-      as: "slack_id" in callUser ? "member" : "guest",
-      duplicate: alreadyHere,
-    });
+    // Track peak concurrent attendance for the end-of-session stats.
+    const present = this.countPresent(uuid);
+    this.sql.exec(
+      "UPDATE session SET peak_participants = MAX(peak_participants, ?) WHERE instance_uuid = ?",
+      present,
+      uuid,
+    );
+
+    await this.updatePresence(session);
+    log.info("coworking.joined", { instance: uuid, as: slackUserId ? "member" : "guest" });
   }
 
   private async onParticipantLeft(event: ZoomMeetingEvent): Promise<void> {
@@ -336,19 +322,15 @@ export class CoworkingRoom extends DurableObject<Env> {
       .toArray()[0];
     if (!row) return; // unknown or already removed — idempotent
 
+    // Soft-delete: mark them gone but keep the row so the end-of-session roster survives.
     this.sql.exec(
-      "DELETE FROM participant WHERE zoom_user_id = ? AND instance_uuid = ?",
+      "UPDATE participant SET left_at = ? WHERE zoom_user_id = ? AND instance_uuid = ?",
+      eventTimeMs(event),
       id.zoomUserId,
       uuid,
     );
 
-    if (session?.slack_call_id) {
-      const callUser: CallUser = row.slack_user_id
-        ? { slack_id: row.slack_user_id }
-        : { external_id: row.external_id ?? id.zoomUserId, display_name: row.display_name ?? id.displayName };
-      log.debug("coworking.left.calls_remove", { instance: uuid, call: session.slack_call_id });
-      await callsParticipantsRemove(createSlackClient(this.env), session.slack_call_id, [callUser]);
-    }
+    if (session) await this.updatePresence(session);
     log.info("coworking.left", { instance: uuid });
   }
 
@@ -363,19 +345,18 @@ export class CoworkingRoom extends DurableObject<Env> {
   private async closeSession(session: SessionRow, endedAt: number): Promise<void> {
     const client = createSlackClient(this.env);
 
-    if (session.slack_call_id) {
-      log.debug("coworking.end.calls_end", { call: session.slack_call_id });
-      await callsEnd(client, session.slack_call_id).catch((err) =>
-        log.error("coworking.calls_end_failed", { call: session.slack_call_id, err: String(err) }),
-      );
-    }
     if (session.slack_message_ts) {
-      log.debug("coworking.end.update_msg", { ts: session.slack_message_ts });
+      const stats = {
+        durationMs: session.started_at ? Math.max(0, endedAt - session.started_at) : 0,
+        peak: session.peak_participants ?? 0,
+        attendees: this.buildRoster(session.instance_uuid),
+      };
+      log.debug("coworking.end.update_msg", { ts: session.slack_message_ts, peak: stats.peak });
       await client.chat.update({
         channel: this.env.SLACK_COWORKING_CHANNEL_ID,
         ts: session.slack_message_ts,
         text: roomClosedText(this.env),
-        blocks: [{ type: "section", text: { type: "mrkdwn", text: roomClosedText(this.env) } }],
+        blocks: buildRoomClosedBlocks(this.env, stats),
       });
     }
 
@@ -387,35 +368,107 @@ export class CoworkingRoom extends DurableObject<Env> {
     this.sql.exec("DELETE FROM participant WHERE instance_uuid = ?", session.instance_uuid);
     await this.ctx.storage.deleteAlarm();
     log.info("coworking.ended", { instance: session.instance_uuid });
+
+    // Leave a fresh standing invite so the next person knows they can start a session.
+    await this.postRoomIdle();
   }
 
-  /** Correlate a participant to a registrant: by `registrant_id` first, then email. */
-  private findRegistrant(id: ParticipantIdentity): RegistrantRow | undefined {
-    if (id.registrantId) {
-      const byId = this.sql
-        .exec<RegistrantRow>("SELECT * FROM registrant WHERE registrant_id = ?", id.registrantId)
-        .toArray()[0];
-      if (byId) return byId;
+  /**
+   * Re-render the open-room message's presence list from the live `participant` rows. Called after
+   * every join/leave; no-op if the session has no posted message to edit.
+   */
+  private async updatePresence(session: SessionRow): Promise<void> {
+    if (!session.slack_message_ts) return;
+    const rows = this.sql
+      .exec<ParticipantRow>(
+        "SELECT * FROM participant WHERE instance_uuid = ? AND left_at IS NULL ORDER BY joined_at",
+        session.instance_uuid,
+      )
+      .toArray();
+    const present: PresenceUser[] = rows.map((r) =>
+      r.slack_user_id
+        ? { slackUserId: r.slack_user_id }
+        : { displayName: r.display_name ?? "A guest" },
+    );
+    log.debug("coworking.presence.update", { instance: session.instance_uuid, count: present.length });
+    await createSlackClient(this.env).chat.update({
+      channel: this.env.SLACK_COWORKING_CHANNEL_ID,
+      ts: session.slack_message_ts,
+      text: roomOpenText(this.env),
+      blocks: buildRoomOpenBlocks(this.env, present),
+    });
+  }
+
+  /**
+   * Post a fresh "the room is quiet — start a session" invite to the channel, and remember its ts
+   * so the next `meeting.started` can edit this very message into the active room (invite → active).
+   */
+  private async postRoomIdle(): Promise<void> {
+    const res = await createSlackClient(this.env).chat.postMessage({
+      channel: this.env.SLACK_COWORKING_CHANNEL_ID,
+      text: roomIdleText(this.env),
+      blocks: buildRoomIdleBlocks(this.env),
+    });
+    if (res.ts) await this.ctx.storage.put(IDLE_INVITE_KEY, res.ts);
+    log.info("coworking.idle_invite");
+  }
+
+  /**
+   * Deduped roster of everyone who stopped by this session (regardless of whether they're still in
+   * the room): members collapsed by slack_user_id, guests by display name. Ordered by first join.
+   */
+  private buildRoster(uuid: string): PresenceUser[] {
+    const rows = this.sql
+      .exec<ParticipantRow>(
+        "SELECT * FROM participant WHERE instance_uuid = ? ORDER BY joined_at",
+        uuid,
+      )
+      .toArray();
+    const seen = new Set<string>();
+    const roster: PresenceUser[] = [];
+    for (const r of rows) {
+      if (r.slack_user_id) {
+        const key = `member:${r.slack_user_id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        roster.push({ slackUserId: r.slack_user_id });
+      } else {
+        const name = r.display_name ?? "A guest";
+        const key = `guest:${name}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        roster.push({ displayName: name });
+      }
     }
-    if (id.email) {
-      return this.sql
-        .exec<RegistrantRow>("SELECT * FROM registrant WHERE email = ? LIMIT 1", id.email)
-        .toArray()[0];
-    }
-    return undefined;
+    return roster;
+  }
+
+  /** Count people currently in the room (joined, not yet left). */
+  private countPresent(uuid: string): number {
+    return this.sql
+      .exec<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM participant WHERE instance_uuid = ? AND left_at IS NULL",
+        uuid,
+      )
+      .toArray()[0]?.n ?? 0;
+  }
+
+  /**
+   * Best-effort correlation: find the member who minted an invite link with this name. Invite-link
+   * joiners carry no registrant id, so the baked-in name is all we have to match on.
+   */
+  private findMember(name: string): MemberLinkRow | undefined {
+    return this.sql
+      .exec<MemberLinkRow>(
+        "SELECT * FROM member_link WHERE display_name = ? ORDER BY created_at DESC LIMIT 1",
+        name,
+      )
+      .toArray()[0];
   }
 
   private getSession(uuid: string): SessionRow | undefined {
     return this.sql
       .exec<SessionRow>("SELECT * FROM session WHERE instance_uuid = ?", uuid)
-      .toArray()[0];
-  }
-
-  private getActiveSession(): SessionRow | undefined {
-    return this.sql
-      .exec<SessionRow>(
-        "SELECT * FROM session WHERE status = 'active' ORDER BY started_at DESC LIMIT 1",
-      )
       .toArray()[0];
   }
 }

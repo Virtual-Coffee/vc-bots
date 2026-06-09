@@ -1,64 +1,88 @@
-import type { SlackAPIClient } from "slack-web-api-client";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
+  JOIN_ACTION_ID,
+  JOIN_REDIRECT_ACTION_ID,
+  buildRoomClosedBlocks,
+  buildRoomIdleBlocks,
   buildRoomOpenBlocks,
-  callsEnd,
-  callsParticipantsRemove,
-  toCallUser,
+  formatPresence,
 } from "../src/bots/coworking/slack-call";
+import { formatDuration } from "../src/bots/coworking/zoom-events";
 import type { Env } from "../src/env";
 
-const env = { ROOM_TITLE: "Co-Working Room" } as Env;
+const env = {
+  ROOM_TITLE: "Co-Working Room",
+} as Env;
 
-function fakeClient(response: { ok: boolean; error?: string }): SlackAPIClient {
-  return { call: vi.fn(async () => response) } as unknown as SlackAPIClient;
-}
-
-describe("toCallUser", () => {
-  const guest = { zoomUserId: "z1", displayName: "Guest" };
-
-  it("maps a correlated registrant to a slack_id member", () => {
-    expect(toCallUser({ slack_user_id: "U123" }, guest)).toEqual({ slack_id: "U123" });
+describe("formatPresence", () => {
+  it("renders members as mentions and guests as plain names", () => {
+    const line = formatPresence([{ slackUserId: "U1" }, { displayName: "Ben" }]);
+    expect(line).toContain("(2)");
+    expect(line).toContain("<@U1>");
+    expect(line).toContain("Ben");
   });
 
-  it("maps an unknown participant to an external guest", () => {
-    expect(toCallUser(undefined, guest)).toEqual({ external_id: "z1", display_name: "Guest" });
-    expect(toCallUser({ slack_user_id: null }, guest)).toEqual({
-      external_id: "z1",
-      display_name: "Guest",
-    });
-  });
-});
-
-describe("callsEnd", () => {
-  it("treats `inactive_call` as success", async () => {
-    await expect(callsEnd(fakeClient({ ok: false, error: "inactive_call" }), "R1")).resolves.toBeUndefined();
-  });
-
-  it("throws on a real error", async () => {
-    await expect(callsEnd(fakeClient({ ok: false, error: "boom" }), "R1")).rejects.toThrow("boom");
-  });
-});
-
-describe("callsParticipantsRemove", () => {
-  it("treats `user_not_found` as success", async () => {
-    await expect(
-      callsParticipantsRemove(fakeClient({ ok: false, error: "user_not_found" }), "R1", [
-        { slack_id: "U1" },
-      ]),
-    ).resolves.toBeUndefined();
+  it("nudges when the room is empty", () => {
+    expect(formatPresence([])).toMatch(/nobody/i);
   });
 });
 
 describe("buildRoomOpenBlocks", () => {
-  it("includes the Join button and (when present) the call widget", () => {
-    const withCall = JSON.stringify(buildRoomOpenBlocks(env, "R9"));
-    expect(withCall).toContain("coworking_join");
-    expect(withCall).toContain('"type":"call"');
-    expect(withCall).toContain("R9");
+  it("uses the modal-trigger Join button (no url) + a presence line", () => {
+    const blocks = JSON.stringify(buildRoomOpenBlocks(env, [{ slackUserId: "U777" }]));
+    expect(blocks).toContain(JOIN_ACTION_ID); // opens the per-user join modal
+    expect(blocks).not.toContain(JOIN_REDIRECT_ACTION_ID);
+    expect(blocks).not.toContain('"url"'); // no shared url — link is per-user, via the modal
+    expect(blocks).toContain("<@U777>"); // presence list
 
-    const withoutCall = JSON.stringify(buildRoomOpenBlocks(env));
-    expect(withoutCall).toContain("coworking_join");
-    expect(withoutCall).not.toContain('"type":"call"');
+    const empty = JSON.stringify(buildRoomOpenBlocks(env, []));
+    expect(empty).toContain(JOIN_ACTION_ID);
+    expect(empty).toMatch(/nobody/i);
+  });
+});
+
+describe("buildRoomIdleBlocks", () => {
+  it("invites starting a session with the modal-trigger Join button", () => {
+    const blocks = JSON.stringify(buildRoomIdleBlocks(env));
+    expect(blocks).toContain("Start the co-working room");
+    expect(blocks).toContain(JOIN_ACTION_ID);
+    expect(blocks).not.toContain('"url"');
+  });
+});
+
+describe("buildRoomClosedBlocks", () => {
+  it("summarises length, peak, and a deduped roster — no Join button", () => {
+    const blocks = JSON.stringify(
+      buildRoomClosedBlocks(env, {
+        durationMs: 90 * 60_000,
+        peak: 3,
+        attendees: [{ slackUserId: "U1" }, { displayName: "Ben" }],
+      }),
+    );
+    expect(blocks).toContain("1h 30m"); // session length
+    expect(blocks).toContain("Peak 3"); // peak attendance
+    expect(blocks).toContain("<@U1>"); // member mention
+    expect(blocks).toContain("Ben"); // guest name
+    expect(blocks).toContain("(2)"); // roster size
+    expect(blocks).not.toContain(JOIN_ACTION_ID); // session is over
+  });
+
+  it("omits the roster line when nobody was recorded", () => {
+    const blocks = JSON.stringify(
+      buildRoomClosedBlocks(env, { durationMs: 30_000, peak: 0, attendees: [] }),
+    );
+    expect(blocks).toContain("<1m");
+    expect(blocks).toContain("Peak 0");
+    expect(blocks).not.toContain("Stopped by");
+  });
+});
+
+describe("formatDuration", () => {
+  it("formats hours and minutes, dropping zero parts", () => {
+    expect(formatDuration(0)).toBe("<1m");
+    expect(formatDuration(30_000)).toBe("<1m");
+    expect(formatDuration(45 * 60_000)).toBe("45m");
+    expect(formatDuration(60 * 60_000)).toBe("1h");
+    expect(formatDuration(90 * 60_000)).toBe("1h 30m");
   });
 });
