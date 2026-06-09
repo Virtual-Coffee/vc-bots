@@ -46,10 +46,6 @@ export async function route(
     case "POST /slack/commands":
       return handleSlackCommand(req, env, ctx);
 
-    // Optional URL-style join fallback (Phase 5).
-    case "GET /room/join":
-      return new Response(null, { status: 200 });
-
     default:
       return new Response("Not found", { status: 404 });
   }
@@ -85,8 +81,7 @@ async function handleZoomWebhook(
   // serialize through a single instance (race-free). Awaited so ordering is preserved.
   if (isZoomMeetingEvent(body)) {
     const meeting = String(body.payload.object.id);
-    log.info( "zoom.webhook", { event: body.event, meeting } );
-    console.log(body.payload.object.participant)
+    log.info("zoom.webhook", { event: body.event, meeting });
     const stub = env.COWORKING_ROOM.getByName(meeting);
     await stub.handleZoomEvent(body);
   }
@@ -140,7 +135,7 @@ async function handleSlackInteractivity(
   const payloadJson = new URLSearchParams(rawBody).get("payload");
   const payload = payloadJson ? safeJson<SlackBlockActionsPayload>(payloadJson) : null;
 
-  // ACK immediately (Slack's 3s limit); do the Zoom registrant work after responding.
+  // ACK immediately (Slack's 3s limit); do any follow-up work after responding.
   if (payload && isJoinClick(payload)) {
     log.info("slack.interactivity", { action: "join", user: payload.user.id });
     ctx.waitUntil(handleJoinClick(payload, env));

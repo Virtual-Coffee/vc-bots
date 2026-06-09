@@ -24,10 +24,7 @@ export interface Env {
   // --- Config vars (wrangler.jsonc) ---
   ZOOM_MEETING_ID: string;
   SLACK_COWORKING_CHANNEL_ID: string;
-  ZOOM_MEETING_INVITE_URL: string;
   ROOM_TITLE: string;
-  /** The bot's own Slack user id — required as `created_by` for calls.add. */
-  SLACK_BOT_USER_ID: string;
   /** Channel for event reminders. */
   SLACK_REMINDERS_CHANNEL_ID: string;
   /** CMS GraphQL endpoint for event reminders. */

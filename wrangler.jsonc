@@ -27,12 +27,10 @@
 
   // Non-secret config (single room). Secrets go via `wrangler secret put` / `.dev.vars`.
   "vars": {
-    "ZOOM_MEETING_ID": "4669259563",
+    "ZOOM_MEETING_ID": "4669259563", // personal
+    // "ZOOM_MEETING_ID": "82832550878",
     "SLACK_COWORKING_CHANNEL_ID": "C0B6C3BFEDD",
-    "ZOOM_MEETING_INVITE_URL": "https://us05web.zoom.us/j/4669259563?pwd=ZGdlYjlpSTFqZWRXZGpURmNtRHRSUT09",
     "ROOM_TITLE": "Co-Working Room",
-    // Slack Call creator (calls.add requires created_by with a bot token).
-    "SLACK_BOT_USER_ID": "U0B6XMLNXK6", // TODO: the bot's own Slack user id (auth.test → user_id)
     // Event reminders (Phase 3).
     "SLACK_REMINDERS_CHANNEL_ID": "C09B0QURPB2", // TODO: real #events-style channel
     "CMS_GRAPHQL_URL": "https://virtualcoffee.io/graphql", // TODO: confirm CMS GraphQL endpoint
