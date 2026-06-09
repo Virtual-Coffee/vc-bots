@@ -48,17 +48,20 @@ slash commands). Final user-facing replies go back through Slack's `response_url
 **Co-working room = the one stateful piece.** `CoworkingRoom` (`src/bots/coworking/durable-object.ts`)
 is a SQLite-backed Durable Object, **one instance per Zoom meeting ID**, addressed with
 `env.COWORKING_ROOM.getByName(meetingId)`. Routing all of a meeting's webhooks through a single
-instance serializes them, so there are no eventual-consistency races (a registrant row is always
+instance serializes them, so there are no eventual-consistency races (a member_link row is always
 written before the join that reads it). The DO must be re-exported from `src/index.ts` for the
-runtime to bind it. Schema (`session` / `registrant` / `participant`) is created idempotently in
+runtime to bind it. Schema (`session` / `member_link` / `participant`) is created idempotently in
 `migrate()` under `blockConcurrencyWhile`. A stale-session `alarm()` force-closes sessions that
 never received `meeting.ended`.
 
-The room mirrors a live **Slack Call** in the channel: Zoom `meeting.started` →
-`calls.add` + post message; `participant_joined/left` → `calls.participants.add/remove`;
-`meeting.ended` → `calls.end` + edit message. Zoom participants are correlated to Slack members
-via the registrant table (by `registrant_id`, then email); uncorrelated people show as external
-guests. If `calls.add` fails, it falls back to a plain announcement.
+The room is a self-managed channel message (no native Slack Call widget): Zoom `meeting.started`
+→ post (or update the standing invite into) the open-room message; `participant_joined/left` →
+edit its live presence list; `meeting.ended` → edit into a stats summary + post a fresh invite.
+Joining is per-user: the message's Join button opens a modal, which mints a personal Zoom
+**invite link** (`src/zoom/invite-links.ts`, name pre-filled — no registration, requires the
+meeting to not require registration). Correlation is best-effort by display name via the
+`member_link` table (the webhook carries no registrant id for invite-link joiners); uncorrelated
+people show as external guests. Personal `join_url`s carry a join token — **never log them**.
 
 **Reminders** (`src/bots/reminders/`) run from the cron `scheduled()` handler. ⚠️ The cron
 strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
@@ -66,9 +69,8 @@ wrangler.jsonc** — that string is the lookup key mapping a fired cron to a rem
 fire in **UTC**. Events come from the VirtualCoffee CMS over GraphQL. The same `sendReminder`
 is reused by the `/vc-bot-admin` slash command for manual previews.
 
-**Slack client.** Always `createSlackClient(env)` (wraps `slack-web-api-client`). The Calls API
-isn't typed by that package, so `src/bots/coworking/slack-call.ts` reaches it via the generic
-`client.call("calls.add", …)` escape hatch — **do not add `@slack/web-api`**.
+**Slack client.** Always `createSlackClient(env)` (wraps `slack-web-api-client`) —
+**do not add `@slack/web-api`** (it isn't edge-compatible).
 
 ## Conventions
 
