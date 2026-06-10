@@ -39,12 +39,15 @@ invite into) the open-room message; `participant_joined/left` edit its live pres
 `meeting.ended` turns it into a stats summary and posts a fresh invite. A stale-session alarm
 force-closes sessions whose `meeting.ended` webhook never arrived.
 
-**Joining is per-user.** The message's Join button opens a modal that mints a personal Zoom
-invite link (`src/zoom/invite-links.ts`) with the member's name pre-filled — no Zoom
-registration involved (the meeting must *not* require registration). Correlating Zoom
-participants back to Slack members is best-effort by display name via the DO's `member_link`
-table; people who join another way show as external guests. Personal `join_url`s carry a join
-token — they are never logged.
+**Joining is per-user.** The message's Join button mints a personal Zoom invite link
+(`src/zoom/invite-links.ts`) with the member's name pre-filled — no Zoom registration involved
+(the meeting must *not* require registration) — and answers with an ephemeral message holding
+☕ Join / Cancel buttons; clicking either deletes the ephemeral (☕ Join also opens Zoom), so the
+surface dismisses itself. The button's url is the Worker's own `GET /join/<token>` redirect,
+which 302s to the personal link — the token-bearing Zoom url never appears in the Slack UI.
+Correlating Zoom participants back to Slack members is best-effort by display name via the DO's
+`member_link` table; people who join another way show as external guests. Personal `join_url`s
+(and the redirect tokens that resolve to them) carry a join credential — they are never logged.
 
 ## Project layout
 
@@ -56,7 +59,7 @@ src/
   crypto.ts           timing-safe HMAC helpers on crypto.subtle
   log.ts              leveled logger (threshold from LOG_LEVEL)
   bots/
-    coworking/        the room: Durable Object, Zoom event handlers, Join modal, message blocks
+    coworking/        the room: Durable Object, Zoom event handlers, join flow, message blocks
     reminders/        cron dispatch, CMS GraphQL queries, Block Kit builders, html-to-mrkdwn
     welcome.ts        new-member welcome DM
     app-home.ts       App Home tab

@@ -1,6 +1,11 @@
 import type { Env } from "./env";
 import { ADMIN_COMMAND, handleAdminCommand, parseSlashCommand } from "./bots/admin";
-import { handleJoinClick, isJoinClick } from "./bots/coworking/join";
+import {
+  handleJoinClick,
+  handleJoinDismiss,
+  isJoinClick,
+  isJoinDismissClick,
+} from "./bots/coworking/join";
 import { dispatchSlackEvent } from "./bots/slack-events";
 import { log } from "./log";
 import { verifySlackRequest } from "./slack/verify";
@@ -30,6 +35,12 @@ export async function route(
     return new Response("ok", { status: 200 });
   }
 
+  // Per-user join redirect: the token (minted by the DO on a Join click) IS the credential, so
+  // there's no signature to verify. Resolves to the personal Zoom url and 302s the browser there.
+  if (method === "GET" && path.startsWith("/join/")) {
+    return handleJoinRedirect(path.slice("/join/".length), env);
+  }
+
   log.info("request", { method, path });
 
   switch (`${method} ${path}`) {
@@ -48,6 +59,30 @@ export async function route(
     default:
       return new Response("Not found", { status: 404 });
   }
+}
+
+// --- Join-link redirect → co-working room ---
+
+/** Tokens are 32 hex chars today; accept a little slack so the format can evolve. */
+const JOIN_TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
+
+async function handleJoinRedirect(token: string, env: Env): Promise<Response> {
+  const expired = new Response(
+    "This join link has expired — head back to Slack and click Join again.",
+    { status: 404, headers: { "Cache-Control": "no-store" } },
+  );
+  if (!JOIN_TOKEN_RE.test(token)) {
+    log.info("join.redirect", { found: false }); // never log the token
+    return expired;
+  }
+  const stub = env.COWORKING_ROOM.getByName(env.ZOOM_MEETING_ID);
+  const resolved = await stub.resolveJoinToken(token);
+  log.info("join.redirect", { found: Boolean(resolved) });
+  if (!resolved) return expired;
+  return new Response(null, {
+    status: 302,
+    headers: { Location: resolved.joinUrl, "Cache-Control": "no-store" },
+  });
 }
 
 // --- Zoom webhooks → co-working room ---
@@ -144,7 +179,11 @@ async function handleSlackInteractivity(
   // ACK immediately (Slack's 3s limit); do any follow-up work after responding.
   if (payload && isJoinClick(payload)) {
     log.info("slack.interactivity", { action: "join", user: payload.user.id });
-    ctx.waitUntil(handleJoinClick(payload, env));
+    ctx.waitUntil(handleJoinClick(payload, env, new URL(req.url).origin));
+  } else if (payload && isJoinDismissClick(payload)) {
+    // ☕ Join (url button — the browser is already opening Zoom) or Cancel: delete the ephemeral.
+    log.info("slack.interactivity", { action: "join_dismiss", user: payload.user.id });
+    ctx.waitUntil(handleJoinDismiss(payload, env));
   }
   return new Response(null, { status: 200 });
 }
@@ -175,7 +214,8 @@ async function handleSlackCommand(
 
   // ACK immediately (Slack's 3s limit) with an ephemeral note; do the work + final reply async.
   ctx.waitUntil(handleAdminCommand(cmd, env));
-  return Response.json({ response_type: "ephemeral", text: ":hourglass_flowing_sand: Working on it…" });
+  // return Response.json( { response_type: "ephemeral", text: ":hourglass_flowing_sand: Working on it…" } );
+  return new Response(null,{status: 200})
 }
 
 function safeJson<T>(raw: string): T | null {

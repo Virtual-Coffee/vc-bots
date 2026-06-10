@@ -1,6 +1,11 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleJoinClick, isJoinClick } from "../src/bots/coworking/join";
+import {
+  handleJoinClick,
+  handleJoinDismiss,
+  isJoinClick,
+  isJoinDismissClick,
+} from "../src/bots/coworking/join";
 import type { SlackBlockActionsPayload } from "../src/slack/types";
 
 interface RecordedCall {
@@ -23,9 +28,6 @@ beforeEach(() => {
     }
     recorded.push({ url, body });
 
-    if (url.includes("/api/views.open")) {
-      return Response.json({ ok: true, view: { id: "V1" } });
-    }
     if (url.includes("/api/users.profile.get")) {
       return Response.json({ ok: true, profile: { real_name: "Ada" } });
     }
@@ -41,42 +43,58 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function payload(): SlackBlockActionsPayload {
+const RESPONSE_URL = "https://hooks.slack.com/actions/resp-123";
+const ORIGIN = "https://bots.example";
+
+function payload(actionId = "coworking_join"): SlackBlockActionsPayload {
   return {
     type: "block_actions",
     user: { id: "U777" },
     trigger_id: "T1",
-    response_url: "https://hooks.slack.com/actions/resp-123",
-    actions: [{ action_id: "coworking_join", type: "button" }],
+    response_url: RESPONSE_URL,
+    actions: [{ action_id: actionId, type: "button" }],
   };
 }
 
-describe("isJoinClick", () => {
-  it("recognizes the Join button action", () => {
+function responseUrlCalls(): RecordedCall[] {
+  return recorded.filter((r) => r.url === RESPONSE_URL);
+}
+
+describe("isJoinClick / isJoinDismissClick", () => {
+  it("recognizes the room Join button action", () => {
     expect(isJoinClick(payload())).toBe(true);
-    expect(
-      isJoinClick({ ...payload(), actions: [{ action_id: "something_else", type: "button" }] }),
-    ).toBe(false);
+    expect(isJoinClick(payload("something_else"))).toBe(false);
+  });
+
+  it("recognizes both ephemeral buttons (☕ Join url button and Cancel) as dismissals", () => {
+    expect(isJoinDismissClick(payload("coworking_open_zoom"))).toBe(true);
+    expect(isJoinDismissClick(payload("coworking_cancel"))).toBe(true);
+    expect(isJoinDismissClick(payload())).toBe(false);
   });
 });
 
 describe("handleJoinClick", () => {
-  it("opens a loading modal, registers via the DO, and updates the modal with the personal link", async () => {
-    await handleJoinClick(payload(), env);
+  it("registers via the DO and answers with a two-button ephemeral linking the /join redirect", async () => {
+    await handleJoinClick(payload(), env, ORIGIN);
 
-    // A loading modal is opened first, using the click's trigger_id.
-    const open = recorded.find((r) => r.url.includes("/api/views.open"));
-    expect(open).toBeDefined();
-    expect(new URLSearchParams(open!.body).get("trigger_id")).toBe("T1");
+    const replies = responseUrlCalls();
+    expect(replies).toHaveLength(1);
+    const sent = JSON.parse(replies[0]!.body);
 
-    // The minted invite link is delivered by updating that modal.
-    const update = recorded.find((r) => r.url.includes("/api/views.update"));
-    expect(update).toBeDefined();
-    expect(new URLSearchParams(update!.body).get("view_id")).toBe("V1");
-    expect(update!.body).toContain("https%3A%2F%2Fzoom.us%2Fw%2Fpersonal-9");
+    // A new ephemeral for the clicker — never a replacement of the shared room message.
+    expect(sent.response_type).toBe("ephemeral");
+    expect(sent.replace_original).toBe(false);
+
+    const blocks = JSON.stringify(sent.blocks);
+    expect(blocks).toContain("coworking_open_zoom"); // ☕ Join (url button)
+    expect(blocks).toContain("coworking_cancel"); // Cancel
+    // The button url is the Worker's opaque redirect — the raw Zoom link (and its token) never
+    // reaches the Slack UI, so the hover tooltip shows a clean url.
+    expect(blocks).toMatch(new RegExp(`${ORIGIN}/join/[0-9a-f]{32}`));
+    expect(blocks).not.toContain("personal-9");
   });
 
-  it("shows an error modal when registration fails", async () => {
+  it("answers with an error ephemeral when registration fails", async () => {
     // Re-stub: same routes, but the Zoom invite-link call now fails.
     recorded = [];
     vi.stubGlobal(
@@ -91,7 +109,6 @@ describe("handleJoinClick", () => {
               : "";
         recorded.push({ url, body });
 
-        if (url.includes("/api/views.open")) return Response.json({ ok: true, view: { id: "V1" } });
         if (url.includes("/api/users.profile.get")) {
           return Response.json({ ok: true, profile: { real_name: "Ada" } });
         }
@@ -103,10 +120,23 @@ describe("handleJoinClick", () => {
       }),
     );
 
-    await handleJoinClick(payload(), env);
+    await handleJoinClick(payload(), env, ORIGIN);
 
-    const updates = recorded.filter((r) => r.url.includes("/api/views.update"));
-    expect(updates.at(-1)!.body).toContain("couldn");
-    expect(updates.at(-1)!.body).not.toContain("personal-9");
+    const replies = responseUrlCalls();
+    expect(replies).toHaveLength(1);
+    const sent = JSON.parse(replies[0]!.body);
+    expect(sent.response_type).toBe("ephemeral");
+    expect(sent.text).toContain("couldn");
+    expect(replies[0]!.body).not.toContain("personal-9");
+  });
+});
+
+describe("handleJoinDismiss", () => {
+  it("deletes the ephemeral the click came from", async () => {
+    await handleJoinDismiss(payload("coworking_cancel"), env);
+
+    const replies = responseUrlCalls();
+    expect(replies).toHaveLength(1);
+    expect(JSON.parse(replies[0]!.body)).toEqual({ delete_original: true });
   });
 });

@@ -134,3 +134,33 @@ describe("handleAdminCommand — coworking announce", () => {
     expect(replyText()).toContain("/vc-bot-admin");
   });
 });
+
+describe("handleAdminCommand — failures", () => {
+  it("reports an error back instead of leaving the waitUntil rejection uncaught", async () => {
+    // The route has already ACKed by the time this runs (ctx.waitUntil), so a throw here would
+    // surface as an uncaught error and the admin would see nothing. Make the work fail:
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init?: { body?: unknown }) => {
+        const url = input instanceof Request ? input.url : String(input);
+        const body =
+          input instanceof Request
+            ? new TextDecoder().decode(await input.clone().arrayBuffer())
+            : typeof init?.body === "string"
+              ? init.body
+              : "";
+        recorded.push({ url, body });
+        if (url.includes("/api/users.info")) {
+          return Response.json({ ok: true, user: { is_admin: true, is_owner: false } });
+        }
+        if (url.includes("/api/chat.postMessage")) {
+          return Response.json({ ok: false, error: "channel_not_found" });
+        }
+        return Response.json({ ok: true });
+      }),
+    );
+
+    await expect(handleAdminCommand(cmd("welcome"), env)).resolves.toBeUndefined();
+    expect(replyText()).toContain(":warning:");
+  });
+});

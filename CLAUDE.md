@@ -52,18 +52,25 @@ router drops events whose meeting ID isn't `ZOOM_MEETING_ID` (other meetings und
 before any DO is touched. Routing all of a meeting's webhooks through a single
 instance serializes them, so there are no eventual-consistency races (a member_link row is always
 written before the join that reads it). The DO must be re-exported from `src/index.ts` for the
-runtime to bind it. Schema (`session` / `member_link` / `participant`) is created idempotently in
-`migrate()` under `blockConcurrencyWhile`. A stale-session `alarm()` force-closes sessions that
+runtime to bind it. Schema (`session` / `member_link` / `participant` / `invite_link`) is created
+idempotently in `migrate()` under `blockConcurrencyWhile`. A stale-session `alarm()` force-closes sessions that
 never received `meeting.ended`.
 
 The room is a self-managed channel message (no native Slack Call widget): Zoom `meeting.started`
 → post (or update the standing invite into) the open-room message; `participant_joined/left` →
 edit its live presence list; `meeting.ended` → edit into a stats summary + post a fresh invite.
-Joining is per-user: the message's Join button opens a modal, which mints a personal Zoom
-**invite link** (`src/zoom/invite-links.ts`, name pre-filled — no registration, requires the
-meeting to not require registration). Correlation is best-effort by display name via the
-`member_link` table (the webhook carries no registrant id for invite-link joiners); uncorrelated
-people show as external guests. Personal `join_url`s carry a join token — **never log them**.
+Joining is per-user: the message's Join button mints a personal Zoom **invite link**
+(`src/zoom/invite-links.ts`, name pre-filled — no registration, requires the meeting to not
+require registration) and replies via `response_url` with an **ephemeral message** carrying
+☕ Join / Cancel buttons; clicking either deletes the ephemeral (`delete_original`), so the
+surface dismisses itself (a modal can't — Slack has no API to close one from a button click).
+The ☕ Join url is the Worker's own `GET /join/<token>` redirect (tokens live in the DO's
+`invite_link` table and expire with the Zoom link), keeping the token-bearing Zoom url out of
+the Slack UI. ⚠️ Never `replace_original`/`delete_original` against the *channel* button's
+`response_url` — its "original" is the shared room message. Correlation is best-effort by
+display name via the `member_link` table (the webhook carries no registrant id for invite-link
+joiners); uncorrelated people show as external guests. Personal `join_url`s and the redirect
+tokens that resolve to them carry a join credential — **never log them**.
 
 **Reminders** (`src/bots/reminders/`) run from the cron `scheduled()` handler. ⚠️ The cron
 strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in

@@ -63,6 +63,26 @@ export async function handleAdminCommand(cmd: SlackSlashCommand, env: Env): Prom
 
   const [sub, arg] = cmd.text.trim().split(/\s+/);
 
+  try {
+    await runAdminCommand(client, cmd, env, sub, arg);
+  } catch (err) {
+    // We're past the route's ACK (ctx.waitUntil) — an escaped rejection would be an uncaught
+    // error and the admin would just see silence. Report back instead.
+    log.error("admin.failed", { sub: sub ?? "(none)", err: String(err) });
+    await respondEphemeral(
+      cmd.response_url,
+      ":warning: That failed — check the worker logs for details.",
+    );
+  }
+}
+
+async function runAdminCommand(
+  client: SlackAPIClient,
+  cmd: SlackSlashCommand,
+  env: Env,
+  sub: string | undefined,
+  arg: string | undefined,
+): Promise<void> {
   switch (sub) {
     case "hourly":
     case "daily":

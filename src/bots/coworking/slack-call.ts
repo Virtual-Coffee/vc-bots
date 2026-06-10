@@ -1,4 +1,4 @@
-import type { AnyMessageBlock, ModalView } from "slack-web-api-client";
+import type { AnyMessageBlock } from "slack-web-api-client";
 import type { Env } from "../../env";
 import { formatDuration, roomClosedText } from "./zoom-events";
 
@@ -122,86 +122,68 @@ export function buildRoomClosedBlocks(env: Env, stats: SessionStats): AnyMessage
   ];
 }
 
-/** action_id of the modal's personal join-link button. Slack still sends a `block_actions`
- *  interaction for url buttons; the router ignores it (the browser follows the url). */
+/** action_id of the ephemeral's personal join-link button. Slack still sends a `block_actions`
+ *  interaction for url buttons (the browser follows the url); the router uses that click to
+ *  delete the ephemeral — the surface closes itself after opening Zoom. */
 export const JOIN_REDIRECT_ACTION_ID = "coworking_open_zoom";
 
-/** action_id of the room "Join" button — its click opens the per-user join modal. */
+/** action_id of the ephemeral's Cancel button — its click just deletes the ephemeral. */
+export const CANCEL_ACTION_ID = "coworking_cancel";
+
+/** action_id of the room "Join" button — its click mints the per-user join ephemeral. */
 export const JOIN_ACTION_ID = "coworking_join";
 
+/** Fallback `text` for the join ephemeral (clients that can't render blocks). */
+export function joinEphemeralText(env: Env): string {
+  return `You're all set for the ${env.ROOM_TITLE}!`;
+}
+
 /**
- * The "Join" modals.
+ * The per-user "you're all set" ephemeral (visible only to the clicker), sent via the room
+ * button's `response_url`. Two buttons, mirroring the old native confirm dialog: ☕ Join (a `url`
+ * button to the member's personal link — its click also deletes the ephemeral) and Cancel (just
+ * deletes it). Either way the surface disappears on click, which a modal can't do.
  *
- * Flow: room button click → open the loading modal (uses the fresh `trigger_id`) → mint the
- * invite link → `views.update` to the link modal (or the error modal on failure). The link lives
- * on a `url` button inside the modal — a per-user surface, so it *can* be the personal join url.
+ * `joinUrl` is the Worker's `/join/<token>` redirect, not the raw Zoom link — so the hover
+ * tooltip Slack pins to url buttons shows a clean URL instead of the token-bearing Zoom one.
  */
-
-/** Shown immediately on click, while we mint the invite link (so we beat the ~3s trigger window). */
-export function buildJoinLoadingModal(): ModalView {
-  return {
-    type: "modal",
-    title: { type: "plain_text", text: "Co-Working Room" },
-    close: { type: "plain_text", text: "Cancel" },
-    blocks: [
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: ":coffee: Setting up your personal join link…" },
+export function buildJoinEphemeralBlocks(env: Env, joinUrl: string): AnyMessageBlock[] {
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `:coffee: You're all set for the *${env.ROOM_TITLE}*!\n\n` +
+          "By joining, you agree to follow our " +
+          "<https://virtualcoffee.io/code-of-conduct|Code of Conduct>. " +
+          "Be kind, keep it welcoming, and enjoy the company. :heart:",
       },
-    ],
-  };
+    },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          action_id: JOIN_REDIRECT_ACTION_ID,
+          text: { type: "plain_text", text: "☕ Join the Co-Working Room", emoji: true },
+          url: joinUrl,
+          style: "primary",
+        },
+        {
+          type: "button",
+          action_id: CANCEL_ACTION_ID,
+          text: { type: "plain_text", text: "Cancel", emoji: true },
+        },
+      ],
+    },
+  ] as AnyMessageBlock[];
 }
 
-/** The ready modal: a Code-of-Conduct reminder + a primary button to the member's personal link. */
-export function buildJoinModal(env: Env, joinUrl: string): ModalView {
-  return {
-    type: "modal",
-    title: { type: "plain_text", text: "Co-Working Room" },
-    close: { type: "plain_text", text: "Close" },
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text:
-            `:coffee: You're all set for the *${env.ROOM_TITLE}*!\n\n` +
-            "By joining, you agree to follow our " +
-            "<https://virtualcoffee.io/code-of-conduct|Code of Conduct>. " +
-            "Be kind, keep it welcoming, and enjoy the company. :heart:",
-        },
-      },
-      {
-        type: "actions",
-        elements: [
-          {
-            type: "button",
-            action_id: JOIN_REDIRECT_ACTION_ID,
-            text: { type: "plain_text", text: "☕ Join the Co-Working Room", emoji: true },
-            url: joinUrl,
-            style: "primary",
-          },
-        ],
-      },
-    ],
-  };
-}
-
-/** Fallback modal when minting the invite link fails. */
-export function buildJoinErrorModal(env: Env): ModalView {
-  return {
-    type: "modal",
-    title: { type: "plain_text", text: "Co-Working Room" },
-    close: { type: "plain_text", text: "Close" },
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text:
-            ":warning: Sorry — we couldn't set up your join link just now. " +
-            `Please try again in a moment, or head to <#${env.SLACK_COWORKING_CHANNEL_ID}>.`,
-        },
-      },
-    ],
-  };
+/** Fallback ephemeral text when minting the invite link fails. */
+export function joinErrorText(env: Env): string {
+  return (
+    ":warning: Sorry — we couldn't set up your join link just now. " +
+    `Please try again in a moment, or head to <#${env.SLACK_COWORKING_CHANNEL_ID}>.`
+  );
 }

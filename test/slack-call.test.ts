@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  CANCEL_ACTION_ID,
   JOIN_ACTION_ID,
   JOIN_REDIRECT_ACTION_ID,
+  buildJoinEphemeralBlocks,
   buildRoomClosedBlocks,
   buildRoomIdleBlocks,
   buildRoomOpenBlocks,
@@ -28,11 +30,11 @@ describe("formatPresence", () => {
 });
 
 describe("buildRoomOpenBlocks", () => {
-  it("uses the modal-trigger Join button (no url) + a presence line", () => {
+  it("uses the ephemeral-trigger Join button (no url) + a presence line", () => {
     const blocks = JSON.stringify(buildRoomOpenBlocks(env, [{ slackUserId: "U777" }]));
-    expect(blocks).toContain(JOIN_ACTION_ID); // opens the per-user join modal
+    expect(blocks).toContain(JOIN_ACTION_ID); // mints the per-user join ephemeral
     expect(blocks).not.toContain(JOIN_REDIRECT_ACTION_ID);
-    expect(blocks).not.toContain('"url"'); // no shared url — link is per-user, via the modal
+    expect(blocks).not.toContain('"url"'); // no shared url — the link is per-user, via the ephemeral
     expect(blocks).toContain("<@U777>"); // presence list
 
     const empty = JSON.stringify(buildRoomOpenBlocks(env, []));
@@ -42,11 +44,23 @@ describe("buildRoomOpenBlocks", () => {
 });
 
 describe("buildRoomIdleBlocks", () => {
-  it("invites starting a session with the modal-trigger Join button", () => {
+  it("invites starting a session with the ephemeral-trigger Join button", () => {
     const blocks = JSON.stringify(buildRoomIdleBlocks(env));
     expect(blocks).toContain("Start the co-working room");
     expect(blocks).toContain(JOIN_ACTION_ID);
     expect(blocks).not.toContain('"url"');
+  });
+});
+
+describe("buildJoinEphemeralBlocks", () => {
+  it("pairs a ☕ Join url button (the redirect, not a Zoom link) with a Cancel button", () => {
+    const redirect = "https://bots.example/join/abc123abc123abc1";
+    const blocks = JSON.stringify(buildJoinEphemeralBlocks(env, redirect));
+    expect(blocks).toContain(JOIN_REDIRECT_ACTION_ID);
+    expect(blocks).toContain(CANCEL_ACTION_ID);
+    expect(blocks).toContain(redirect); // the button url is the Worker redirect…
+    expect(blocks).not.toContain("zoom.us"); // …never the token-bearing Zoom url
+    expect(blocks).toContain("Code of Conduct");
   });
 });
 

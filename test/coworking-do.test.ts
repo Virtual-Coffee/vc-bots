@@ -250,11 +250,11 @@ describe("CoworkingRoom — participant correlation & presence", () => {
   it("maps a member to their slack_id by name and @-mentions them", async () => {
     const stub = room("c2");
     // Member clicks Join first → slack_user_id ↔ display_name recorded.
-    const { joinUrl } = await stub.handleJoinRequest({
+    const { token } = await stub.handleJoinRequest({
       slackUserId: "U777",
       displayName: "Ada",
     });
-    expect(joinUrl).toBe("https://zoom.us/w/personal-1");
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
 
     await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
     // No registrant_id on an invite-link join — correlation matches the baked-in name.
@@ -328,20 +328,48 @@ describe("CoworkingRoom — participant correlation & presence", () => {
 });
 
 describe("CoworkingRoom — handleJoinRequest", () => {
-  it("mints an invite link and stores the slack_user_id ↔ name mapping", async () => {
+  it("mints an invite link, stores the slack_user_id ↔ name mapping, and returns an opaque token", async () => {
     const stub = room("j1");
-    const { joinUrl } = await stub.handleJoinRequest({
+    const { token } = await stub.handleJoinRequest({
       slackUserId: "U1",
       displayName: "Xavier",
     });
 
-    expect(joinUrl).toBe("https://zoom.us/w/personal-1");
+    // The raw join_url never leaves the DO — callers only get the redirect token.
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
     expect(callsTo("api.zoom.us/v2/meetings/")).toHaveLength(1);
     const links = await runInDurableObject(stub, (_i, state) =>
       state.storage.sql.exec("SELECT * FROM member_link").toArray(),
     );
     expect(links[0]?.slack_user_id).toBe("U1");
     expect(links[0]?.display_name).toBe("Xavier");
+  });
+
+  it("resolveJoinToken round-trips the token to the personal join url", async () => {
+    const stub = room("j3");
+    const { token } = await stub.handleJoinRequest({ slackUserId: "U1", displayName: "Xavier" });
+
+    expect(await stub.resolveJoinToken(token)).toEqual({ joinUrl: "https://zoom.us/w/personal-1" });
+    expect(await stub.resolveJoinToken("0".repeat(32))).toBeNull(); // unknown token
+  });
+
+  it("expires tokens and sweeps expired rows on the next mint", async () => {
+    const stub = room("j4");
+    const { token } = await stub.handleJoinRequest({ slackUserId: "U1", displayName: "Xavier" });
+
+    // Age the row past its TTL.
+    await runInDurableObject(stub, (_i, state) =>
+      state.storage.sql.exec("UPDATE invite_link SET expires_at = ?", Date.now() - 1),
+    );
+    expect(await stub.resolveJoinToken(token)).toBeNull();
+
+    // A new mint sweeps the expired row.
+    await stub.handleJoinRequest({ slackUserId: "U2", displayName: "Yan" });
+    const rows = await runInDurableObject(stub, (_i, state) =>
+      state.storage.sql.exec("SELECT token FROM invite_link").toArray(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.token).not.toBe(token);
   });
 
   it("sends only the attendee name to Zoom — no email or registration fields", async () => {
@@ -383,6 +411,84 @@ describe("CoworkingRoom — admin announce-only", () => {
     expect(posts).toHaveLength(1);
     const blocks = new URLSearchParams(posts[0]!.body).get("blocks") ?? "";
     expect(blocks).toContain("coworking_join");
+  });
+});
+
+describe("CoworkingRoom — stale room-message pointer self-healing", () => {
+  const FRESH_TS = "1700000099.000200";
+
+  /** Re-stub fetch so chat.update reports the target message vanished (deleted by hand). */
+  function stubVanishedMessage() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init?: { body?: unknown }) => {
+        let url: string;
+        let body = "";
+        if (input instanceof Request) {
+          url = input.url;
+          body = new TextDecoder().decode(await input.clone().arrayBuffer());
+        } else {
+          url = String(input);
+          body = typeof init?.body === "string" ? init.body : "";
+        }
+        recorded.push({ url, body });
+        if (url.includes("/api/chat.update")) {
+          return Response.json({ ok: false, error: "message_not_found" });
+        }
+        return Response.json({ ok: true, ts: FRESH_TS, channel: "C0B6C3BFEDD" });
+      }),
+    );
+  }
+
+  it("re-running the admin invite re-posts when the standing message was deleted", async () => {
+    const stub = room("heal1");
+    await stub.adminPostInvite(); // post #1, stores the pointer
+
+    stubVanishedMessage();
+    await stub.adminPostInvite(); // update 404s → fresh post, pointer advances — no throw
+
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
+    const pointer = await runInDurableObject(stub, (_i, state) =>
+      state.storage.get<string>("idle_invite_ts"),
+    );
+    expect(pointer).toBe(FRESH_TS);
+  });
+
+  it("meeting.started posts a fresh open message when the standing invite was deleted", async () => {
+    const stub = room("heal2");
+    await stub.adminPostInvite();
+
+    stubVanishedMessage();
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
+    expect((await sessions(stub))[0]?.slack_message_ts).toBe(FRESH_TS);
+  });
+
+  it("survives the room message being deleted mid-session", async () => {
+    const stub = room("heal3");
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // posts the open message
+
+    stubVanishedMessage();
+    // The presence update 404s — the join webhook must not throw over it.
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
+    );
+    // The close update 404s too — the session still ends and the fresh invite still posts.
+    await stub.handleZoomEvent(event("meeting.ended", "uuid-1"));
+
+    expect((await sessions(stub))[0]?.status).toBe("ended");
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(2); // open message + fresh invite
+  });
+
+  it("admin close treats a deleted announcement as nothing-to-close", async () => {
+    const stub = room("heal4");
+    await stub.adminAnnounceOpen();
+
+    stubVanishedMessage();
+    expect(await stub.adminAnnounceClose()).toEqual({ closed: false });
+    // The spent pointer is cleared — a repeat close doesn't retry the dead ts.
+    expect(await stub.adminAnnounceClose()).toEqual({ closed: false });
   });
 });
 

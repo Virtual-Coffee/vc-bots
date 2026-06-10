@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { SlackAPIError, type AnyMessageBlock } from "slack-web-api-client";
 import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
 import { createSlackClient } from "../../slack/client";
@@ -31,6 +32,16 @@ import {
 
 /** Force-end a session this long after it started if `meeting.ended` was never received. */
 const STALE_SESSION_MS = 6 * 60 * 60 * 1000;
+
+/** Lifetime of a `/join/<token>` redirect — matches the Zoom invite link's own TTL
+ *  (`DEFAULT_TTL` in zoom/invite-links.ts), past which the link is dead anyway. */
+const INVITE_LINK_TTL_MS = 7200 * 1000;
+
+/** 128-bit random, url-safe token for the `/join/<token>` redirect (Web Crypto only). */
+function randomToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 /** DO storage key for the ts of an admin-posted (announce-only) room message. */
 const ADMIN_ANNOUNCEMENT_KEY = "admin_announcement_ts";
@@ -104,6 +115,12 @@ export class CoworkingRoom extends DurableObject<Env> {
         left_at         INTEGER,
         PRIMARY KEY (zoom_user_id, instance_uuid)
       );
+      CREATE TABLE IF NOT EXISTS invite_link (
+        token         TEXT PRIMARY KEY,
+        join_url      TEXT NOT NULL,
+        slack_user_id TEXT,
+        expires_at    INTEGER NOT NULL
+      );
     `);
     // Backfill columns for DOs created before these were added. ADD COLUMN throws on an existing
     // column, so guard with table_info to keep migrate() idempotent under blockConcurrencyWhile.
@@ -123,7 +140,10 @@ export class CoworkingRoom extends DurableObject<Env> {
   // --- RPC surface ---
 
   /**
-   * Slack Join click → mint a per-user Zoom invite link (name pre-filled) and return it.
+   * Slack Join click → mint a per-user Zoom invite link (name pre-filled) and return an opaque
+   * token for it. The raw `join_url` never leaves the DO: the join button points at the Worker's
+   * `/join/<token>` redirect, which calls `resolveJoinToken` — so the token-bearing Zoom url
+   * appears nowhere in the Slack UI (and, as ever, nowhere in logs).
    *
    * We store `slack_user_id ↔ display_name` so we can correlate the member later. Correlation is
    * best-effort: an invite-link joiner's `participant_joined` carries no registrant id, only the
@@ -133,11 +153,15 @@ export class CoworkingRoom extends DurableObject<Env> {
   async handleJoinRequest(input: {
     slackUserId: string;
     displayName: string;
-  }): Promise<{ joinUrl: string }> {
+  }): Promise<{ token: string }> {
     log.debug("coworking.join.token", { user: input.slackUserId });
-    const token = await getCachedZoomToken(this.env, this.ctx.storage);
+    const accessToken = await getCachedZoomToken(this.env, this.ctx.storage);
     log.debug("coworking.join.invite_link", { user: input.slackUserId });
-    const { joinUrl } = await createInviteLink(token, this.env.ZOOM_MEETING_ID, input.displayName);
+    const { joinUrl } = await createInviteLink(
+      accessToken,
+      this.env.ZOOM_MEETING_ID,
+      input.displayName,
+    );
 
     log.debug("coworking.join.store", { user: input.slackUserId });
     this.sql.exec(
@@ -150,8 +174,34 @@ export class CoworkingRoom extends DurableObject<Env> {
       Date.now(),
     );
 
+    // Opaque redirect token, expiring with the Zoom link itself (see DEFAULT_TTL in
+    // invite-links.ts). Sweep expired rows while we're here so the table stays small.
+    const token = randomToken();
+    const now = Date.now();
+    this.sql.exec("DELETE FROM invite_link WHERE expires_at < ?", now);
+    this.sql.exec(
+      "INSERT INTO invite_link (token, join_url, slack_user_id, expires_at) VALUES (?, ?, ?, ?)",
+      token,
+      joinUrl,
+      input.slackUserId,
+      now + INVITE_LINK_TTL_MS,
+    );
+
     log.info("coworking.member_link", { user: input.slackUserId });
-    return { joinUrl };
+    return { token };
+  }
+
+  /** Resolve a `/join/<token>` redirect to its personal Zoom url, or null if unknown/expired. */
+  async resolveJoinToken(token: string): Promise<{ joinUrl: string } | null> {
+    const row = this.sql
+      .exec<{ join_url: string }>(
+        "SELECT join_url FROM invite_link WHERE token = ? AND expires_at >= ?",
+        token,
+        Date.now(),
+      )
+      .toArray()[0];
+    log.info("coworking.join.resolve", { found: Boolean(row) }); // never log the token or url
+    return row ? { joinUrl: row.join_url } : null;
   }
 
   /**
@@ -173,15 +223,13 @@ export class CoworkingRoom extends DurableObject<Env> {
   async adminAnnounceClose(): Promise<{ closed: boolean }> {
     const ts = await this.ctx.storage.get<string>(ADMIN_ANNOUNCEMENT_KEY);
     if (!ts) return { closed: false };
-    await createSlackClient(this.env).chat.update({
-      channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-      ts,
-      text: roomClosedText(this.env),
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: roomClosedText(this.env) } }],
-    });
+    // Either way the pointer is spent: a vanished announcement counts as "nothing to close".
+    const closed = await this.tryUpdateRoomMessage(ts, roomClosedText(this.env), [
+      { type: "section", text: { type: "mrkdwn", text: roomClosedText(this.env) } },
+    ]);
     await this.ctx.storage.delete(ADMIN_ANNOUNCEMENT_KEY);
-    log.info("coworking.admin_announce", { action: "close" });
-    return { closed: true };
+    log.info("coworking.admin_announce", { action: "close", closed });
+    return { closed };
   }
 
   /** Admin (`/vc-bot-admin coworking invite`): post a standing "start a session" invite now. */
@@ -233,19 +281,20 @@ export class CoworkingRoom extends DurableObject<Env> {
 
     // Edit the bot's current channel message (the standing invite) in place so the single message
     // walks invite → active → ended. The pointer is NOT cleared — it keeps pointing at this same
-    // message through the whole session. Fall back to a fresh post only if no message exists yet.
+    // message through the whole session. Fall back to a fresh post if no message exists yet, or
+    // if the pointed-at message has vanished (deleted by hand / stale dev pointer).
     const currentTs = await this.ctx.storage.get<string>(ROOM_MESSAGE_KEY);
-    let messageTs: string | null;
+    let messageTs: string | null = null;
     if (currentTs) {
       log.debug("coworking.started.update_invite", { instance: uuid, ts: currentTs });
-      await client.chat.update({
-        channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-        ts: currentTs,
-        text: roomOpenText(this.env),
-        blocks: buildRoomOpenBlocks(this.env, []),
-      });
-      messageTs = currentTs;
-    } else {
+      const updated = await this.tryUpdateRoomMessage(
+        currentTs,
+        roomOpenText(this.env),
+        buildRoomOpenBlocks(this.env, []),
+      );
+      if (updated) messageTs = currentTs;
+    }
+    if (!messageTs) {
       log.debug("coworking.started.post", { instance: uuid });
       const res = await client.chat.postMessage({
         channel: this.env.SLACK_COWORKING_CHANNEL_ID,
@@ -355,9 +404,36 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   // --- Helpers ---
 
-  private async closeSession(session: SessionRow, endedAt: number): Promise<void> {
-    const client = createSlackClient(this.env);
+  /**
+   * `chat.update` that treats a vanished target — the message was deleted by hand, or the stored
+   * ts was minted against another channel (a stale dev pointer) — as recoverable: warn and return
+   * false so the caller can post a fresh message, instead of wedging the room on a dead ts.
+   * Any other failure still throws.
+   */
+  private async tryUpdateRoomMessage(
+    ts: string,
+    text: string,
+    blocks: AnyMessageBlock[],
+  ): Promise<boolean> {
+    try {
+      await createSlackClient(this.env).chat.update({
+        channel: this.env.SLACK_COWORKING_CHANNEL_ID,
+        ts,
+        text,
+        blocks,
+      });
+      return true;
+    } catch (err) {
+      const code = err instanceof SlackAPIError ? err.error : String(err);
+      if (code.includes("message_not_found") || code.includes("channel_not_found")) {
+        log.warn("coworking.room_msg.stale_pointer", { ts, error: code });
+        return false;
+      }
+      throw err;
+    }
+  }
 
+  private async closeSession(session: SessionRow, endedAt: number): Promise<void> {
     if (session.slack_message_ts) {
       const stats = {
         durationMs: session.started_at ? Math.max(0, endedAt - session.started_at) : 0,
@@ -365,12 +441,13 @@ export class CoworkingRoom extends DurableObject<Env> {
         attendees: this.buildRoster(session.instance_uuid),
       };
       log.debug("coworking.end.update_msg", { ts: session.slack_message_ts, peak: stats.peak });
-      await client.chat.update({
-        channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-        ts: session.slack_message_ts,
-        text: roomClosedText(this.env),
-        blocks: buildRoomClosedBlocks(this.env, stats),
-      });
+      // If the room message was deleted mid-session, the warning is enough — the session must
+      // still flip to ended and the fresh invite below must still post.
+      await this.tryUpdateRoomMessage(
+        session.slack_message_ts,
+        roomClosedText(this.env),
+        buildRoomClosedBlocks(this.env, stats),
+      );
     }
 
     this.sql.exec(
@@ -405,12 +482,13 @@ export class CoworkingRoom extends DurableObject<Env> {
         : { displayName: r.display_name ?? "A guest" },
     );
     log.debug("coworking.presence.update", { instance: session.instance_uuid, count: present.length });
-    await createSlackClient(this.env).chat.update({
-      channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-      ts: session.slack_message_ts,
-      text: roomOpenText(this.env),
-      blocks: buildRoomOpenBlocks(this.env, present),
-    });
+    // A vanished message just warns and skips — a join/leave webhook must never throw over it;
+    // closeSession / the next session will re-point the message.
+    await this.tryUpdateRoomMessage(
+      session.slack_message_ts,
+      roomOpenText(this.env),
+      buildRoomOpenBlocks(this.env, present),
+    );
   }
 
   /**
@@ -427,13 +505,13 @@ export class CoworkingRoom extends DurableObject<Env> {
     const currentTs = replace ? undefined : await this.ctx.storage.get<string>(ROOM_MESSAGE_KEY);
     if (currentTs) {
       log.debug("coworking.idle_invite.reuse", { ts: currentTs });
-      await client.chat.update({
-        channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-        ts: currentTs,
-        text: roomIdleText(this.env),
-        blocks: buildRoomIdleBlocks(this.env),
-      });
-      return;
+      const updated = await this.tryUpdateRoomMessage(
+        currentTs,
+        roomIdleText(this.env),
+        buildRoomIdleBlocks(this.env),
+      );
+      if (updated) return;
+      // The pointed-at message is gone (deleted by hand / stale dev pointer) — post fresh below.
     }
     const res = await client.chat.postMessage({
       channel: this.env.SLACK_COWORKING_CHANNEL_ID,
