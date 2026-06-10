@@ -237,7 +237,7 @@ export function buildJoinEphemeralAttachments(env: Env, joinUrl: string): Messag
         {
           type: "button",
           action_id: JOIN_REDIRECT_ACTION_ID,
-          text: { type: "plain_text", text: "☕ Join now", emoji: true },
+          text: { type: "plain_text", text: "☕️  Join now", emoji: true },
           url: joinUrl,
           style: "primary",
         },
@@ -245,6 +245,7 @@ export function buildJoinEphemeralAttachments(env: Env, joinUrl: string): Messag
           type: "button",
           action_id: CANCEL_ACTION_ID,
           text: { type: "plain_text", text: "Cancel", emoji: true },
+          style: "danger"
         },
       ],
     },
