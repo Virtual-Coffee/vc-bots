@@ -36,8 +36,11 @@
     "ROOM_TITLE": "Co-Working Room",
     // Community maintainers @-mentioned at the end of the welcome message / App Home.
     "WELCOME_MAINTAINER_IDS": "U014HT3RNCU,U0157K5MUPJ,U01577R42TS,U01B9NQF2PR",
-    // Event reminders (Phase 3).
-    "SLACK_REMINDERS_CHANNEL_ID": "C09B0QURPB2", // TODO: real #events-style channel
+    // Event reminders (Phase 3). Hourly → events; daily/weekly → announcements (later);
+    // event-admin mirrors the hourly with extra info like the Zoom host key (later).
+    "SLACK_EVENTS_CHANNEL_ID": "C017WAKN883",
+    "SLACK_ANNOUNCEMENTS_CHANNEL_ID": "C014AAPC09K",
+    "SLACK_EVENTADMIN_CHANNEL_ID": "C0360K84NEQ",
     "CMS_GRAPHQL_URL": "https://virtualcoffee.io/graphql", // TODO: confirm CMS GraphQL endpoint
     "LOG_LEVEL": "info" // debug | info | warn | error (set LOG_LEVEL=debug in .dev.vars locally)
     // TODO(config): port remaining message/notice strings from the old rooms config.

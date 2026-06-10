@@ -56,7 +56,7 @@ export async function sendReminder(
 
   const { text, blocks } = buildReminderMessage(kind.heading, events);
   await createSlackClient(env).chat.postMessage({
-    channel: env.SLACK_REMINDERS_CHANNEL_ID,
+    channel: env.SLACK_EVENTS_CHANNEL_ID,
     text,
     blocks,
   });

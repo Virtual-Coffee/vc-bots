@@ -30,8 +30,12 @@ export interface Env {
   PUBLIC_BASE_URL: string;
   SLACK_COWORKING_CHANNEL_ID: string;
   ROOM_TITLE: string;
-  /** Channel for event reminders. */
-  SLACK_REMINDERS_CHANNEL_ID: string;
+  /** #events-style channel — hourly event reminders post here. */
+  SLACK_EVENTS_CHANNEL_ID: string;
+  /** Announcements channel — will carry the daily/weekly event reminders. */
+  SLACK_ANNOUNCEMENTS_CHANNEL_ID: string;
+  /** #vc-events-admin — mirrors the hourly reminder with extra info (e.g. the Zoom host key). */
+  SLACK_EVENTADMIN_CHANNEL_ID: string;
   /** CMS GraphQL endpoint for event reminders. */
   CMS_GRAPHQL_URL: string;
   /** Comma-separated Slack user IDs mentioned as community maintainers in the welcome message. */
