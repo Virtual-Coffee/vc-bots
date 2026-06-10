@@ -196,7 +196,7 @@ export function joinEphemeralText(env: Env): string {
  * `response_url`. The whole invitation rides in one message attachment so Slack draws the VC
  * raspberry accent bar down its left edge — the message-safe stand-in for a card (the newer
  * `card` and `alert` block types are rejected as invalid_blocks in messages). Inside: a header,
- * the room/intro line, the Code of Conduct as fine print, then the two buttons mirroring the
+ * the room/intro line, the Code of Conduct as its own section, then the two buttons mirroring the
  * old native confirm dialog — ☕ Join (a `url` button to the member's personal link — its click
  * also deletes the ephemeral) and Cancel (just deletes it). Either way the surface disappears
  * on click, which a modal can't do.

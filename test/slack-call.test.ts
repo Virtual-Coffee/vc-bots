@@ -57,7 +57,7 @@ describe("buildJoinEphemeralAttachments", () => {
     expect(attachments).toContain("Code of Conduct");
   });
 
-  it("renders as one color-bar invitation: header up top, CoC fine print above the buttons", () => {
+  it("renders as one color-bar invitation: header up top, CoC section above the buttons", () => {
     const attachments = buildJoinEphemeralAttachments(
       env,
       "https://bots.example/join/abc123abc123abc1",
@@ -68,7 +68,7 @@ describe("buildJoinEphemeralAttachments", () => {
     expect(invite?.color).toBe("#d9376e");
     expect(invite?.fallback).toContain(env.ROOM_TITLE);
     const types = invite?.blocks?.map((b) => b.type);
-    expect(types).toEqual(["header", "section", "context", "actions"]);
+    expect(types).toEqual(["header", "section", "section", "actions"]);
   });
 });
 
