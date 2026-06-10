@@ -29,6 +29,9 @@
   "vars": {
 
     "ZOOM_MEETING_ID": "82832550878",
+    // Netlify rewrites virtualcoffee.io/bots/* to this Worker (stripping the /bots prefix);
+    // used only for the user-facing join link. Empty/unset falls back to the request origin.
+    "PUBLIC_BASE_URL": "https://virtualcoffee.io/bots",
     "SLACK_COWORKING_CHANNEL_ID": "C0B6C3BFEDD",
     "ROOM_TITLE": "Co-Working Room",
     // Community maintainers @-mentioned at the end of the welcome message / App Home.

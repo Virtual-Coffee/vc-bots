@@ -23,6 +23,11 @@ export interface Env {
 
   // --- Config vars (wrangler.jsonc) ---
   ZOOM_MEETING_ID: string;
+  /**
+   * Public base URL the join redirect is surfaced under (the Netlify rewrite in front of the
+   * Worker). May include a path prefix. Empty/unset falls back to the request origin (wrangler dev).
+   */
+  PUBLIC_BASE_URL: string;
   SLACK_COWORKING_CHANNEL_ID: string;
   ROOM_TITLE: string;
   /** Channel for event reminders. */

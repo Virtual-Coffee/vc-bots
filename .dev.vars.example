@@ -18,3 +18,7 @@ CMS_TOKEN=...
 
 # Optional: override the wrangler.jsonc LOG_LEVEL ("info") for local dev.
 # LOG_LEVEL=debug
+
+# Optional: override the public base URL for join links so they point at the local server
+# instead of the virtualcoffee.io Netlify rewrite. Empty also works (falls back to request origin).
+# PUBLIC_BASE_URL=http://localhost:8787

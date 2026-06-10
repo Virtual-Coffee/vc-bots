@@ -179,7 +179,9 @@ async function handleSlackInteractivity(
   // ACK immediately (Slack's 3s limit); do any follow-up work after responding.
   if (payload && isJoinClick(payload)) {
     log.info("slack.interactivity", { action: "join", user: payload.user.id });
-    ctx.waitUntil(handleJoinClick(payload, env, new URL(req.url).origin));
+    // Surface the join link under the public base URL (the Netlify rewrite), not workers.dev.
+    const base = (env.PUBLIC_BASE_URL || new URL(req.url).origin).replace(/\/+$/, "");
+    ctx.waitUntil(handleJoinClick(payload, env, base));
   } else if (payload && isJoinDismissClick(payload)) {
     // ☕ Join (url button — the browser is already opening Zoom) or Cancel: delete the ephemeral.
     log.info("slack.interactivity", { action: "join_dismiss", user: payload.user.id });

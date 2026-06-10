@@ -63,13 +63,13 @@ export async function handleJoinDismiss(
 /**
  * Room "Join" click → mint the member's personal link and answer with the join ephemeral.
  *
- * `origin` is the Worker's public origin (from the inbound request URL), used to build the
- * `/join/<token>` redirect the ☕ Join button points at.
+ * `publicBaseUrl` is the base the `/join/<token>` redirect is surfaced under — the public
+ * base URL (`PUBLIC_BASE_URL`, may include a path prefix like `/bots`) or the request origin.
  */
 export async function handleJoinClick(
   payload: SlackBlockActionsPayload,
   env: Env,
-  origin: string,
+  publicBaseUrl: string,
 ): Promise<void> {
   const slackUserId = payload.user.id;
   const responseUrl = payload.response_url;
@@ -95,7 +95,7 @@ export async function handleJoinClick(
     const stub = env.COWORKING_ROOM.getByName(env.ZOOM_MEETING_ID);
     const { token } = await stub.handleJoinRequest({ slackUserId, displayName });
     log.info("join.linked", { user: slackUserId }); // never log the token — it resolves to a credential
-    const joinUrl = `${origin}/join/${token}`;
+    const joinUrl = `${publicBaseUrl}/join/${token}`;
     const attachments = buildJoinEphemeralAttachments(env, joinUrl);
     await respondEphemeral(responseUrl, joinEphemeralText(env), undefined, attachments);
   } catch (err) {
