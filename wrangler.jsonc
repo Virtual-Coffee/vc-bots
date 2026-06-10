@@ -31,6 +31,8 @@
     "ZOOM_MEETING_ID": "82832550878",
     "SLACK_COWORKING_CHANNEL_ID": "C0B6C3BFEDD",
     "ROOM_TITLE": "Co-Working Room",
+    // Community maintainers @-mentioned at the end of the welcome message / App Home.
+    "WELCOME_MAINTAINER_IDS": "U014HT3RNCU,U0157K5MUPJ,U01577R42TS,U01B9NQF2PR",
     // Event reminders (Phase 3).
     "SLACK_REMINDERS_CHANNEL_ID": "C09B0QURPB2", // TODO: real #events-style channel
     "CMS_GRAPHQL_URL": "https://virtualcoffee.io/graphql", // TODO: confirm CMS GraphQL endpoint

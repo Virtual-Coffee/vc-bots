@@ -3,6 +3,7 @@ import type { Env } from "../env";
 import { createSlackClient } from "../slack/client";
 import type { SlackEvent } from "../slack/types";
 import { slackUserId } from "../slack/types";
+import { welcomeBlocks } from "./welcome";
 
 /**
  * App Home bot — responds to `app_home_opened` by publishing the Home tab view.
@@ -16,29 +17,10 @@ export async function handleAppHomeOpened(event: SlackEvent, env: Env): Promise<
 }
 
 /**
- * Home tab view.
- *
- * TODO(copy): flesh out with the real VirtualCoffee Home content (links, upcoming events,
- * quick actions). Kept minimal for parity in Phase 3.
+ * Home tab view — mirrors the welcome message (no user → generic greeting), as the
+ * old bot did. The welcome builder only emits section/header/divider blocks, all of
+ * which are valid Home tab blocks.
  */
-export function homeView(_env: Env): HomeTabView {
-  const blocks: AnyHomeTabBlock[] = [
-    {
-      type: "header",
-      text: { type: "plain_text", text: "Welcome to VirtualCoffee ☕️", emoji: true },
-    },
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: "A community of developers supporting each other. Jump into the *#co-working-room*, share a win in *#wins*, or browse upcoming events.",
-      },
-    },
-    { type: "divider" },
-    {
-      type: "context",
-      elements: [{ type: "mrkdwn", text: "Made with :coffee: by the VirtualCoffee bots." }],
-    },
-  ];
-  return { type: "home", blocks };
+export function homeView(env: Env): HomeTabView {
+  return { type: "home", blocks: welcomeBlocks(env) as AnyHomeTabBlock[] };
 }

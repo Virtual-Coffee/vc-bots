@@ -1,26 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { homeView } from "../src/bots/app-home";
 import { buildReminderMessage } from "../src/bots/reminders/blocks";
 import type { CmsEvent } from "../src/bots/reminders/cms";
-import { welcomeBlocks } from "../src/bots/welcome";
-import type { Env } from "../src/env";
 
-describe("welcomeBlocks", () => {
-  it("mentions the joining user", () => {
-    const blocks = welcomeBlocks("U999");
-    const json = JSON.stringify(blocks);
-    expect(json).toContain("<@U999>");
-    expect(blocks.every((b) => typeof b.type === "string")).toBe(true);
-  });
-});
-
-describe("homeView", () => {
-  it("returns a home-tab view with a header", () => {
-    const view = homeView({} as Env);
-    expect(view.type).toBe("home");
-    expect(view.blocks[0]?.type).toBe("header");
-  });
-});
+// welcomeBlocks / homeView are covered in test/welcome.test.ts.
 
 describe("buildReminderMessage", () => {
   const events: CmsEvent[] = [

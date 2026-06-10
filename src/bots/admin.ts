@@ -101,7 +101,10 @@ async function runAdminCommand(
       await client.chat.postMessage({
         channel: cmd.user_id,
         text: "Welcome message preview",
-        blocks: welcomeBlocks(cmd.user_id),
+        blocks: welcomeBlocks(env, cmd.user_id),
+        link_names: true,
+        unfurl_links: false,
+        unfurl_media: false,
       });
       await respondEphemeral(cmd.response_url, ":white_check_mark: Sent you the welcome message.");
       return;

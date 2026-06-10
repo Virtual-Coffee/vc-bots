@@ -29,6 +29,8 @@ export interface Env {
   SLACK_REMINDERS_CHANNEL_ID: string;
   /** CMS GraphQL endpoint for event reminders. */
   CMS_GRAPHQL_URL: string;
+  /** Comma-separated Slack user IDs mentioned as community maintainers in the welcome message. */
+  WELCOME_MAINTAINER_IDS: string;
   /** Logging threshold: debug | info | warn | error (default info). */
   LOG_LEVEL: string;
 }
