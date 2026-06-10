@@ -26,8 +26,7 @@ export async function route(
   const method = req.method;
 
   // Health check — handy for uptime pings and the deploy smoke test.
-  if (method === "GET" && path === "/health") {
-    log.debug("request", { method, path });
+  if ((method === "GET" && path === "/health") || (method === 'HEAD' && path === '/')) {
     return new Response("ok", { status: 200 });
   }
 
