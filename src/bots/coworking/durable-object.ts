@@ -266,17 +266,23 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   private async onMeetingStarted(event: ZoomMeetingEvent): Promise<void> {
     const uuid = instanceUuid(event);
-    if (this.getSession(uuid)?.status === "active") return; // duplicate webhook
-
-    // A different instance is already live (a stray second meeting.started with its own uuid, or a
-    // prior session whose meeting.ended we never received). Editing now would clobber that live
-    // session's presence list with an empty open-room view, so leave it for the stale-session alarm.
-    if (this.hasActiveSession()) {
-      log.warn("coworking.started.already_active", { instance: uuid });
-      return;
-    }
+    if (this.getSession(uuid)?.status === "active") return; // duplicate webhook (same uuid)
 
     const startedAt = eventTimeMs(event);
+
+    // A different instance is still marked active — its meeting.ended never arrived (e.g. the
+    // worker wasn't reachable). One Zoom meeting ID has at most one live instance, and duplicate
+    // start webhooks reuse the same uuid (deduped above), so a start with a NEW uuid proves the
+    // old session is dead. Close it now (stats summary + fresh invite) instead of leaving the
+    // room wedged until the 6h stale-session alarm.
+    const staleSessions = this.sql
+      .exec<SessionRow>("SELECT * FROM session WHERE status = 'active'")
+      .toArray();
+    for (const stale of staleSessions) {
+      log.warn("coworking.started.closing_stale", { stale: stale.instance_uuid, instance: uuid });
+      await this.closeSession(stale, startedAt);
+    }
+
     const client = createSlackClient(this.env);
 
     // Edit the bot's current channel message (the standing invite) in place so the single message
@@ -325,7 +331,10 @@ export class CoworkingRoom extends DurableObject<Env> {
   private async onParticipantJoined(event: ZoomMeetingEvent): Promise<void> {
     const uuid = instanceUuid(event);
     const session = this.getSession(uuid);
-    if (session?.status !== "active") return; // no open session — drop (race-safe)
+    if (session?.status !== "active") {
+      log.debug("coworking.joined.drop_no_session", { instance: uuid });
+      return; // no open session — drop (race-safe)
+    }
 
     const participant = event.payload.object.participant;
     if (!participant) return;
@@ -382,7 +391,10 @@ export class CoworkingRoom extends DurableObject<Env> {
         uuid,
       )
       .toArray()[0];
-    if (!row) return; // unknown or already removed — idempotent
+    if (!row) {
+      log.debug("coworking.left.drop_unknown", { instance: uuid });
+      return; // unknown or already removed — idempotent
+    }
 
     // Soft-delete: mark them gone but keep the row so the end-of-session roster survives.
     this.sql.exec(
@@ -582,11 +594,4 @@ export class CoworkingRoom extends DurableObject<Env> {
       .toArray()[0];
   }
 
-  /** True if any session is currently active (used to avoid clobbering a live room on a new start). */
-  private hasActiveSession(): boolean {
-    const row = this.sql
-      .exec<{ n: number }>("SELECT COUNT(*) AS n FROM session WHERE status = 'active'")
-      .toArray()[0];
-    return (row?.n ?? 0) > 0;
-  }
 }

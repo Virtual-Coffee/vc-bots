@@ -136,21 +136,37 @@ describe("CoworkingRoom — room message lifecycle", () => {
     expect(pointer).toBe(STARTED_TS);
   });
 
-  it("ignores a stray second meeting.started (different uuid) instead of posting a duplicate", async () => {
+  it("a start with a new uuid force-closes a stale active session instead of wedging the room", async () => {
     const stub = room("dbl1");
     await stub.adminPostInvite(); // invite (post #1)
     await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // edits invite → active
     await stub.handleZoomEvent(
       event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
     );
-    const updatesBefore = callsTo("/api/chat.update").length;
 
-    await stub.handleZoomEvent(event("meeting.started", "uuid-2")); // stray second start
+    // uuid-1's meeting.ended was never received; a new instance starts. One meeting ID can only
+    // have one live instance, so uuid-1 is necessarily dead — close it and open uuid-2 now
+    // rather than dropping the start and waiting for the 6h stale-session alarm.
+    await stub.handleZoomEvent(event("meeting.started", "uuid-2"));
 
-    // No duplicate post, and the live presence list is not clobbered back to an empty open room.
-    expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
-    expect(callsTo("/api/chat.update").length).toBe(updatesBefore);
-    expect(lastBlocks("/api/chat.update")).toContain("Ada");
+    const rows = await sessions(stub);
+    expect(rows.find((r) => r.instance_uuid === "uuid-1")?.status).toBe("ended");
+    expect(rows.find((r) => r.instance_uuid === "uuid-2")?.status).toBe("active");
+
+    // The stale session got its ended summary, and the fresh invite from closeSession (post #2)
+    // was edited into the new open room.
+    const endedSummary = callsTo("/api/chat.update").some((c) =>
+      (new URLSearchParams(c.body).get("blocks") ?? "").includes("session has ended"),
+    );
+    expect(endedSummary).toBe(true);
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
+    expect(lastBlocks("/api/chat.update")).toContain("coworking_join");
+
+    // The wedge is gone: a join on the new instance lands and shows up in presence.
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-2", { user_id: "p2", user_name: "Bob" }),
+    );
+    expect(lastBlocks("/api/chat.update")).toContain("Bob");
   });
 
   it("recovers after a missed meeting.ended: alarm closes, next start reuses the fresh invite", async () => {
