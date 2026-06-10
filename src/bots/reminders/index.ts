@@ -10,8 +10,9 @@ import { fetchEvents, filterUpcoming } from "./cms";
  *
  * Cron triggers fire in UTC.
  * ⚠️ The cron strings in `CRON_TO_KIND` MUST stay in sync with `triggers.crons` in wrangler.jsonc.
- * TODO(reminders): both are placeholders — replace with the real UTC send-times once the intended
- * local times are supplied (a fixed UTC time shifts ±1h across DST).
+ * Currently DISABLED — `triggers.crons` is empty until the feature is fleshed out.
+ * TODO(reminders): the expressions below are placeholders — replace with the real UTC send-times
+ * once the intended local times are supplied (a fixed UTC time shifts ±1h across DST).
  */
 
 export interface ReminderKind {
@@ -28,6 +29,8 @@ export const REMINDER_KINDS: Record<ReminderName, ReminderKind> = {
 };
 
 // Maps each cron expression → reminder name. Keys must equal wrangler.jsonc cron strings.
+// NOTE: crons are currently DISABLED in wrangler.jsonc (triggers.crons is empty) until the
+// feature is fleshed out; these keys are the intended expressions to restore there.
 const CRON_TO_KIND: Record<string, ReminderName> = {
   "0 * * * *": "hourly",
   "0 13 * * *": "daily",

@@ -13,15 +13,15 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] }],
 
   // Event reminders. Cron triggers fire in UTC — translate intended local send-times.
-  // TODO(reminders): replace these placeholder expressions with the real UTC times once
-  // the intended local send-times are supplied (note: fixed UTC shifts ±1h across DST).
-  "triggers": {
-    "crons": [
-      "0 * * * *", // TODO hourly  — placeholder
-      "0 13 * * *", // TODO daily   — placeholder UTC time
-      "0 13 * * MON" // TODO weekly  — placeholder UTC time
-    ]
-  },
+  // DISABLED until the reminders feature is fleshed out (real CMS query/endpoint, real
+  // channel, real send-times). Re-enable by restoring the entries below AND keeping them
+  // byte-identical to CRON_TO_KIND in src/bots/reminders/index.ts. The empty array is
+  // deliberate — deploying with it removes any crons already registered on Cloudflare,
+  // whereas dropping the key entirely would leave them running.
+  // "0 * * * *"    — hourly  (placeholder)
+  // "0 13 * * *"   — daily   (placeholder UTC time)
+  // "0 13 * * MON" — weekly  (placeholder UTC time)
+  "triggers": { "crons": [] },
 
   "observability": { "enabled": true },
 
