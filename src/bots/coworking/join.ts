@@ -7,7 +7,7 @@ import {
   CANCEL_ACTION_ID,
   JOIN_ACTION_ID,
   JOIN_REDIRECT_ACTION_ID,
-  buildJoinEphemeralBlocks,
+  buildJoinEphemeralAttachments,
   joinEphemeralText,
   joinErrorText,
 } from "./slack-call";
@@ -96,7 +96,8 @@ export async function handleJoinClick(
     const { token } = await stub.handleJoinRequest({ slackUserId, displayName });
     log.info("join.linked", { user: slackUserId }); // never log the token — it resolves to a credential
     const joinUrl = `${origin}/join/${token}`;
-    await respondEphemeral(responseUrl, joinEphemeralText(env), buildJoinEphemeralBlocks(env, joinUrl));
+    const attachments = buildJoinEphemeralAttachments(env, joinUrl);
+    await respondEphemeral(responseUrl, joinEphemeralText(env), undefined, attachments);
   } catch (err) {
     log.error("join.failed", { user: slackUserId, err: String(err) });
     await respondEphemeral(responseUrl, joinErrorText(env));

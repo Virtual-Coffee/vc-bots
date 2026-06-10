@@ -217,7 +217,7 @@ describe("CoworkingRoom — room message lifecycle", () => {
     const ended = lastBlocks("/api/chat.update");
     expect(ended).toContain("session has ended");
     expect(ended).toContain("1h 30m"); // total session length
-    expect(ended).toContain("Peak 2"); // peak concurrent attendance
+    expect(ended).toContain("*Peak:* 2"); // peak concurrent attendance (section field)
     // Deduped roster: Ada as a member mention, Bob as a guest name — both retained though Ada left.
     expect(ended).toContain("<@U777>");
     expect(ended).toContain("Bob");
@@ -256,7 +256,7 @@ describe("CoworkingRoom — participant correlation & presence", () => {
     // The presence message lists the guest by display name (no mention).
     const presence = lastBlocks("/api/chat.update");
     expect(presence).toContain("Guest");
-    expect(presence).not.toContain("<@");
+    expect(presence).not.toContain('"user_id"'); // no mention element — guests are plain text
 
     const parts = await participants(stub);
     expect(parts[0]?.slack_user_id).toBeNull();
@@ -278,7 +278,7 @@ describe("CoworkingRoom — participant correlation & presence", () => {
       event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
     );
 
-    expect(lastBlocks("/api/chat.update")).toContain("<@U777>");
+    expect(lastBlocks("/api/chat.update")).toContain('"user_id":"U777"'); // rich-text mention
     const parts = await participants(stub);
     expect(parts[0]?.slack_user_id).toBe("U777");
     expect(parts[0]?.external_id).toBeNull();
@@ -296,7 +296,7 @@ describe("CoworkingRoom — participant correlation & presence", () => {
 
     const presence = lastBlocks("/api/chat.update");
     expect(presence).toContain("ada (iPhone)");
-    expect(presence).not.toContain("<@U777>");
+    expect(presence).not.toContain("U777");
     expect((await participants(stub))[0]?.slack_user_id).toBeNull();
   });
 

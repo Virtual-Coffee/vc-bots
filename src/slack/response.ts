@@ -1,4 +1,4 @@
-import type { AnyMessageBlock } from "slack-web-api-client";
+import type { AnyMessageBlock, MessageAttachment } from "slack-web-api-client";
 
 /**
  * Post a message to a Slack `response_url` (interactivity + slash-command follow-ups).
@@ -12,6 +12,7 @@ export async function respondEphemeral(
   responseUrl: string,
   text: string,
   blocks?: AnyMessageBlock[],
+  attachments?: MessageAttachment[],
 ): Promise<void> {
   await fetch(responseUrl, {
     method: "POST",
@@ -21,6 +22,7 @@ export async function respondEphemeral(
       replace_original: false,
       text,
       ...(blocks ? { blocks } : {}),
+      ...(attachments ? { attachments } : {}),
     }),
   });
 }

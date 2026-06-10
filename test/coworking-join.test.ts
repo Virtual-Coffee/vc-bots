@@ -84,14 +84,16 @@ describe("handleJoinClick", () => {
     // A new ephemeral for the clicker — never a replacement of the shared room message.
     expect(sent.response_type).toBe("ephemeral");
     expect(sent.replace_original).toBe(false);
+    expect(sent.text).toBeTruthy(); // plain-text fallback rides alongside the attachment
 
-    const blocks = JSON.stringify(sent.blocks);
-    expect(blocks).toContain("coworking_open_zoom"); // ☕ Join (url button)
-    expect(blocks).toContain("coworking_cancel"); // Cancel
+    // The invitation rides in a color-bar attachment (card/alert blocks are message-invalid).
+    const attachments = JSON.stringify(sent.attachments);
+    expect(attachments).toContain("coworking_open_zoom"); // ☕ Join (url button)
+    expect(attachments).toContain("coworking_cancel"); // Cancel
     // The button url is the Worker's opaque redirect — the raw Zoom link (and its token) never
     // reaches the Slack UI, so the hover tooltip shows a clean url.
-    expect(blocks).toMatch(new RegExp(`${ORIGIN}/join/[0-9a-f]{32}`));
-    expect(blocks).not.toContain("personal-9");
+    expect(attachments).toMatch(new RegExp(`${ORIGIN}/join/[0-9a-f]{32}`));
+    expect(attachments).not.toContain("personal-9");
   });
 
   it("answers with an error ephemeral when registration fails", async () => {

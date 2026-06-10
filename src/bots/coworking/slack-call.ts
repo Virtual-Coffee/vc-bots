@@ -1,4 +1,4 @@
-import type { AnyMessageBlock } from "slack-web-api-client";
+import type { AnyMessageBlock, MessageAttachment } from "slack-web-api-client";
 import type { Env } from "../../env";
 import { formatDuration, roomClosedText } from "./zoom-events";
 
@@ -15,15 +15,49 @@ import { formatDuration, roomClosedText } from "./zoom-events";
 export type PresenceUser = { slackUserId: string } | { displayName: string };
 
 /**
- * Render the "who's in the room" line. Members show as `<@id>` mentions (links their profile);
- * guests show as their plain display name. Empty → a gentle "nobody here yet" nudge.
+ * Render the "who's in the room" portion of the open message. Empty → a gentle "nobody here
+ * yet" context nudge. Otherwise a context label plus a rich-text bulleted list — members as
+ * real `user` mention elements (links their profile), guests as plain text.
  */
-export function formatPresence(present: PresenceUser[]): string {
-  if (present.length === 0) return ":wave: Nobody's in the room yet — be the first to hop in!";
-  const names = present.map((p) =>
-    "slackUserId" in p ? `<@${p.slackUserId}>` : p.displayName,
-  );
-  return `:busts_in_silhouette: In the room (${present.length}): ${names.join(", ")}`;
+function presenceBlocks(present: PresenceUser[]): AnyMessageBlock[] {
+  if (present.length === 0) {
+    return [
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: ":wave: Nobody's in the room yet — be the first to hop in!",
+          },
+        ],
+      },
+    ];
+  }
+  return [
+    {
+      type: "context",
+      elements: [
+        { type: "mrkdwn", text: `:busts_in_silhouette: *In the room (${present.length}):*` },
+      ],
+    },
+    {
+      type: "rich_text",
+      elements: [
+        {
+          type: "rich_text_list",
+          style: "bullet",
+          elements: present.map((p) => ({
+            type: "rich_text_section" as const,
+            elements: [
+              "slackUserId" in p
+                ? { type: "user" as const, user_id: p.slackUserId }
+                : { type: "text" as const, text: p.displayName },
+            ],
+          })),
+        },
+      ],
+    },
+  ];
 }
 
 /** End-of-session stats for the closed message. */
@@ -63,16 +97,21 @@ function joinButton(label: string): AnyMessageBlock {
 }
 
 /**
- * Channel message blocks for an idle room: a gentle nudge inviting someone to start a session,
- * with the same Zoom-redirect button (no live Call yet — that arrives with `meeting.started`).
+ * Channel message blocks for an idle room: a full card — header, a gentle nudge inviting
+ * someone to start a session, and the Join button (no live Call yet — that arrives with
+ * `meeting.started`).
  */
 export function buildRoomIdleBlocks(env: Env): AnyMessageBlock[] {
   return [
     {
+      type: "header",
+      text: { type: "plain_text", text: `☕ ${env.ROOM_TITLE}`, emoji: true },
+    },
+    {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `:coffee: The *${env.ROOM_TITLE}* is quiet right now — be the first to hop in and start a session!`,
+        text: "The room is quiet right now — be the first to hop in and start a session!",
       },
     },
     joinButton("Start the co-working room"),
@@ -80,46 +119,60 @@ export function buildRoomIdleBlocks(env: Env): AnyMessageBlock[] {
 }
 
 /**
- * Channel message blocks for an open room: intro + the ☕ Join button (per-user modal) + a live
- * presence list. Re-rendered on every join/leave via `chat.update`.
+ * Channel message blocks for an open room: a full card — header, intro, the ☕ Join button
+ * (per-user ephemeral), and a live presence list rendered as a rich-text bulleted roster.
+ * Re-rendered on every join/leave via `chat.update`.
  */
 export function buildRoomOpenBlocks(env: Env, present: PresenceUser[]): AnyMessageBlock[] {
   return [
     {
+      type: "header",
+      text: { type: "plain_text", text: `☕ The ${env.ROOM_TITLE} is open!`, emoji: true },
+    },
+    {
       type: "section",
-      text: { type: "mrkdwn", text: `:coffee: The *${env.ROOM_TITLE}* is now open!` },
+      text: { type: "mrkdwn", text: "Hop in for some focused work alongside friendly faces." },
     },
     joinButton("Join the co-working room"),
-    {
-      type: "context",
-      elements: [{ type: "mrkdwn", text: formatPresence(present) }],
-    },
+    ...presenceBlocks(present),
   ];
 }
 
 /**
- * Channel message blocks for an ended room: a wrap-up headline plus a stats line
- * (session length, peak attendance, and a deduped list of everyone who stopped by). No Join
- * button — the session is over, and a fresh standing invite is posted separately.
+ * Channel message blocks for an ended room: a full card — wrap-up header, the closed line,
+ * Duration/Peak as two-column section fields, and a deduped "Dropped in" roster as fine print.
+ * No Join button — the session is over, and a fresh standing invite is posted separately.
  */
 export function buildRoomClosedBlocks(env: Env, stats: SessionStats): AnyMessageBlock[] {
-  const parts = [
-    `:stopwatch: Lasted ${formatDuration(stats.durationMs)}`,
-    `:busts_in_silhouette: Peak ${stats.peak}`,
-  ];
-  if (stats.attendees.length > 0) {
-    parts.push(`:coffee: Stopped by (${stats.attendees.length}): ${formatRoster(stats.attendees)}`);
-  }
-  return [
+  const blocks: AnyMessageBlock[] = [
+    {
+      type: "header",
+      text: { type: "plain_text", text: "🎉 That's a wrap!", emoji: true },
+    },
     {
       type: "section",
       text: { type: "mrkdwn", text: roomClosedText(env) },
     },
     {
-      type: "context",
-      elements: [{ type: "mrkdwn", text: parts.join("  ·  ") }],
+      type: "section",
+      fields: [
+        { type: "mrkdwn", text: `:stopwatch: *Duration:* ${formatDuration(stats.durationMs)}` },
+        { type: "mrkdwn", text: `:busts_in_silhouette: *Peak:* ${stats.peak}` },
+      ],
     },
   ];
+  if (stats.attendees.length > 0) {
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `:coffee: Dropped in (${stats.attendees.length}): ${formatRoster(stats.attendees)}`,
+        },
+      ],
+    });
+  }
+  return blocks;
 }
 
 /** action_id of the ephemeral's personal join-link button. Slack still sends a `block_actions`
@@ -139,26 +192,44 @@ export function joinEphemeralText(env: Env): string {
 }
 
 /**
- * The per-user "you're all set" ephemeral (visible only to the clicker), sent via the room
- * button's `response_url`. Two buttons, mirroring the old native confirm dialog: ☕ Join (a `url`
- * button to the member's personal link — its click also deletes the ephemeral) and Cancel (just
- * deletes it). Either way the surface disappears on click, which a modal can't do.
+ * The per-user invitation ephemeral (visible only to the clicker), sent via the room button's
+ * `response_url`. The whole invitation rides in one message attachment so Slack draws the VC
+ * raspberry accent bar down its left edge — the message-safe stand-in for a card (the newer
+ * `card` and `alert` block types are rejected as invalid_blocks in messages). Inside: a header,
+ * the room/intro line, the Code of Conduct as fine print, then the two buttons mirroring the
+ * old native confirm dialog — ☕ Join (a `url` button to the member's personal link — its click
+ * also deletes the ephemeral) and Cancel (just deletes it). Either way the surface disappears
+ * on click, which a modal can't do.
  *
  * `joinUrl` is the Worker's `/join/<token>` redirect, not the raw Zoom link — so the hover
  * tooltip Slack pins to url buttons shows a clean URL instead of the token-bearing Zoom one.
  */
-export function buildJoinEphemeralBlocks(env: Env, joinUrl: string): AnyMessageBlock[] {
-  return [
+export function buildJoinEphemeralAttachments(env: Env, joinUrl: string): MessageAttachment[] {
+  const blocks: AnyMessageBlock[] = [
+    {
+      type: "header",
+      text: { type: "plain_text", text: "🎉 You're invited!", emoji: true },
+    },
     {
       type: "section",
       text: {
         type: "mrkdwn",
         text:
-          `:coffee: You're all set for the *${env.ROOM_TITLE}*!\n\n` +
-          "By joining, you agree to follow our " +
-          "<https://virtualcoffee.io/code-of-conduct|Code of Conduct>. " +
-          "Be kind, keep it welcoming, and enjoy the company. :heart:",
+          `*${env.ROOM_TITLE}* · happening now\n` +
+          "Grab your drink — your personal join link is ready, and it's just for you.",
       },
+    },
+    // The Code of Conduct sits above the buttons so it's read before joining.
+    {
+      type: "section",
+      text:
+        {
+          type: "mrkdwn",
+          text:
+            "By joining, you agree to follow our " +
+            "<https://virtualcoffee.io/code-of-conduct|Code of Conduct>. " +
+            "Be kind, keep it welcoming, and enjoy the company. :heart:",
+        },
     },
     {
       type: "actions",
@@ -166,7 +237,7 @@ export function buildJoinEphemeralBlocks(env: Env, joinUrl: string): AnyMessageB
         {
           type: "button",
           action_id: JOIN_REDIRECT_ACTION_ID,
-          text: { type: "plain_text", text: "☕ Join the Co-Working Room", emoji: true },
+          text: { type: "plain_text", text: "☕ Join now", emoji: true },
           url: joinUrl,
           style: "primary",
         },
@@ -177,7 +248,14 @@ export function buildJoinEphemeralBlocks(env: Env, joinUrl: string): AnyMessageB
         },
       ],
     },
-  ] as AnyMessageBlock[];
+  ];
+  return [
+    {
+      color: "#d9376e", // VirtualCoffee brand raspberry — the accent bar
+      fallback: joinEphemeralText(env),
+      blocks,
+    },
+  ];
 }
 
 /** Fallback ephemeral text when minting the invite link fails. */
