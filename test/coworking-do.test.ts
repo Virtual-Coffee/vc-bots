@@ -123,6 +123,61 @@ describe("CoworkingRoom — room message lifecycle", () => {
     expect((await sessions(stub))[0]?.slack_message_ts).toBe(STARTED_TS);
   });
 
+  it("keeps the room-message pointer after a session starts (reused, not consumed)", async () => {
+    const stub = room("ptr1");
+    await stub.adminPostInvite();
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+
+    // The pointer still points at the (now active) message so later transitions reuse it —
+    // it is no longer deleted on consume, which is what caused the duplicate-post regression.
+    const pointer = await runInDurableObject(stub, (_i, state) =>
+      state.storage.get<string>("idle_invite_ts"),
+    );
+    expect(pointer).toBe(STARTED_TS);
+  });
+
+  it("ignores a stray second meeting.started (different uuid) instead of posting a duplicate", async () => {
+    const stub = room("dbl1");
+    await stub.adminPostInvite(); // invite (post #1)
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // edits invite → active
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
+    );
+    const updatesBefore = callsTo("/api/chat.update").length;
+
+    await stub.handleZoomEvent(event("meeting.started", "uuid-2")); // stray second start
+
+    // No duplicate post, and the live presence list is not clobbered back to an empty open room.
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
+    expect(callsTo("/api/chat.update").length).toBe(updatesBefore);
+    expect(lastBlocks("/api/chat.update")).toContain("Ada");
+  });
+
+  it("recovers after a missed meeting.ended: alarm closes, next start reuses the fresh invite", async () => {
+    const stub = room("miss1");
+    await stub.adminPostInvite(); // invite (post #1)
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // edits invite → active
+    // meeting.ended never arrives → the stale-session alarm force-closes it and posts a fresh
+    // invite (post #2), advancing the pointer.
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
+
+    // The next session reuses that fresh invite in place — no orphaned duplicate.
+    await stub.handleZoomEvent(event("meeting.started", "uuid-2"));
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
+    expect(new URLSearchParams(callsTo("/api/chat.update").at(-1)!.body).get("ts")).toBe(STARTED_TS);
+  });
+
+  it("re-running the admin invite edits the standing message instead of posting a duplicate", async () => {
+    const stub = room("reinv1");
+    await stub.adminPostInvite(); // post #1
+    await stub.adminPostInvite(); // reuse in place → chat.update, no new post
+
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
+    expect(callsTo("/api/chat.update")).toHaveLength(1);
+    expect(lastBlocks("/api/chat.update")).toContain("coworking_join");
+  });
+
   it("posts the ended summary with session length, peak attendance, and a deduped roster", async () => {
     const stub = room("stats1");
     await stub.handleJoinRequest({ slackUserId: "U777", displayName: "Ada" }); // member link

@@ -35,9 +35,13 @@ const STALE_SESSION_MS = 6 * 60 * 60 * 1000;
 /** DO storage key for the ts of an admin-posted (announce-only) room message. */
 const ADMIN_ANNOUNCEMENT_KEY = "admin_announcement_ts";
 
-/** DO storage key for the ts of the standing idle-invite message, edited in place when a
- *  session starts so the channel message walks invite → active → ended. */
-const IDLE_INVITE_KEY = "idle_invite_ts";
+/**
+ * DO storage key for the ts of the bot's single self-managed channel message, whatever state it's
+ * in (idle invite, active room, or ended summary). It's the pointer the whole lifecycle reuses:
+ * `meeting.started` edits this message into the active room rather than posting a new one. The
+ * value is kept (legacy name `idle_invite_ts`) so any already-stored pointer stays valid.
+ */
+const ROOM_MESSAGE_KEY = "idle_invite_ts";
 
 // Type aliases (not interfaces) so they satisfy `exec<T>`'s `Record<string, SqlStorageValue>`.
 type SessionRow = {
@@ -216,24 +220,31 @@ export class CoworkingRoom extends DurableObject<Env> {
     const uuid = instanceUuid(event);
     if (this.getSession(uuid)?.status === "active") return; // duplicate webhook
 
+    // A different instance is already live (a stray second meeting.started with its own uuid, or a
+    // prior session whose meeting.ended we never received). Editing now would clobber that live
+    // session's presence list with an empty open-room view, so leave it for the stale-session alarm.
+    if (this.hasActiveSession()) {
+      log.warn("coworking.started.already_active", { instance: uuid });
+      return;
+    }
+
     const startedAt = eventTimeMs(event);
     const client = createSlackClient(this.env);
 
-    // Prefer editing the standing idle-invite message in place so the channel message walks
-    // invite → active → ended. Fall back to a fresh post if no invite is pending (first session,
-    // or someone joined Zoom directly).
-    const inviteTs = await this.ctx.storage.get<string>(IDLE_INVITE_KEY);
+    // Edit the bot's current channel message (the standing invite) in place so the single message
+    // walks invite → active → ended. The pointer is NOT cleared — it keeps pointing at this same
+    // message through the whole session. Fall back to a fresh post only if no message exists yet.
+    const currentTs = await this.ctx.storage.get<string>(ROOM_MESSAGE_KEY);
     let messageTs: string | null;
-    if (inviteTs) {
-      log.debug("coworking.started.update_invite", { instance: uuid, ts: inviteTs });
+    if (currentTs) {
+      log.debug("coworking.started.update_invite", { instance: uuid, ts: currentTs });
       await client.chat.update({
         channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-        ts: inviteTs,
+        ts: currentTs,
         text: roomOpenText(this.env),
         blocks: buildRoomOpenBlocks(this.env, []),
       });
-      await this.ctx.storage.delete(IDLE_INVITE_KEY);
-      messageTs = inviteTs;
+      messageTs = currentTs;
     } else {
       log.debug("coworking.started.post", { instance: uuid });
       const res = await client.chat.postMessage({
@@ -242,6 +253,8 @@ export class CoworkingRoom extends DurableObject<Env> {
         blocks: buildRoomOpenBlocks(this.env, []),
       });
       messageTs = res.ts ?? null;
+      if (res.ts) await this.ctx.storage.put(ROOM_MESSAGE_KEY, res.ts);
+      else log.warn("coworking.room_msg.no_ts", { instance: uuid });
     }
 
     log.debug("coworking.started.session_row", { instance: uuid });
@@ -369,8 +382,9 @@ export class CoworkingRoom extends DurableObject<Env> {
     await this.ctx.storage.deleteAlarm();
     log.info("coworking.ended", { instance: session.instance_uuid });
 
-    // Leave a fresh standing invite so the next person knows they can start a session.
-    await this.postRoomIdle();
+    // Leave a fresh standing invite (a NEW message) so the just-posted stats summary stays in
+    // history and the pointer advances to the new invite for the next session.
+    await this.postRoomIdle({ replace: true });
   }
 
   /**
@@ -400,16 +414,34 @@ export class CoworkingRoom extends DurableObject<Env> {
   }
 
   /**
-   * Post a fresh "the room is quiet — start a session" invite to the channel, and remember its ts
-   * so the next `meeting.started` can edit this very message into the active room (invite → active).
+   * Render the "the room is quiet — start a session" invite as the bot's single channel message,
+   * and remember its ts in `ROOM_MESSAGE_KEY` so the next `meeting.started` can edit this very
+   * message into the active room (invite → active).
+   *
+   * By default this reuses the current message in place, so it's idempotent — re-running the admin
+   * invite edits rather than spams. Pass `replace: true` after a session ends to post a NEW invite,
+   * leaving the ended stats summary in history and advancing the pointer to the fresh message.
    */
-  private async postRoomIdle(): Promise<void> {
-    const res = await createSlackClient(this.env).chat.postMessage({
+  private async postRoomIdle({ replace = false }: { replace?: boolean } = {}): Promise<void> {
+    const client = createSlackClient(this.env);
+    const currentTs = replace ? undefined : await this.ctx.storage.get<string>(ROOM_MESSAGE_KEY);
+    if (currentTs) {
+      log.debug("coworking.idle_invite.reuse", { ts: currentTs });
+      await client.chat.update({
+        channel: this.env.SLACK_COWORKING_CHANNEL_ID,
+        ts: currentTs,
+        text: roomIdleText(this.env),
+        blocks: buildRoomIdleBlocks(this.env),
+      });
+      return;
+    }
+    const res = await client.chat.postMessage({
       channel: this.env.SLACK_COWORKING_CHANNEL_ID,
       text: roomIdleText(this.env),
       blocks: buildRoomIdleBlocks(this.env),
     });
-    if (res.ts) await this.ctx.storage.put(IDLE_INVITE_KEY, res.ts);
+    if (res.ts) await this.ctx.storage.put(ROOM_MESSAGE_KEY, res.ts);
+    else log.warn("coworking.room_msg.no_ts");
     log.info("coworking.idle_invite");
   }
 
@@ -470,5 +502,13 @@ export class CoworkingRoom extends DurableObject<Env> {
     return this.sql
       .exec<SessionRow>("SELECT * FROM session WHERE instance_uuid = ?", uuid)
       .toArray()[0];
+  }
+
+  /** True if any session is currently active (used to avoid clobbering a live room on a new start). */
+  private hasActiveSession(): boolean {
+    const row = this.sql
+      .exec<{ n: number }>("SELECT COUNT(*) AS n FROM session WHERE status = 'active'")
+      .toArray()[0];
+    return (row?.n ?? 0) > 0;
   }
 }
