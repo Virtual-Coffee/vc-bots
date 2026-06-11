@@ -68,7 +68,7 @@ describe("sendReminder — daily", () => {
       evt("2", "2026-05-28T20:00:00"), // +8h
     ];
     const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: true, count: 2, scheduled: 2 });
+    expect(result).toEqual({ posted: true, count: 2, scheduled: 2, source: "cms" });
 
     const scheduled = forms("/api/chat.scheduleMessage");
     expect(scheduled).toHaveLength(4);
@@ -104,7 +104,7 @@ describe("sendReminder — daily", () => {
   it("posts immediately when the event starts in under 10 minutes", async () => {
     cmsEvents = [evt("1", "2026-05-28T12:05:00")]; // +5 min — the −10min slot already passed
     const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: true, count: 1, scheduled: 1 });
+    expect(result).toEqual({ posted: true, count: 1, scheduled: 1, source: "cms" });
 
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
     const posts = forms("/api/chat.postMessage");
@@ -116,7 +116,7 @@ describe("sendReminder — daily", () => {
   it("skips already-started events but still posts the summary", async () => {
     cmsEvents = [evt("1", "2026-05-28T11:00:00")]; // started 1h ago
     const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: true, count: 1, scheduled: 0 });
+    expect(result).toEqual({ posted: true, count: 1, scheduled: 0, source: "cms" });
 
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
     expect(forms("/api/chat.postMessage")).toHaveLength(1); // summary only
@@ -125,7 +125,7 @@ describe("sendReminder — daily", () => {
   it("skips the summary on Mondays (weekly covers it) but still schedules", async () => {
     cmsEvents = [evt("1", "2026-05-25T18:00:00")];
     const result = await sendReminder("daily", env, MONDAY_NOW);
-    expect(result).toEqual({ posted: false, count: 1, scheduled: 1, reason: "monday" });
+    expect(result).toEqual({ posted: false, count: 1, scheduled: 1, reason: "monday", source: "cms" });
 
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(2);
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
@@ -133,7 +133,7 @@ describe("sendReminder — daily", () => {
 
   it("posts nothing when there are no events", async () => {
     const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: false, count: 0, scheduled: 0, reason: "no-events" });
+    expect(result).toEqual({ posted: false, count: 0, scheduled: 0, reason: "no-events", source: "cms" });
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
   });
 });
@@ -142,7 +142,7 @@ describe("sendReminder — weekly", () => {
   it("posts one summary to the announcements channel and schedules nothing", async () => {
     cmsEvents = [evt("1", "2026-05-28T18:00:00"), evt("2", "2026-05-30T15:00:00", "CX")];
     const result = await sendReminder("weekly", env, NOW);
-    expect(result).toEqual({ posted: true, count: 2 });
+    expect(result).toEqual({ posted: true, count: 2, source: "cms" });
 
     const posts = forms("/api/chat.postMessage");
     expect(posts).toHaveLength(1);
@@ -154,7 +154,7 @@ describe("sendReminder — weekly", () => {
 
   it("posts nothing when the week is empty", async () => {
     const result = await sendReminder("weekly", env, NOW);
-    expect(result).toEqual({ posted: false, count: 0, reason: "no-events" });
+    expect(result).toEqual({ posted: false, count: 0, reason: "no-events", source: "cms" });
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
   });
 });

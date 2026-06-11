@@ -20,6 +20,8 @@ export interface Env {
   ZOOM_S2S_CLIENT_SECRET: string;
   ZOOM_S2S_ACCOUNT_ID: string;
   CMS_TOKEN: string;
+  /** Full Google service-account JSON (one line). Carries a private key — never log it. */
+  GOOGLE_SERVICE_ACCOUNT_KEY: string;
 
   // --- Config vars (wrangler.jsonc) ---
   ZOOM_MEETING_ID: string;
@@ -38,6 +40,10 @@ export interface Env {
   SLACK_EVENTADMIN_CHANNEL_ID: string;
   /** CMS GraphQL endpoint for event announcements (Craft + Solspace Calendar). */
   CMS_GRAPHQL_URL: string;
+  /** Google Calendar id for event announcements (the …@group.calendar.google.com address). */
+  GOOGLE_CALENDAR_ID: string;
+  /** Default event source for reminders: "cms" | "google". Cutover = flip this var. */
+  EVENT_SOURCE: string;
   /** Comma-separated Slack user IDs mentioned as community maintainers in the welcome message. */
   WELCOME_MAINTAINER_IDS: string;
   /** Logging threshold: debug | info | warn | error (default info). */

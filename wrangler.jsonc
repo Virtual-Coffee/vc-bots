@@ -45,6 +45,11 @@
     "SLACK_ANNOUNCEMENTS_CHANNEL_ID": "C0B4LSMQK19", // temp for testing
     "SLACK_EVENTADMIN_CHANNEL_ID": "C0B4LSMQK19", // temp for testing
     "CMS_GRAPHQL_URL": "https://members.virtualcoffee.io/api",
+    // Google Calendar event source ("Virtual Coffee Events", shared with the service account).
+    // TODO(config): set the real calendar id before testing `/vc-bot-admin daily google`.
+    "GOOGLE_CALENDAR_ID": "REPLACE_WITH_CALENDAR_ID@group.calendar.google.com",
+    // Which event source the cron + default admin runs use. CMS→Google cutover = set "google".
+    "EVENT_SOURCE": "cms",
     "LOG_LEVEL": "info" // debug | info | warn | error (set LOG_LEVEL=debug in .dev.vars locally)
     // TODO(config): port remaining message/notice strings from the old rooms config.
   }

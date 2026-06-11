@@ -99,7 +99,8 @@ describe("handleAdminCommand — reminders", () => {
     cmsEvents = [cmsEvt(Date.now() + 3_600_000)];
     await handleAdminCommand(cmd("weekly"), env);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
-    expect(replyText()).toContain("Posted the *weekly* reminder (1 event)");
+    expect(replyText()).toContain("Posted the *weekly* reminder (1 event");
+    expect(replyText()).toContain("source: *cms*");
   });
 
   it("daily schedules a starting-soon pair and reports it", async () => {
@@ -115,6 +116,15 @@ describe("handleAdminCommand — reminders", () => {
     await handleAdminCommand(cmd("weekly"), env);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
     expect(replyText()).toContain("No upcoming events");
+  });
+
+  it("rejects an unknown source name with a friendly message and makes no Slack API calls", async () => {
+    await handleAdminCommand(cmd("daily nonsense"), env);
+    expect(replyText()).toContain("Unknown event source");
+    expect(replyText()).toContain("cms");
+    expect(replyText()).toContain("google");
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
+    expect(callsTo("/api/chat.scheduleMessage")).toHaveLength(0);
   });
 });
 
@@ -148,6 +158,11 @@ describe("handleAdminCommand — coworking announce", () => {
   it("shows usage for an unknown subcommand", async () => {
     await handleAdminCommand(cmd("nonsense"), env);
     expect(replyText()).toContain("/vc-bot-admin");
+  });
+
+  it("usage mentions [source] for daily/weekly", async () => {
+    await handleAdminCommand(cmd("nonsense"), env);
+    expect(replyText()).toContain("[source]");
   });
 });
 

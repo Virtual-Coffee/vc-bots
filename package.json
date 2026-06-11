@@ -24,6 +24,7 @@
   "dependencies": {
     "graphql": "^16.14.0",
     "graphql-request": "^7.4.0",
+    "jose": "^6.2.3",
     "luxon": "^3.7.2",
     "slack-web-api-client": "^1.1.12"
   },

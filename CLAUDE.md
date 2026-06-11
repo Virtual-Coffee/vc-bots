@@ -80,13 +80,17 @@ host code) → `SLACK_EVENTADMIN_CHANNEL_ID`. The daily run schedules each start
 start − 10 min via Slack `chat.scheduleMessage`, first deleting the bot's scheduled messages in
 the window so re-runs reconcile instead of duplicating; on Mondays it skips its summary (the
 weekly covers it) but still schedules. Event windows are computed in `America/New_York`. Events
-come through the `EventSource` abstraction (`source.ts`); the CMS GraphQL adapter
-(`sources/cms.ts`) is the only source today — a Google Calendar source is planned. ⚠️ The cron
-strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
-wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons
-fire in **UTC** and are **currently disabled**: `triggers.crons: []` is deliberate (deploying an
-empty array deregisters crons already on Cloudflare; deleting the key would leave them running).
-The same `sendReminder` is reused by the `/vc-bot-admin` slash command for manual runs/previews.
+come through the `EventSource` abstraction (`source.ts`); two sources are available: the CMS
+GraphQL adapter (`sources/cms.ts`) and the Google Calendar adapter (`sources/google-calendar.ts`).
+The active source is controlled by `EVENT_SOURCE` config var (default `"cms"`); switch to
+`"google"` to use the Calendar. Google events via service-account JWT-bearer auth (signed in
+`src/google/auth.ts`, credentials cached module-level). ⚠️ The cron strings in `CRON_TO_KIND`
+(`index.ts`) **must stay byte-identical to `triggers.crons` in wrangler.jsonc** — that string is
+the lookup key mapping a fired cron to a reminder kind. Crons fire in **UTC** and are **currently
+disabled**: `triggers.crons: []` is deliberate (deploying an empty array deregisters crons already
+on Cloudflare; deleting the key would leave them running). The same `sendReminder` is reused by
+the `/vc-bot-admin` slash command for manual runs/previews; it now accepts an optional source
+arg (e.g. `daily google`, `weekly cms`) to run a named source; cron always uses `EVENT_SOURCE`.
 
 **Slack client.** Always `createSlackClient(env)` (wraps `slack-web-api-client`) —
 **do not add `@slack/web-api`** (it isn't edge-compatible).
@@ -97,7 +101,9 @@ The same `sendReminder` is reused by the `/vc-bot-admin` slash command for manua
   `wrangler.jsonc` `vars` and is typed in `src/env.ts` (`Env`). Secrets (`SLACK_BOT_TOKEN`,
   `*_SECRET`, etc.) go via `wrangler secret put` in prod and `.dev.vars` locally (see
   `.dev.vars.example`). `src/env.ts` is the hand-maintained `Env` the app imports; keep it in
-  sync with `wrangler.jsonc` and rerun `pnpm cf-types`.
+  sync with `wrangler.jsonc` and rerun `pnpm cf-types`. ⚠️ Google service-account JSON
+  (`GOOGLE_SERVICE_ACCOUNT_KEY`), signed JWT assertions, and access tokens are credentials —
+  never log them.
 - **Logging.** Use the leveled `log` from `src/log.ts` (`log.info("event.name", { key: val })`),
   not bare `console.*`. Threshold is set per request/DO via `setLogLevel(env.LOG_LEVEL)`; the DO
   sets it in its own constructor since it runs in a separate isolate.

@@ -1,14 +1,17 @@
 import { DateTime } from "luxon";
 import type { Env } from "../../env";
 import { createCmsSource } from "./sources/cms";
+import { createGoogleCalendarSource } from "./sources/google-calendar";
 
 /**
  * Source-agnostic event model for the reminders bot.
  *
  * Senders and Block Kit builders depend only on these types — never on a provider's field
- * names. The CMS (Craft + Solspace Calendar) is the first `EventSource`; a Google Calendar
- * source will join it (~late June 2026) and the two must be able to run in parallel for
- * testing before cutover.
+ * names. The CMS (Craft + Solspace Calendar) is the first `EventSource`; the Google Calendar
+ * source joins it for parallel testing before cutover. `getEventSource` resolves: explicit
+ * name (from `/vc-bot-admin daily|weekly [source]`) wins; otherwise `env.EVENT_SOURCE`
+ * (cutover = config flip); throws on unknown so a typo'd config var fails loudly (admin
+ * pre-validates for a friendly message).
  */
 
 export interface ReminderEvent {
@@ -44,13 +47,26 @@ export interface EventSource {
 
 export type ReminderName = "daily" | "weekly";
 
-/**
- * The active source. When the Google Calendar source lands this becomes a registry
- * (e.g. `getEventSource(env, name?)`) so `/vc-bot-admin` can preview a named source and
- * both can run in parallel for testing without touching prod channels.
- */
-export function getEventSource(env: Env): EventSource {
-  return createCmsSource(env);
+const SOURCES = {
+  cms: createCmsSource,
+  google: createGoogleCalendarSource,
+} satisfies Record<string, (env: Env) => EventSource>;
+
+export type EventSourceName = keyof typeof SOURCES;
+export const EVENT_SOURCE_NAMES = Object.keys(SOURCES) as EventSourceName[];
+
+export function isEventSourceName(name: string): name is EventSourceName {
+  return name in SOURCES;
+}
+
+export function getEventSource(env: Env, name?: string): EventSource {
+  const resolved = name ?? env.EVENT_SOURCE ?? "cms";
+  if (!isEventSourceName(resolved)) {
+    throw new Error(
+      `Unknown event source "${resolved}" (valid: ${EVENT_SOURCE_NAMES.join(", ")})`,
+    );
+  }
+  return SOURCES[resolved](env);
 }
 
 const EASTERN = "America/New_York";

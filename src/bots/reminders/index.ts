@@ -13,6 +13,7 @@ import type { EventRange, EventSource, ReminderEvent, ReminderName } from "./sou
 import { getEventSource, reminderRange } from "./source";
 
 export type { ReminderName } from "./source";
+export { EVENT_SOURCE_NAMES, isEventSourceName } from "./source";
 
 /**
  * Event announcements. `sendReminder` does the actual work and is shared by the cron
@@ -49,6 +50,8 @@ export interface SendResult {
   scheduled?: number;
   /** Why no summary was posted. */
   reason?: "monday" | "no-events";
+  /** Name of the event source used. */
+  source: string;
 }
 
 type Sender = (source: EventSource, env: Env, nowMs: number) => Promise<SendResult>;
@@ -60,15 +63,16 @@ const SENDERS: Record<ReminderName, Sender> = {
 
 /**
  * Run one reminder kind. `nowMs` is injectable for tests / the cron's scheduled time.
- * (When the Google Calendar source lands, an optional source name threads through here so
- * `/vc-bot-admin` can preview either source.)
+ * `sourceName` lets `/vc-bot-admin` preview a named source; omit to use `env.EVENT_SOURCE`
+ * (or "cms" default). The cron handler never passes a source name.
  */
 export async function sendReminder(
   name: ReminderName,
   env: Env,
   nowMs: number = Date.now(),
+  sourceName?: string,
 ): Promise<SendResult> {
-  return SENDERS[name](getEventSource(env), env, nowMs);
+  return SENDERS[name](getEventSource(env, sourceName), env, nowMs);
 }
 
 export async function runReminders(
@@ -91,11 +95,11 @@ async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<
   // Mondays get the weekly summary instead; the starting-soon scheduling above still ran.
   if (DateTime.fromMillis(nowMs, { zone: "America/New_York" }).weekday === 1) {
     log.info("reminder.daily_monday_skip", { count: events.length, scheduled });
-    return { posted: false, count: events.length, scheduled, reason: "monday" };
+    return { posted: false, count: events.length, scheduled, reason: "monday", source: source.name };
   }
   if (events.length === 0) {
     log.info("reminder.skipped", { kind: "daily" });
-    return { posted: false, count: 0, scheduled, reason: "no-events" };
+    return { posted: false, count: 0, scheduled, reason: "no-events", source: source.name };
   }
 
   const { text, blocks } = buildDailyMessage(events);
@@ -107,7 +111,7 @@ async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<
     unfurl_media: false,
   });
   log.info("reminder.sent", { kind: "daily", count: events.length, scheduled });
-  return { posted: true, count: events.length, scheduled };
+  return { posted: true, count: events.length, scheduled, source: source.name };
 }
 
 async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise<SendResult> {
@@ -115,7 +119,7 @@ async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise
   const events = await source.fetchEvents(range);
   if (events.length === 0) {
     log.info("reminder.skipped", { kind: "weekly" });
-    return { posted: false, count: 0, reason: "no-events" };
+    return { posted: false, count: 0, reason: "no-events", source: source.name };
   }
 
   const { text, blocks } = buildWeeklyMessage(events);
@@ -127,7 +131,7 @@ async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise
     unfurl_media: false,
   });
   log.info("reminder.sent", { kind: "weekly", count: events.length });
-  return { posted: true, count: events.length };
+  return { posted: true, count: events.length, source: source.name };
 }
 
 /**

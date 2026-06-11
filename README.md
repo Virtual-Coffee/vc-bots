@@ -10,7 +10,7 @@ co-working room, the new-member welcome, the App Home tab, and event announcemen
 | **Co-working room** | Zoom webhooks + a Slack Join button | Keeps a live "open room" message in the co-working channel: who's in the room, a ☕ Join button that hands each member a personal Zoom invite link, and a stats summary when the meeting ends. |
 | **Welcome** | Slack `team_join` event | DMs new members a welcome message. |
 | **App Home** | Slack `app_home_opened` event | Publishes the bot's App Home tab. |
-| **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee CMS (GraphQL), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel. Crons are currently disabled while the feature is verified via `/vc-bot-admin`. |
+| **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee CMS (GraphQL) or Google Calendar (service-account auth), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel. The active source is set via `EVENT_SOURCE` config var (default `"cms"`). Crons are currently disabled while the feature is verified via `/vc-bot-admin`. |
 
 There's also a `/vc-bot-admin` slash command for manual previews and admin actions
 (e.g. `daily` / `weekly` to fire an announcement run now, or `coworking invite`).
@@ -94,12 +94,13 @@ Config and secrets are split deliberately:
   (maintainers @-mentioned in the welcome message and App Home), the three announcement
   channels — `SLACK_EVENTS_CHANNEL_ID` (starting-soon messages),
   `SLACK_ANNOUNCEMENTS_CHANNEL_ID` (daily/weekly summaries), `SLACK_EVENTADMIN_CHANNEL_ID`
-  (admin mirror with e.g. the Zoom host code) — `CMS_GRAPHQL_URL`, and `LOG_LEVEL`. After
-  changing bindings or vars, rerun `pnpm cf-types` and keep `src/env.ts` in sync by hand.
+  (admin mirror with e.g. the Zoom host code) — `CMS_GRAPHQL_URL`, `EVENT_SOURCE` (active event
+  source, default `"cms"`), `GOOGLE_CALENDAR_ID` (for Google Calendar source), and `LOG_LEVEL`.
+  After changing bindings or vars, rerun `pnpm cf-types` and keep `src/env.ts` in sync by hand.
 - **Secrets** go via `wrangler secret put <NAME>` in production and `.dev.vars` locally (see
   `.dev.vars.example`): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`,
   `ZOOM_WEBHOOK_SECRET_TOKEN`, `ZOOM_S2S_CLIENT_ID`, `ZOOM_S2S_CLIENT_SECRET`,
-  `ZOOM_S2S_ACCOUNT_ID`, `CMS_TOKEN`.
+  `ZOOM_S2S_ACCOUNT_ID`, `CMS_TOKEN`, `GOOGLE_SERVICE_ACCOUNT_KEY` (for Google Calendar source).
 
 ### Provider setup
 
@@ -151,6 +152,7 @@ wrangler secret put ZOOM_S2S_CLIENT_ID
 wrangler secret put ZOOM_S2S_CLIENT_SECRET
 wrangler secret put ZOOM_S2S_ACCOUNT_ID
 wrangler secret put CMS_TOKEN
+wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY
 
 pnpm deploy
 ```

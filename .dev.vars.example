@@ -16,6 +16,10 @@ ZOOM_S2S_ACCOUNT_ID=...
 # CMS (event reminders, GraphQL)
 CMS_TOKEN=...
 
+# Google Calendar (event reminders). The entire downloaded service-account JSON on one line.
+# Prod: `wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY` and paste the JSON when prompted.
+GOOGLE_SERVICE_ACCOUNT_KEY={"type":"service_account",...}
+
 # Optional: override the wrangler.jsonc LOG_LEVEL ("info") for local dev.
 # LOG_LEVEL=debug
 
