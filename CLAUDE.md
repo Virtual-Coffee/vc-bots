@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A single Cloudflare Worker (`vc-bots`) hosting all of VirtualCoffee's Slack/Zoom automation:
-the co-working room, the new-member welcome, the App Home tab, and event reminders. Everything
+the co-working room, the new-member welcome, the App Home tab, and event announcements. Everything
 runs on the edge runtime (`workerd`) — **no `node:*` modules**. Use Web APIs only: `fetch`,
 `crypto.subtle`, `btoa`, `URLSearchParams`, etc.
 
@@ -64,19 +64,29 @@ Joining is per-user: the message's Join button mints a personal Zoom **invite li
 require registration) and replies via `response_url` with an **ephemeral message** carrying
 ☕ Join / Cancel buttons; clicking either deletes the ephemeral (`delete_original`), so the
 surface dismisses itself (a modal can't — Slack has no API to close one from a button click).
-The ☕ Join url is the Worker's own `GET /join/<token>` redirect (tokens live in the DO's
-`invite_link` table and expire with the Zoom link), keeping the token-bearing Zoom url out of
-the Slack UI. ⚠️ Never `replace_original`/`delete_original` against the *channel* button's
-`response_url` — its "original" is the shared room message. Correlation is best-effort by
+The ☕ Join url is the Worker's own `GET /join/<token>` redirect, built on `PUBLIC_BASE_URL`
+(the virtualcoffee.io/bots Netlify rewrite; empty falls back to the request origin); tokens
+live in the DO's `invite_link` table and expire with the Zoom link, keeping the token-bearing
+Zoom url out of the Slack UI. ⚠️ Never `replace_original`/`delete_original` against the
+*channel* button's `response_url` — its "original" is the shared room message. Correlation is best-effort by
 display name via the `member_link` table (the webhook carries no registrant id for invite-link
 joiners); uncorrelated people show as external guests. Personal `join_url`s and the redirect
 tokens that resolve to them carry a join credential — **never log them**.
 
-**Reminders** (`src/bots/reminders/`) run from the cron `scheduled()` handler. ⚠️ The cron
+**Event announcements** (`src/bots/reminders/`) run from the cron `scheduled()` handler and
+post to three channels: daily/weekly summaries → `SLACK_ANNOUNCEMENTS_CHANNEL_ID`; per-event
+"Starting Soon" messages → `SLACK_EVENTS_CHANNEL_ID`, each mirrored (with extras like the Zoom
+host code) → `SLACK_EVENTADMIN_CHANNEL_ID`. The daily run schedules each starting-soon pair for
+start − 10 min via Slack `chat.scheduleMessage`, first deleting the bot's scheduled messages in
+the window so re-runs reconcile instead of duplicating; on Mondays it skips its summary (the
+weekly covers it) but still schedules. Event windows are computed in `America/New_York`. Events
+come through the `EventSource` abstraction (`source.ts`); the CMS GraphQL adapter
+(`sources/cms.ts`) is the only source today — a Google Calendar source is planned. ⚠️ The cron
 strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
 wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons
-fire in **UTC**. Events come from the VirtualCoffee CMS over GraphQL. The same `sendReminder`
-is reused by the `/vc-bot-admin` slash command for manual previews.
+fire in **UTC** and are **currently disabled**: `triggers.crons: []` is deliberate (deploying an
+empty array deregisters crons already on Cloudflare; deleting the key would leave them running).
+The same `sendReminder` is reused by the `/vc-bot-admin` slash command for manual runs/previews.
 
 **Slack client.** Always `createSlackClient(env)` (wraps `slack-web-api-client`) —
 **do not add `@slack/web-api`** (it isn't edge-compatible).

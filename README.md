@@ -1,7 +1,7 @@
 # vc-bots
 
 VirtualCoffee's Slack/Zoom automation — a single Cloudflare Worker hosting the
-co-working room, the new-member welcome, the App Home tab, and event reminders.
+co-working room, the new-member welcome, the App Home tab, and event announcements.
 
 ## What it does
 
@@ -10,10 +10,10 @@ co-working room, the new-member welcome, the App Home tab, and event reminders.
 | **Co-working room** | Zoom webhooks + a Slack Join button | Keeps a live "open room" message in the co-working channel: who's in the room, a ☕ Join button that hands each member a personal Zoom invite link, and a stats summary when the meeting ends. |
 | **Welcome** | Slack `team_join` event | DMs new members a welcome message. |
 | **App Home** | Slack `app_home_opened` event | Publishes the bot's App Home tab. |
-| **Event reminders** | Cron triggers | Pulls upcoming events from the VirtualCoffee CMS (GraphQL) and posts Block Kit reminders to the reminders channel. |
+| **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee CMS (GraphQL), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel. Crons are currently disabled while the feature is verified via `/vc-bot-admin`. |
 
 There's also a `/vc-bot-admin` slash command for manual previews and admin actions
-(e.g. `coworking invite`).
+(e.g. `daily` / `weekly` to fire an announcement run now, or `coworking invite`).
 
 ## Architecture at a glance
 
@@ -21,9 +21,10 @@ Everything runs on Cloudflare's edge runtime (`workerd`) — **no `node:*` modul
 only (`fetch`, `crypto.subtle`, etc.).
 
 **Request flow.** `src/index.ts` is the Worker entrypoint (`fetch` + `scheduled`). `fetch`
-delegates to `src/router.ts`, a plain `method + path` switch over five routes: `POST
-/zoom/webhook`, `POST /slack/events`, `POST /slack/interactivity`, `POST /slack/commands`, and
-`GET /health`. Every route:
+delegates to `src/router.ts`, a plain `method + path` switch over six routes: `POST
+/zoom/webhook`, `POST /slack/events`, `POST /slack/interactivity`, `POST /slack/commands`,
+`GET /join/<token>` (the co-working join redirect — the token itself is the credential, so
+there's no signature to check), and `GET /health`. Every provider route:
 
 1. **Verifies the provider signature against the raw body first**, before parsing JSON
    (timing-safe HMAC via `crypto.subtle` in `src/crypto.ts`).
@@ -45,6 +46,8 @@ force-closes sessions whose `meeting.ended` webhook never arrived.
 ☕ Join / Cancel buttons; clicking either deletes the ephemeral (☕ Join also opens Zoom), so the
 surface dismisses itself. The button's url is the Worker's own `GET /join/<token>` redirect,
 which 302s to the personal link — the token-bearing Zoom url never appears in the Slack UI.
+The redirect is surfaced under `PUBLIC_BASE_URL` (the `virtualcoffee.io/bots` Netlify rewrite
+in front of the Worker); when unset it falls back to the request origin.
 Correlating Zoom participants back to Slack members is best-effort by display name via the DO's
 `member_link` table; people who join another way show as external guests. Personal `join_url`s
 (and the redirect tokens that resolve to them) carry a join credential — they are never logged.
@@ -60,7 +63,8 @@ src/
   log.ts              leveled logger (threshold from LOG_LEVEL)
   bots/
     coworking/        the room: Durable Object, Zoom event handlers, join flow, message blocks
-    reminders/        cron dispatch, CMS GraphQL queries, Block Kit builders, html-to-mrkdwn
+    reminders/        cron dispatch, event model + CMS source, Block Kit builders, html-to-mrkdwn
+    slack-events.ts   routes Slack events to the welcome / App Home handlers
     welcome.ts        new-member welcome DM
     app-home.ts       App Home tab
     admin.ts          /vc-bot-admin slash command
@@ -85,9 +89,13 @@ pnpm dev                          # wrangler dev — local server on workerd
 Config and secrets are split deliberately:
 
 - **Non-secret config** lives in `wrangler.jsonc` `vars` and is typed in `src/env.ts`:
-  `ZOOM_MEETING_ID`, `SLACK_COWORKING_CHANNEL_ID`, `ROOM_TITLE`,
-  `SLACK_REMINDERS_CHANNEL_ID`, `CMS_GRAPHQL_URL`, `LOG_LEVEL`. After changing bindings or
-  vars, rerun `pnpm cf-types` and keep `src/env.ts` in sync by hand.
+  `ZOOM_MEETING_ID`, `PUBLIC_BASE_URL` (join links surface under the `virtualcoffee.io/bots`
+  Netlify rewrite), `SLACK_COWORKING_CHANNEL_ID`, `ROOM_TITLE`, `WELCOME_MAINTAINER_IDS`
+  (maintainers @-mentioned in the welcome message and App Home), the three announcement
+  channels — `SLACK_EVENTS_CHANNEL_ID` (starting-soon messages),
+  `SLACK_ANNOUNCEMENTS_CHANNEL_ID` (daily/weekly summaries), `SLACK_EVENTADMIN_CHANNEL_ID`
+  (admin mirror with e.g. the Zoom host code) — `CMS_GRAPHQL_URL`, and `LOG_LEVEL`. After
+  changing bindings or vars, rerun `pnpm cf-types` and keep `src/env.ts` in sync by hand.
 - **Secrets** go via `wrangler secret put <NAME>` in production and `.dev.vars` locally (see
   `.dev.vars.example`): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`,
   `ZOOM_WEBHOOK_SECRET_TOKEN`, `ZOOM_S2S_CLIENT_ID`, `ZOOM_S2S_CLIENT_SECRET`,
@@ -106,7 +114,11 @@ Config and secrets are split deliberately:
   registration — invite links depend on it.
 - **Cron triggers** fire in **UTC**. The cron strings in `wrangler.jsonc` `triggers.crons`
   must stay byte-identical to `CRON_TO_KIND` in `src/bots/reminders/index.ts` — the fired
-  cron string is the lookup key for the reminder kind.
+  cron string is the lookup key for the reminder kind. Two crons drive everything (the daily
+  and weekly runs); the per-event starting-soon messages need no extra cron granularity
+  because the daily run schedules them via Slack's `chat.scheduleMessage`. Currently
+  **disabled**: `triggers.crons` is an empty array on purpose — deploying `[]` deregisters
+  any crons already on Cloudflare, whereas deleting the key would leave them running.
 
 ## Development
 
