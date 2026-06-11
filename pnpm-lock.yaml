@@ -17,13 +17,13 @@ importers:
       luxon:
         specifier: ^3.7.2
         version: 3.7.2
-      slack-web-api-client:
-        specifier: ^1.1.12
-        version: 1.1.12
+      slack-cloudflare-workers:
+        specifier: ^1.3.10
+        version: 1.3.10
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.16.10
-        version: 0.16.10(@vitest/runner@4.1.7)(@vitest/snapshot@4.1.7)(vitest@4.1.7(vite@8.0.14(esbuild@0.27.3)))
+        version: 0.16.10(@cloudflare/workers-types@4.20260610.1)(@vitest/runner@4.1.7)(@vitest/snapshot@4.1.7)(vitest@4.1.7(vite@8.0.14(esbuild@0.27.3)))
       '@types/luxon':
         specifier: ^3.7.1
         version: 3.7.1
@@ -35,7 +35,7 @@ importers:
         version: 4.1.7(vite@8.0.14(esbuild@0.27.3))
       wrangler:
         specifier: ^4.95.0
-        version: 4.95.0
+        version: 4.95.0(@cloudflare/workers-types@4.20260610.1)
 
 packages:
 
@@ -88,6 +88,9 @@ packages:
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
+
+  '@cloudflare/workers-types@4.20260610.1':
+    resolution: {integrity: sha512-Mk/f3lUygeIHzQ4HnJjU/JvGg/kllgp9gISty9nylHE/2M2MFeKO+hgAKSgiPpmwUbuhewdYGgqFGgT/ADK0/g==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -814,6 +817,12 @@ packages:
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
 
+  slack-cloudflare-workers@1.3.10:
+    resolution: {integrity: sha512-32Ay39aapAMvLnZGDU9+eOBN0FqVqt/UMJRuNN3GJaz21ZwU9jzZL9gdmFJSqYMmB//Sg2fjXxqN9a9GyyXe7Q==}
+
+  slack-edge@1.3.17:
+    resolution: {integrity: sha512-iiNbN+Vpfm1FDke6KLnY2X+YK3GXembqqjTEqd9nzW4FNkU+jQZ4gFeagZNEy69nDcFP4M7WgwZX8ikJKkyUJQ==}
+
   slack-web-api-client@1.1.12:
     resolution: {integrity: sha512-ge0B42P38FjozfUp6fhPBYAn0WVgs8wMPI2G2TlgGnm4dJ0bqAeX/vQB/JkUXyO3PdlEaMSfVvJl60YLYvURHA==}
 
@@ -996,7 +1005,7 @@ snapshots:
     optionalDependencies:
       workerd: 1.20260526.1
 
-  '@cloudflare/vitest-pool-workers@0.16.10(@vitest/runner@4.1.7)(@vitest/snapshot@4.1.7)(vitest@4.1.7(vite@8.0.14(esbuild@0.27.3)))':
+  '@cloudflare/vitest-pool-workers@0.16.10(@cloudflare/workers-types@4.20260610.1)(@vitest/runner@4.1.7)(@vitest/snapshot@4.1.7)(vitest@4.1.7(vite@8.0.14(esbuild@0.27.3)))':
     dependencies:
       '@vitest/runner': 4.1.7
       '@vitest/snapshot': 4.1.7
@@ -1004,7 +1013,7 @@ snapshots:
       esbuild: 0.27.3
       miniflare: 4.20260526.0
       vitest: 4.1.7(vite@8.0.14(esbuild@0.27.3))
-      wrangler: 4.95.0
+      wrangler: 4.95.0(@cloudflare/workers-types@4.20260610.1)
       zod: 3.25.76
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
@@ -1025,6 +1034,8 @@ snapshots:
 
   '@cloudflare/workerd-windows-64@1.20260526.1':
     optional: true
+
+  '@cloudflare/workers-types@4.20260610.1': {}
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
@@ -1593,6 +1604,15 @@ snapshots:
 
   siginfo@2.0.0: {}
 
+  slack-cloudflare-workers@1.3.10:
+    dependencies:
+      '@cloudflare/workers-types': 4.20260610.1
+      slack-edge: 1.3.17
+
+  slack-edge@1.3.17:
+    dependencies:
+      slack-web-api-client: 1.1.12
+
   slack-web-api-client@1.1.12: {}
 
   source-map-js@1.2.1: {}
@@ -1674,7 +1694,7 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20260526.1
       '@cloudflare/workerd-windows-64': 1.20260526.1
 
-  wrangler@4.95.0:
+  wrangler@4.95.0(@cloudflare/workers-types@4.20260610.1):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260526.1)
@@ -1686,6 +1706,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20260526.1
     optionalDependencies:
+      '@cloudflare/workers-types': 4.20260610.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - bufferutil

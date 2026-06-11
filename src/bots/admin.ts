@@ -1,9 +1,8 @@
-import type { SlackAPIClient } from "slack-web-api-client";
+import type { SlackAPIClient } from "slack-cloudflare-workers";
 import type { Env } from "../env";
 import { log } from "../log";
 import { createSlackClient } from "../slack/client";
 import { respondEphemeral } from "../slack/response";
-import type { SlackSlashCommand } from "../slack/types";
 import { homeView } from "./app-home";
 import { type ReminderName, type SendResult, sendReminder } from "./reminders";
 import { welcomeBlocks } from "./welcome";
@@ -11,8 +10,9 @@ import { welcomeBlocks } from "./welcome";
 /**
  * `/vc-bot-admin <type>` — manually fire auto messages. Restricted to workspace admins.
  *
- * The route ACKs Slack within 3s and calls `handleAdminCommand` via `ctx.waitUntil`, so all the
- * outbound work happens after the ACK and reports back through the command's `response_url`.
+ * Registered as the `.command()` lazy listener in `src/slack/app.ts`: the app ACKs Slack
+ * within 3s and runs `handleAdminCommand` via `ctx.waitUntil`, so all the outbound work
+ * happens after the ACK and reports back through the command's `response_url`.
  */
 
 export const ADMIN_COMMAND = "/vc-bot-admin";
@@ -26,21 +26,14 @@ const USAGE = [
   "• `coworking invite` — post the 'start a session' invite to the co-working channel",
 ].join("\n");
 
-/** Parse the form-encoded slash-command body into a typed payload. */
-export function parseSlashCommand(form: URLSearchParams): SlackSlashCommand | null {
-  const command = form.get("command");
-  const user_id = form.get("user_id");
-  const response_url = form.get("response_url");
-  if (!command || !user_id || !response_url) return null;
-  return {
-    command,
-    text: form.get("text") ?? "",
-    user_id,
-    channel_id: form.get("channel_id") ?? "",
-    response_url,
-    trigger_id: form.get("trigger_id") ?? "",
-    team_id: form.get("team_id") ?? "",
-  };
+/**
+ * The slash-command fields this handler reads — a structural subset of the framework's
+ * `SlashCommand` payload, kept narrow so tests can construct it directly.
+ */
+export interface AdminCommandPayload {
+  text: string;
+  user_id: string;
+  response_url: string;
 }
 
 async function isWorkspaceAdmin(client: SlackAPIClient, userId: string): Promise<boolean> {
@@ -52,7 +45,7 @@ async function isWorkspaceAdmin(client: SlackAPIClient, userId: string): Promise
   }
 }
 
-export async function handleAdminCommand(cmd: SlackSlashCommand, env: Env): Promise<void> {
+export async function handleAdminCommand(cmd: AdminCommandPayload, env: Env): Promise<void> {
   const client = createSlackClient(env);
 
   if (!(await isWorkspaceAdmin(client, cmd.user_id))) {
@@ -66,7 +59,7 @@ export async function handleAdminCommand(cmd: SlackSlashCommand, env: Env): Prom
   try {
     await runAdminCommand(client, cmd, env, sub, arg);
   } catch (err) {
-    // We're past the route's ACK (ctx.waitUntil) — an escaped rejection would be an uncaught
+    // We're past the app's ACK (ctx.waitUntil) — an escaped rejection would be an uncaught
     // error and the admin would just see silence. Report back instead.
     log.error("admin.failed", { sub: sub ?? "(none)", err: String(err) });
     await respondEphemeral(
@@ -93,7 +86,7 @@ function reminderReply(sub: string, result: SendResult): string {
 
 async function runAdminCommand(
   client: SlackAPIClient,
-  cmd: SlackSlashCommand,
+  cmd: AdminCommandPayload,
   env: Env,
   sub: string | undefined,
   arg: string | undefined,

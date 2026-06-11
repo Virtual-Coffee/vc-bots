@@ -1,15 +1,6 @@
 import type { Env } from "./env";
-import { ADMIN_COMMAND, handleAdminCommand, parseSlashCommand } from "./bots/admin";
-import {
-  handleJoinClick,
-  handleJoinDismiss,
-  isJoinClick,
-  isJoinDismissClick,
-} from "./bots/coworking/join";
-import { dispatchSlackEvent } from "./bots/slack-events";
 import { log } from "./log";
-import { verifySlackRequest } from "./slack/verify";
-import type { SlackBlockActionsPayload, SlackEventsRequest } from "./slack/types";
+import { createSlackApp } from "./slack/app";
 import type { ZoomInboundEvent } from "./zoom/types";
 import { isZoomMeetingEvent } from "./zoom/types";
 import { buildZoomUrlValidationResponse, verifyZoomRequest } from "./zoom/verify";
@@ -17,8 +8,9 @@ import { buildZoomUrlValidationResponse, verifyZoomRequest } from "./zoom/verify
 /**
  * HTTP front door. A plain method+path switch — no router dependency for ~4 routes.
  *
- * Every bot route verifies its provider signature as the FIRST step (against the raw body,
- * before parsing), then handles the provider handshake, then dispatches.
+ * Every bot route verifies its provider signature against the raw body, before parsing:
+ * the Zoom route does it inline as its FIRST step; the Slack routes delegate to the
+ * `SlackApp` (`src/slack/app.ts`), which does the same internally.
  */
 export async function route(
   req: Request,
@@ -46,14 +38,18 @@ export async function route(
     case "POST /zoom/webhook":
       return handleZoomWebhook(req, env, ctx);
 
+    // One path-agnostic SlackApp serves all three Slack endpoints: it verifies the
+    // signature against the raw body, answers the url_verification handshake, ACKs within
+    // Slack's 3s window, and runs the registered handlers via ctx.waitUntil. Hand over the
+    // request UNREAD — app.run reads the body itself.
     case "POST /slack/events":
-      return handleSlackEvents(req, env, ctx);
-
     case "POST /slack/interactivity":
-      return handleSlackInteractivity(req, env, ctx);
-
-    case "POST /slack/commands":
-      return handleSlackCommand(req, env, ctx);
+    case "POST /slack/commands": {
+      log.info("slack.request", { path });
+      // Surface the join link under the public base URL (the Netlify rewrite), not workers.dev.
+      const base = (env.PUBLIC_BASE_URL || url.origin).replace(/\/+$/, "");
+      return createSlackApp(env, base).run(req, ctx);
+    }
 
     default:
       return new Response("Not found", { status: 404 });
@@ -125,96 +121,6 @@ async function handleZoomWebhook(
     const stub = env.COWORKING_ROOM.getByName(meeting);
     await stub.handleZoomEvent(body);
   }
-  return new Response(null, { status: 200 });
-}
-
-// --- Slack events → welcome + App Home ---
-
-async function handleSlackEvents(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<Response> {
-  const rawBody = await req.text();
-  if (!(await verifySlackRequest(req, rawBody, env.SLACK_SIGNING_SECRET))) {
-    log.warn("verify.failed", { path: "/slack/events" });
-    return new Response("invalid signature", { status: 401 });
-  }
-
-  const body = safeJson<SlackEventsRequest>(rawBody);
-  if (!body) return new Response("bad request", { status: 400 });
-
-  // Events API URL handshake.
-  if (body.type === "url_verification") {
-    log.debug("slack.url_verification");
-    return Response.json({ challenge: body.challenge }, { status: 200 });
-  }
-
-  // ACK within Slack's 3s window; run the bot handler after responding.
-  if (body.type === "event_callback") {
-    log.info("slack.event", { type: body.event.type });
-    ctx.waitUntil(dispatchSlackEvent(body.event, env));
-  }
-  return new Response(null, { status: 200 });
-}
-
-// --- Slack interactivity → co-working join ---
-
-async function handleSlackInteractivity(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<Response> {
-  const rawBody = await req.text();
-  if (!(await verifySlackRequest(req, rawBody, env.SLACK_SIGNING_SECRET))) {
-    log.warn("verify.failed", { path: "/slack/interactivity" });
-    return new Response("invalid signature", { status: 401 });
-  }
-
-  // Interactivity arrives as form-encoded `payload=<json>`.
-  const payloadJson = new URLSearchParams(rawBody).get("payload");
-  const payload = payloadJson ? safeJson<SlackBlockActionsPayload>(payloadJson) : null;
-
-  // ACK immediately (Slack's 3s limit); do any follow-up work after responding.
-  if (payload && isJoinClick(payload)) {
-    log.info("slack.interactivity", { action: "join", user: payload.user.id });
-    // Surface the join link under the public base URL (the Netlify rewrite), not workers.dev.
-    const base = (env.PUBLIC_BASE_URL || new URL(req.url).origin).replace(/\/+$/, "");
-    ctx.waitUntil(handleJoinClick(payload, env, base));
-  } else if (payload && isJoinDismissClick(payload)) {
-    // ☕ Join (url button — the browser is already opening Zoom) or Cancel: delete the ephemeral.
-    log.info("slack.interactivity", { action: "join_dismiss", user: payload.user.id });
-    ctx.waitUntil(handleJoinDismiss(payload, env));
-  }
-  return new Response(null, { status: 200 });
-}
-
-// --- Slack slash commands → /vc-bot-admin ---
-
-async function handleSlackCommand(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<Response> {
-  const rawBody = await req.text();
-  if (!(await verifySlackRequest(req, rawBody, env.SLACK_SIGNING_SECRET))) {
-    log.warn("verify.failed", { path: "/slack/commands" });
-    return new Response("invalid signature", { status: 401 });
-  }
-
-  const cmd = parseSlashCommand(new URLSearchParams(rawBody));
-  if (!cmd || cmd.command !== ADMIN_COMMAND) {
-    return new Response(null, { status: 200 });
-  }
-
-  log.info("slack.command", {
-    command: cmd.command,
-    sub: cmd.text.trim().split(/\s+/)[0] || "(none)",
-    user: cmd.user_id,
-  });
-
-  // ACK immediately (Slack's 3s limit); do the work + final reply async via response_url.
-  ctx.waitUntil(handleAdminCommand(cmd, env));
   return new Response(null, { status: 200 });
 }
 

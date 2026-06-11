@@ -2,23 +2,19 @@ import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { deleteOriginal, respondEphemeral } from "../../slack/response";
-import type { SlackBlockActionsPayload } from "../../slack/types";
 import {
-  CANCEL_ACTION_ID,
-  JOIN_ACTION_ID,
-  JOIN_REDIRECT_ACTION_ID,
   buildJoinEphemeralAttachments,
   joinEphemeralText,
   joinErrorText,
 } from "./slack-call";
 
 /**
- * Interactivity handlers for the room "Join" button and the per-user join ephemeral.
- *
- * The route ACKs Slack within 3s and calls these via `ctx.waitUntil`. A channel button's url is
- * identical for every viewer, so it can't carry a per-user link; instead the click mints the
- * member's invite link and posts an ephemeral (a per-user surface) via the click's `response_url`:
- * a Code-of-Conduct note plus ☕ Join / Cancel buttons. Clicking either button deletes the
+ * Interactivity handlers for the room "Join" button and the per-user join ephemeral,
+ * registered as `.action()` lazy listeners in `src/slack/app.ts` (the app ACKs Slack within
+ * 3s and runs these via `ctx.waitUntil`). A channel button's url is identical for every
+ * viewer, so it can't carry a per-user link; instead the click mints the member's invite
+ * link and posts an ephemeral (a per-user surface) via the click's `response_url`: a
+ * Code-of-Conduct note plus ☕ Join / Cancel buttons. Clicking either button deletes the
  * ephemeral (☕ Join also opens Zoom via its `url`), so the surface closes itself — the
  * confirm-dialog feel a modal can't offer (Slack has no API to close a modal from a button click).
  *
@@ -26,24 +22,14 @@ import {
  * hover tooltip never exposes the token-bearing personal join url.
  */
 
-/** Does this interactivity payload represent a click of the room "Join" button? */
-export function isJoinClick(payload: SlackBlockActionsPayload): boolean {
-  return (
-    payload.type === "block_actions" &&
-    Boolean(payload.actions?.some((a) => a.action_id === JOIN_ACTION_ID))
-  );
-}
-
-/** A click on either join-ephemeral button (☕ Join or Cancel) — both dismiss the ephemeral. */
-export function isJoinDismissClick(payload: SlackBlockActionsPayload): boolean {
-  return (
-    payload.type === "block_actions" &&
-    Boolean(
-      payload.actions?.some(
-        (a) => a.action_id === JOIN_REDIRECT_ACTION_ID || a.action_id === CANCEL_ACTION_ID,
-      ),
-    )
-  );
+/**
+ * The `block_actions` fields these handlers read — a structural subset of the framework's
+ * `BlockAction` payload, kept narrow so tests can construct it directly.
+ */
+export interface JoinActionPayload {
+  user: { id: string };
+  response_url?: string;
+  actions: { action_id: string }[];
 }
 
 /**
@@ -51,10 +37,10 @@ export function isJoinDismissClick(payload: SlackBlockActionsPayload): boolean {
  * already opening the url client-side; this just makes the message vanish behind it.
  */
 export async function handleJoinDismiss(
-  payload: SlackBlockActionsPayload,
+  payload: JoinActionPayload,
   _env: Env,
 ): Promise<void> {
-  const action = payload.actions?.[0]?.action_id ?? "unknown";
+  const action = payload.actions[0]?.action_id ?? "unknown";
   log.info("join.dismiss", { user: payload.user.id, action });
   if (!payload.response_url) return;
   await deleteOriginal(payload.response_url);
@@ -67,7 +53,7 @@ export async function handleJoinDismiss(
  * base URL (`PUBLIC_BASE_URL`, may include a path prefix like `/bots`) or the request origin.
  */
 export async function handleJoinClick(
-  payload: SlackBlockActionsPayload,
+  payload: JoinActionPayload,
   env: Env,
   publicBaseUrl: string,
 ): Promise<void> {

@@ -1,4 +1,4 @@
-import type { AnyMessageBlock, MessageAttachment } from "slack-web-api-client";
+import type { AnyMessageBlock, MessageAttachment } from "slack-cloudflare-workers";
 
 /**
  * Post a message to a Slack `response_url` (interactivity + slash-command follow-ups).

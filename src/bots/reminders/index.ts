@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import type { ChatScheduledMessagesListRequest, SlackAPIClient } from "slack-web-api-client";
+import type { ChatScheduledMessagesListRequest, SlackAPIClient } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";

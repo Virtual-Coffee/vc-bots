@@ -1,7 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleAdminCommand, parseSlashCommand } from "../src/bots/admin";
-import type { SlackSlashCommand } from "../src/slack/types";
+import { handleAdminCommand, type AdminCommandPayload } from "../src/bots/admin";
 
 const RESPONSE_URL = "https://hooks.slack.com/commands/resp-1";
 
@@ -46,16 +45,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function cmd(text: string): SlackSlashCommand {
-  return {
-    command: "/vc-bot-admin",
-    text,
-    user_id: "U1",
-    channel_id: "C9",
-    response_url: RESPONSE_URL,
-    trigger_id: "t",
-    team_id: "T",
-  };
+function cmd(text: string): AdminCommandPayload {
+  return { text, user_id: "U1", response_url: RESPONSE_URL };
 }
 function callsTo(fragment: string): RecordedCall[] {
   return recorded.filter((r) => r.url.includes(fragment));
@@ -64,21 +55,6 @@ function replyText(): string | undefined {
   const r = recorded.find((c) => c.url === RESPONSE_URL);
   return r ? JSON.parse(r.body).text : undefined;
 }
-
-describe("parseSlashCommand", () => {
-  it("parses required fields and defaults the rest", () => {
-    const parsed = parseSlashCommand(
-      new URLSearchParams({ command: "/vc-bot-admin", text: "daily", user_id: "U1", response_url: RESPONSE_URL }),
-    );
-    expect(parsed?.command).toBe("/vc-bot-admin");
-    expect(parsed?.text).toBe("daily");
-    expect(parsed?.channel_id).toBe("");
-  });
-
-  it("returns null when required fields are missing", () => {
-    expect(parseSlashCommand(new URLSearchParams({ text: "daily" }))).toBeNull();
-  });
-});
 
 describe("handleAdminCommand — authorization", () => {
   it("rejects non-admins and fires nothing", async () => {

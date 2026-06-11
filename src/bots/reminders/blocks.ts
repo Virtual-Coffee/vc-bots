@@ -1,4 +1,4 @@
-import type { AnyMessageBlock } from "slack-web-api-client";
+import type { AnyMessageBlock } from "slack-cloudflare-workers";
 import { DateTime } from "luxon";
 import { htmlToMrkdwn } from "./html-to-mrkdwn";
 import type { ReminderEvent } from "./source";

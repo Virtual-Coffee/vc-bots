@@ -1,18 +1,14 @@
-import type { AnyMessageBlock } from "slack-web-api-client";
+import type { AnyMessageBlock, TeamJoinEvent } from "slack-cloudflare-workers";
 import type { Env } from "../env";
 import { createSlackClient } from "../slack/client";
-import type { SlackEvent } from "../slack/types";
-import { slackUserId } from "../slack/types";
 
 /**
  * Welcome bot — responds to the Slack `team_join` event by DMing the new member.
  *
  * Posting to a user ID opens (or reuses) the bot↔user DM, so no channel config is needed.
  */
-export async function handleTeamJoin(event: SlackEvent, env: Env): Promise<void> {
-  const userId = slackUserId(event.user);
-  if (!userId) return;
-
+export async function handleTeamJoin(event: TeamJoinEvent, env: Env): Promise<void> {
+  const userId = event.user.id;
   const client = createSlackClient(env);
   await client.chat.postMessage({
     channel: userId,

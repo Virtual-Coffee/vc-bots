@@ -1,4 +1,4 @@
-import type { AnyMessageBlock, MessageAttachment } from "slack-web-api-client";
+import type { AnyMessageBlock, MessageAttachment } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { formatDuration, roomClosedText } from "./zoom-events";
 

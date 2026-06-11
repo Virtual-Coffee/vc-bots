@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { SlackAPIError, type AnyMessageBlock } from "slack-web-api-client";
+import { SlackAPIError, type AnyMessageBlock } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
 import { createSlackClient } from "../../slack/client";
