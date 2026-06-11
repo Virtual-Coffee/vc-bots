@@ -5,7 +5,7 @@ import { createSlackClient } from "../slack/client";
 import { respondEphemeral } from "../slack/response";
 import type { SlackSlashCommand } from "../slack/types";
 import { homeView } from "./app-home";
-import { REMINDER_KINDS, type ReminderName, sendReminder } from "./reminders";
+import { type ReminderName, type SendResult, sendReminder } from "./reminders";
 import { welcomeBlocks } from "./welcome";
 
 /**
@@ -19,7 +19,7 @@ export const ADMIN_COMMAND = "/vc-bot-admin";
 
 const USAGE = [
   "*`/vc-bot-admin`* — fire an auto message. Subcommands:",
-  "• `hourly` · `daily` · `weekly` — post that event reminder now",
+  "• `daily` · `weekly` — post that event announcement now (daily also (re)schedules the starting-soon messages)",
   "• `welcome` — DM you the welcome message (preview)",
   "• `home` — publish your App Home (preview)",
   "• `coworking open` · `coworking close` — announce the co-working room",
@@ -76,6 +76,21 @@ export async function handleAdminCommand(cmd: SlackSlashCommand, env: Env): Prom
   }
 }
 
+function reminderReply(sub: string, result: SendResult): string {
+  const events = `${result.count} event${result.count === 1 ? "" : "s"}`;
+  const scheduled =
+    result.scheduled === undefined
+      ? ""
+      : ` Scheduled ${result.scheduled} starting-soon message${result.scheduled === 1 ? "" : "s"}.`;
+  if (result.posted) {
+    return `:white_check_mark: Posted the *${sub}* reminder (${events}).${scheduled}`;
+  }
+  if (result.reason === "monday") {
+    return `:information_source: Skipped the *daily* summary — the weekly reminder covers Mondays.${scheduled}`;
+  }
+  return `:information_source: No upcoming events for the *${sub}* window — nothing posted.${scheduled}`;
+}
+
 async function runAdminCommand(
   client: SlackAPIClient,
   cmd: SlackSlashCommand,
@@ -84,16 +99,10 @@ async function runAdminCommand(
   arg: string | undefined,
 ): Promise<void> {
   switch (sub) {
-    case "hourly":
     case "daily":
     case "weekly": {
-      const { posted, count } = await sendReminder(REMINDER_KINDS[sub as ReminderName], env);
-      await respondEphemeral(
-        cmd.response_url,
-        posted
-          ? `:white_check_mark: Posted the *${sub}* reminder (${count} event${count === 1 ? "" : "s"}).`
-          : `:information_source: No upcoming events for the *${sub}* window — nothing posted.`,
-      );
+      const result = await sendReminder(sub as ReminderName, env);
+      await respondEphemeral(cmd.response_url, reminderReply(sub, result));
       return;
     }
 

@@ -11,7 +11,7 @@ interface RecordedCall {
 }
 let recorded: RecordedCall[];
 let isAdmin: boolean;
-let cmsEvents: Array<{ id: string; title: string; startsAt: string }>;
+let cmsEvents: Array<Record<string, unknown>>;
 
 beforeEach(() => {
   recorded = [];
@@ -32,8 +32,13 @@ beforeEach(() => {
     if (url.includes("/api/users.info")) {
       return Response.json({ ok: true, user: { is_admin: isAdmin, is_owner: false } });
     }
-    if (url.includes("virtualcoffee.io/graphql")) {
-      return Response.json({ data: { events: cmsEvents } });
+    if (url === env.CMS_GRAPHQL_URL) {
+      if (body.includes("getCalendars")) {
+        return Response.json({
+          data: { solspace_calendar: { calendars: [{ handle: "vcEvents" }] } },
+        });
+      }
+      return Response.json({ data: { solspace_calendar: { events: cmsEvents } } });
     }
     return Response.json({ ok: true, ts: "1700000000.000100", channel: "C" });
   });
@@ -85,13 +90,24 @@ describe("handleAdminCommand — authorization", () => {
 });
 
 describe("handleAdminCommand — reminders", () => {
-  it("posts the daily reminder to the channel and confirms the count", async () => {
-    cmsEvents = [
-      { id: "1", title: "Soon", startsAt: new Date(Date.now() + 3_600_000).toISOString() },
-    ];
-    await handleAdminCommand(cmd("daily"), env);
+  function cmsEvt(startMs: number): Record<string, unknown> {
+    const iso = new Date(startMs).toISOString();
+    return { id: "1", title: "Soon", startDateLocalized: iso, endDateLocalized: iso };
+  }
+
+  it("posts the weekly reminder to the channel and confirms the count", async () => {
+    cmsEvents = [cmsEvt(Date.now() + 3_600_000)];
+    await handleAdminCommand(cmd("weekly"), env);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
-    expect(replyText()).toContain("Posted the *daily* reminder (1 event)");
+    expect(replyText()).toContain("Posted the *weekly* reminder (1 event)");
+  });
+
+  it("daily schedules a starting-soon pair and reports it", async () => {
+    cmsEvents = [cmsEvt(Date.now() + 6 * 3_600_000)];
+    await handleAdminCommand(cmd("daily"), env);
+    expect(callsTo("/api/chat.scheduleMessage")).toHaveLength(2); // public + admin mirror
+    // The summary itself is day-dependent (Mondays skip it), so assert the stable part.
+    expect(replyText()).toContain("Scheduled 1 starting-soon message");
   });
 
   it("reports when there are no upcoming events", async () => {

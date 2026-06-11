@@ -12,15 +12,14 @@
   // SQLite-backed DO storage (GA, included on the Workers free plan).
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] }],
 
-  // Event reminders. Cron triggers fire in UTC — translate intended local send-times.
-  // DISABLED until the reminders feature is fleshed out (real CMS query/endpoint, real
-  // channel, real send-times). Re-enable by restoring the entries below AND keeping them
-  // byte-identical to CRON_TO_KIND in src/bots/reminders/index.ts. The empty array is
-  // deliberate — deploying with it removes any crons already registered on Cloudflare,
-  // whereas dropping the key entirely would leave them running.
-  // "0 * * * *"    — hourly  (placeholder)
-  // "0 13 * * *"   — daily   (placeholder UTC time)
-  // "0 13 * * MON" — weekly  (placeholder UTC time)
+  // Event announcements. Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST
+  // (accepted DST drift). DISABLED until the feature is verified via /vc-bot-admin.
+  // Re-enable by restoring the entries below AND keeping them byte-identical to
+  // CRON_TO_KIND in src/bots/reminders/index.ts. The empty array is deliberate —
+  // deploying with it removes any crons already registered on Cloudflare, whereas
+  // dropping the key entirely would leave them running.
+  // "0 12 * * *" — daily (summary + schedules the starting-soon messages)
+  // "0 12 * * 1" — weekly (Monday summary; the daily run skips its summary that day)
   "triggers": { "crons": [] },
 
   "observability": { "enabled": true },
@@ -36,12 +35,16 @@
     "ROOM_TITLE": "Co-Working Room",
     // Community maintainers @-mentioned at the end of the welcome message / App Home.
     "WELCOME_MAINTAINER_IDS": "U014HT3RNCU,U0157K5MUPJ,U01577R42TS,U01B9NQF2PR",
-    // Event reminders (Phase 3). Hourly → events; daily/weekly → announcements (later);
-    // event-admin mirrors the hourly with extra info like the Zoom host key (later).
-    "SLACK_EVENTS_CHANNEL_ID": "C017WAKN883",
-    "SLACK_ANNOUNCEMENTS_CHANNEL_ID": "C014AAPC09K",
-    "SLACK_EVENTADMIN_CHANNEL_ID": "C0360K84NEQ",
-    "CMS_GRAPHQL_URL": "https://virtualcoffee.io/graphql", // TODO: confirm CMS GraphQL endpoint
+    // Event announcements. Starting-soon messages → events; daily/weekly summaries →
+    // announcements; event-admin gets a mirror of each starting-soon message with extra
+    // info like the Zoom host code.
+    // "SLACK_EVENTS_CHANNEL_ID": "C017WAKN883",
+    // "SLACK_ANNOUNCEMENTS_CHANNEL_ID": "C014AAPC09K",
+    // "SLACK_EVENTADMIN_CHANNEL_ID": "C0360K84NEQ",
+    "SLACK_EVENTS_CHANNEL_ID": "C0B4LSMQK19", // temp for testing
+    "SLACK_ANNOUNCEMENTS_CHANNEL_ID": "C0B4LSMQK19", // temp for testing
+    "SLACK_EVENTADMIN_CHANNEL_ID": "C0B4LSMQK19", // temp for testing
+    "CMS_GRAPHQL_URL": "https://members.virtualcoffee.io/api",
     "LOG_LEVEL": "info" // debug | info | warn | error (set LOG_LEVEL=debug in .dev.vars locally)
     // TODO(config): port remaining message/notice strings from the old rooms config.
   }
