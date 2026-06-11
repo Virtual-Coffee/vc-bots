@@ -18,8 +18,7 @@ import { buildZoomUrlValidationResponse, verifyZoomRequest } from "./zoom/verify
  * HTTP front door. A plain method+path switch — no router dependency for ~4 routes.
  *
  * Every bot route verifies its provider signature as the FIRST step (against the raw body,
- * before parsing), then handles the provider handshake, then dispatches. Dispatch is stubbed
- * for the bots that land in later phases (events → Phase 3, Zoom/DO → Phase 4–5).
+ * before parsing), then handles the provider handshake, then dispatches.
  */
 export async function route(
   req: Request,
@@ -129,7 +128,7 @@ async function handleZoomWebhook(
   return new Response(null, { status: 200 });
 }
 
-// --- Slack events → welcome + App Home (Phase 3) ---
+// --- Slack events → welcome + App Home ---
 
 async function handleSlackEvents(
   req: Request,
@@ -159,7 +158,7 @@ async function handleSlackEvents(
   return new Response(null, { status: 200 });
 }
 
-// --- Slack interactivity → co-working join (Phase 5) ---
+// --- Slack interactivity → co-working join ---
 
 async function handleSlackInteractivity(
   req: Request,
@@ -214,10 +213,9 @@ async function handleSlackCommand(
     user: cmd.user_id,
   });
 
-  // ACK immediately (Slack's 3s limit) with an ephemeral note; do the work + final reply async.
+  // ACK immediately (Slack's 3s limit); do the work + final reply async via response_url.
   ctx.waitUntil(handleAdminCommand(cmd, env));
-  // return Response.json( { response_type: "ephemeral", text: ":hourglass_flowing_sand: Working on it…" } );
-  return new Response(null,{status: 200})
+  return new Response(null, { status: 200 });
 }
 
 function safeJson<T>(raw: string): T | null {

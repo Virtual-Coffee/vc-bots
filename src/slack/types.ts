@@ -1,6 +1,6 @@
 /**
  * Narrow types for the inbound Slack payloads we handle. Kept intentionally small —
- * extended as bots are added (welcome / App Home in Phase 3, interactivity in Phase 5).
+ * extended as bots are added.
  */
 
 /** Events API URL handshake (sent once when configuring the request URL). */
