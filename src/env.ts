@@ -36,6 +36,12 @@ export interface Env {
   SLACK_ANNOUNCEMENTS_CHANNEL_ID: string;
   /** #vc-events-admin — gets a mirror of each starting-soon message with extra info (e.g. the Zoom host code). */
   SLACK_EVENTADMIN_CHANNEL_ID: string;
+  /**
+   * Private #bot-log channel for important error alerts (cron + co-working DO/Zoom failures).
+   * Empty/unset disables alerting (the bot must be invited to the channel to post). See
+   * `src/slack/notify.ts`.
+   */
+  SLACK_BOTLOG_CHANNEL_ID: string;
   /** CMS GraphQL endpoint for event announcements (Craft + Solspace Calendar). */
   CMS_GRAPHQL_URL: string;
   /** Comma-separated Slack user IDs mentioned as community maintainers in the welcome message. */

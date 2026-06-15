@@ -3,6 +3,7 @@ import type { ChatScheduledMessagesListRequest, SlackAPIClient } from "slack-clo
 import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
+import { notifyBotLog } from "../../slack/notify";
 import {
   buildDailyMessage,
   buildStartingSoonAdminMessage,
@@ -78,7 +79,14 @@ export async function runReminders(
 ): Promise<void> {
   const name = CRON_TO_KIND[controller.cron];
   if (!name) return; // unrecognized cron — nothing to do
-  await sendReminder(name, env, controller.scheduledTime);
+  try {
+    await sendReminder(name, env, controller.scheduledTime);
+  } catch (error) {
+    // No user surface on the cron path — log, alert #bot-log, and swallow so a CMS/Slack
+    // hiccup doesn't surface as an unhandled rejection in `scheduled()`.
+    log.error("reminder.run_failed", { cron: controller.cron, error: String(error) });
+    await notifyBotLog(env, "reminder.run_failed", { cron: controller.cron, error: String(error) });
+  }
 }
 
 async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<SendResult> {

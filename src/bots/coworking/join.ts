@@ -1,6 +1,7 @@
 import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
+import { notifyBotLog } from "../../slack/notify";
 import { deleteOriginal, respondEphemeral } from "../../slack/response";
 import {
   buildJoinEphemeralAttachments,
@@ -87,5 +88,7 @@ export async function handleJoinClick(
   } catch (err) {
     log.error("join.failed", { user: slackUserId, err: String(err) });
     await respondEphemeral(responseUrl, joinErrorText(env));
+    // Tell maintainers the room join is broken (Zoom invite-link mint / DO call failed).
+    await notifyBotLog(env, "join.failed", { user: slackUserId, err: String(err) });
   }
 }

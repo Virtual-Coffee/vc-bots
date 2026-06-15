@@ -1,6 +1,7 @@
 import type { Env } from "./env";
 import { log } from "./log";
 import { createSlackApp } from "./slack/app";
+import { notifyBotLog } from "./slack/notify";
 import type { ZoomInboundEvent } from "./zoom/types";
 import { isZoomMeetingEvent } from "./zoom/types";
 import { buildZoomUrlValidationResponse, verifyZoomRequest } from "./zoom/verify";
@@ -119,7 +120,19 @@ async function handleZoomWebhook(
     }
     log.info("zoom.webhook", { event: body.event, meeting });
     const stub = env.COWORKING_ROOM.getByName(meeting);
-    await stub.handleZoomEvent(body);
+    try {
+      await stub.handleZoomEvent(body);
+    } catch (error) {
+      // Alert #bot-log, then still 200: a persistent DO/Slack failure shouldn't trigger a Zoom
+      // retry-storm or risk the account-wide endpoint being deactivated. Room presence
+      // self-corrects on the next participant event.
+      log.error("zoom.webhook.failed", { event: body.event, meeting, error: String(error) });
+      await notifyBotLog(env, "zoom.webhook.failed", {
+        event: body.event,
+        meeting,
+        error: String(error),
+      });
+    }
   }
   return new Response(null, { status: 200 });
 }

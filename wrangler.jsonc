@@ -13,39 +13,38 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] }],
 
   // Event announcements. Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST
-  // (accepted DST drift). DISABLED until the feature is verified via /vc-bot-admin.
-  // Re-enable by restoring the entries below AND keeping them byte-identical to
-  // CRON_TO_KIND in src/bots/reminders/index.ts. The empty array is deliberate —
-  // deploying with it removes any crons already registered on Cloudflare, whereas
-  // dropping the key entirely would leave them running.
+  // (accepted DST drift). These MUST stay byte-identical to CRON_TO_KIND in
+  // src/bots/reminders/index.ts — that string is the lookup key mapping a fired cron to a
+  // reminder kind. To disable, set this to an empty array (NOT by dropping the key —
+  // deploying [] removes any crons registered on Cloudflare, whereas dropping the key
+  // entirely would leave them running).
   // "0 12 * * *" — daily (summary + schedules the starting-soon messages)
   // "0 12 * * 1" — weekly (Monday summary; the daily run skips its summary that day)
-  "triggers": { "crons": [] },
+  "triggers": { "crons": ["0 12 * * *", "0 12 * * 1"] },
 
   "observability": { "enabled": true },
 
   // Non-secret config (single room). Secrets go via `wrangler secret put` / `.dev.vars`.
   "vars": {
 
-    "ZOOM_MEETING_ID": "82832550878",
+    "ZOOM_MEETING_ID": "81323022832",
     // Netlify rewrites virtualcoffee.io/bots/* to this Worker (stripping the /bots prefix);
     // used only for the user-facing join link. Empty/unset falls back to the request origin.
     "PUBLIC_BASE_URL": "https://virtualcoffee.io/bots",
-    "SLACK_COWORKING_CHANNEL_ID": "C0B6C3BFEDD",
+    "SLACK_COWORKING_CHANNEL_ID": "C01SAU1B7B9",
     "ROOM_TITLE": "Co-Working Room",
     // Community maintainers @-mentioned at the end of the welcome message / App Home.
     "WELCOME_MAINTAINER_IDS": "U014HT3RNCU,U0157K5MUPJ,U01577R42TS,U01B9NQF2PR",
     // Event announcements. Starting-soon messages → events; daily/weekly summaries →
     // announcements; event-admin gets a mirror of each starting-soon message with extra
     // info like the Zoom host code.
-    // "SLACK_EVENTS_CHANNEL_ID": "C017WAKN883",
-    // "SLACK_ANNOUNCEMENTS_CHANNEL_ID": "C014AAPC09K",
-    // "SLACK_EVENTADMIN_CHANNEL_ID": "C0360K84NEQ",
-    "SLACK_EVENTS_CHANNEL_ID": "C0B4LSMQK19", // temp for testing
-    "SLACK_ANNOUNCEMENTS_CHANNEL_ID": "C0B4LSMQK19", // temp for testing
-    "SLACK_EVENTADMIN_CHANNEL_ID": "C0B4LSMQK19", // temp for testing
+    "SLACK_EVENTS_CHANNEL_ID": "C017WAKN883",
+    "SLACK_ANNOUNCEMENTS_CHANNEL_ID": "C014AAPC09K",
+    "SLACK_EVENTADMIN_CHANNEL_ID": "C0360K84NEQ",
+    // Private bot-log channel for error alerts (cron + co-working DO/Zoom failures). Empty
+    // disables alerting; the bot must be invited to the channel before it can post there.
+    "SLACK_BOTLOG_CHANNEL_ID": "C0BATRPD3QC",
     "CMS_GRAPHQL_URL": "https://members.virtualcoffee.io/api",
     "LOG_LEVEL": "info" // debug | info | warn | error (set LOG_LEVEL=debug in .dev.vars locally)
-    // TODO(config): port remaining message/notice strings from the old rooms config.
   }
 }
