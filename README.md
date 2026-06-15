@@ -10,7 +10,7 @@ co-working room, the new-member welcome, the App Home tab, and event announcemen
 | **Co-working room** | Zoom webhooks + a Slack Join button | Keeps a live "open room" message in the co-working channel: who's in the room, a ☕ Join button that hands each member a personal Zoom invite link, and a stats summary when the meeting ends. |
 | **Welcome** | Slack `team_join` event | DMs new members a welcome message. |
 | **App Home** | Slack `app_home_opened` event | Publishes the bot's App Home tab. |
-| **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee CMS (GraphQL), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel. Crons are currently disabled while the feature is verified via `/vc-bot-admin`. |
+| **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee CMS (GraphQL), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel. Crons are live (daily + weekly); `/vc-bot-admin` can also fire a run manually. |
 
 There's also a `/vc-bot-admin` slash command for manual previews and admin actions
 (e.g. `daily` / `weekly` to fire an announcement run now, or `coworking invite`).
@@ -64,11 +64,15 @@ src/
   bots/
     coworking/        the room: Durable Object, Zoom event handlers, join flow, message blocks
     reminders/        cron dispatch, event model + CMS source, Block Kit builders, html-to-mrkdwn
-    slack-events.ts   routes Slack events to the welcome / App Home handlers
     welcome.ts        new-member welcome DM
     app-home.ts       App Home tab
     admin.ts          /vc-bot-admin slash command
-  slack/              Slack client factory, signature verification, payload types
+    admin-panel.ts    the interactive /vc-bot-admin button panel + its modals
+  slack/
+    app.ts            the per-request SlackApp: event/action/command/viewSubmission handlers
+    client.ts         Slack client factory (createSlackClient / createSlackApp)
+    notify.ts         #bot-log error alerts (notifyBotLog)
+    response.ts       ephemeral reply helpers over response_url
   zoom/               Zoom S2S OAuth, webhook verification, invite links, payload types
 test/                 vitest suites that run inside real workerd (Miniflare)
 ```
@@ -94,8 +98,10 @@ Config and secrets are split deliberately:
   (maintainers @-mentioned in the welcome message and App Home), the three announcement
   channels — `SLACK_EVENTS_CHANNEL_ID` (starting-soon messages),
   `SLACK_ANNOUNCEMENTS_CHANNEL_ID` (daily/weekly summaries), `SLACK_EVENTADMIN_CHANNEL_ID`
-  (admin mirror with e.g. the Zoom host code) — `CMS_GRAPHQL_URL`, and `LOG_LEVEL`. After
-  changing bindings or vars, rerun `pnpm cf-types` and keep `src/env.ts` in sync by hand.
+  (admin mirror with e.g. the Zoom host code) — `SLACK_BOTLOG_CHANNEL_ID` (private `#bot-log`
+  channel for error alerts; empty disables alerting and the bot must be invited before it can
+  post), `CMS_GRAPHQL_URL`, and `LOG_LEVEL`. After changing bindings or vars, rerun
+  `pnpm cf-types` and keep `src/env.ts` in sync by hand.
 - **Secrets** go via `wrangler secret put <NAME>` in production and `.dev.vars` locally (see
   `.dev.vars.example`): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`,
   `ZOOM_WEBHOOK_SECRET_TOKEN`, `ZOOM_S2S_CLIENT_ID`, `ZOOM_S2S_CLIENT_SECRET`,
@@ -114,11 +120,12 @@ Config and secrets are split deliberately:
   registration — invite links depend on it.
 - **Cron triggers** fire in **UTC**. The cron strings in `wrangler.jsonc` `triggers.crons`
   must stay byte-identical to `CRON_TO_KIND` in `src/bots/reminders/index.ts` — the fired
-  cron string is the lookup key for the reminder kind. Two crons drive everything (the daily
-  and weekly runs); the per-event starting-soon messages need no extra cron granularity
-  because the daily run schedules them via Slack's `chat.scheduleMessage`. Currently
-  **disabled**: `triggers.crons` is an empty array on purpose — deploying `[]` deregisters
-  any crons already on Cloudflare, whereas deleting the key would leave them running.
+  cron string is the lookup key for the reminder kind. Two crons drive everything: `0 12 * * *`
+  (daily) and `0 12 * * 1` (weekly), both at 12:00 UTC (8am EDT / 7am EST). The per-event
+  starting-soon messages need no extra cron granularity because the daily run schedules them
+  via Slack's `chat.scheduleMessage`. The crons are **live**. To disable, set `triggers.crons`
+  to an empty array `[]` — deploying `[]` deregisters any crons already on Cloudflare, whereas
+  deleting the key would leave them running.
 
 ## Development
 

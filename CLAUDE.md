@@ -30,8 +30,9 @@ Object, and bindings behave exactly as in production. Bindings/migrations come f
 ## Architecture
 
 **Request flow.** `src/index.ts` is the Worker entrypoint (`fetch` + `scheduled` cron). `fetch`
-delegates to `src/router.ts`, a plain `method + path` switch (no router lib) over ~4 routes:
-`/zoom/webhook`, `/slack/events`, `/slack/interactivity`, `/slack/commands` (plus `/health`).
+delegates to `src/router.ts`, a plain `method + path` switch (no router lib) over the provider
+routes `/zoom/webhook`, `/slack/events`, `/slack/interactivity`, `/slack/commands`, plus
+`GET /join/<token>` (the co-working join redirect) and `/health`.
 All three `POST /slack/*` routes delegate to one path-agnostic `SlackApp`
 (`slack-cloudflare-workers`), built per request by `createSlackApp(env, publicBaseUrl)` in
 `src/slack/app.ts` — handler registrations (`.event()` / `.action()` / `.command()`) live there.
@@ -107,9 +108,13 @@ come through the `EventSource` abstraction (`source.ts`); the CMS GraphQL adapte
 (`sources/cms.ts`) is the only source today — a Google Calendar source is planned. ⚠️ The cron
 strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
 wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons
-fire in **UTC** and are **currently disabled**: `triggers.crons: []` is deliberate (deploying an
-empty array deregisters crons already on Cloudflare; deleting the key would leave them running).
-The same `sendReminder` is reused by the `/vc-bot-admin` slash command for manual runs/previews.
+fire in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * 1` weekly). To disable, set
+`triggers.crons: []` — deploying an empty array deregisters crons already on Cloudflare, whereas
+deleting the key would leave them running. The same `sendReminder` is reused by the
+`/vc-bot-admin` slash command for manual runs/previews. Failure paths that have no other surface
+(the cron run, the co-working DO/Zoom handlers, the join flow) alert the private `#bot-log`
+channel via `notifyBotLog` (`src/slack/notify.ts`, `SLACK_BOTLOG_CHANNEL_ID`) — a no-op when the
+channel id is empty, and self-swallowing so a failed alert never loops.
 
 **Slack client.** Always `createSlackClient(env)` for outbound calls with no inbound Slack
 request (the CoworkingRoom DO, the cron reminders); inside `SlackApp` handlers it's the same
