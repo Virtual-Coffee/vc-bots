@@ -50,10 +50,23 @@ Hand the request to `app.run(req, ctx)` **unread** (it reads the body itself).
 immediately and run the actual bot work afterwards via `ctx.waitUntil(...)` — for Slack that
 is the `SlackApp` ack/lazy-handler split (every registration in `src/slack/app.ts` ACKs with a
 no-op and does the work in the lazy handler). Final user-facing replies go back through
-Slack's `response_url` via `src/slack/response.ts` (`respondEphemeral` / `deleteOriginal`)
-rather than the HTTP response. ⚠️ Keep using those helpers — they hard-code
-`response_type: "ephemeral", replace_original: false`; the framework's `context.respond`
-posts params verbatim with no such guardrail, so **don't adopt it**.
+Slack's `response_url` via `src/slack/response.ts` (`respondEphemeral` / `deleteOriginal` /
+`replaceEphemeral`) rather than the HTTP response. ⚠️ Keep using those helpers — they hard-code
+`response_type: "ephemeral"`; the framework's `context.respond` posts params verbatim with no
+such guardrail, so **don't adopt it**. `respondEphemeral` pins `replace_original: false`;
+`replaceEphemeral` (`true`) and `deleteOriginal` are safe **only against per-user ephemerals**
+(the admin panel, the join ephemeral) — never the shared room message's `response_url`.
+
+**Modals (`.viewSubmission`).** `/vc-bot-admin` with no args posts an ephemeral admin panel
+(`src/bots/admin-panel.ts`): buttons open modals via `client.views.open({ trigger_id, view })`,
+and submits run through `.viewSubmission(callbackId, ack, lazy)` registrations in
+`src/slack/app.ts`. The view ack is an **empty `async () => {}`** — returning void closes the
+modal (the shared `ack` const's `AckResponse` type doesn't satisfy the view ack). A
+`view_submission` payload carries **no `response_url`**, so the panel's travels into the modal
+as `private_metadata` (`JSON.stringify({ response_url })`) and back out on submit; the handler
+then `replaceEphemeral`s the panel with output (reminder counts) or `deleteOriginal`s it when
+the result is self-verifiable in a channel/Home/DM. Re-check `isWorkspaceAdmin` in every panel
+action + view handler.
 
 **Co-working room = the one stateful piece.** `CoworkingRoom` (`src/bots/coworking/durable-object.ts`)
 is a SQLite-backed Durable Object, **one instance per Zoom meeting ID**, addressed with

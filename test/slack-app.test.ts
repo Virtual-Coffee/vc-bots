@@ -190,6 +190,48 @@ describe("interactivity", () => {
   });
 });
 
+function viewSubmissionBody(callbackId: string, values: unknown): string {
+  const payload = {
+    type: "view_submission",
+    user: { id: "U777", username: "ada", name: "ada" },
+    api_app_id: "A1",
+    token: "t",
+    team: { id: "T1", domain: "vc" },
+    view: {
+      id: "V1",
+      type: "modal",
+      callback_id: callbackId,
+      private_metadata: JSON.stringify({ response_url: RESPONSE_URL }),
+      state: { values },
+      hash: "h",
+    },
+  };
+  return new URLSearchParams({ payload: JSON.stringify(payload) }).toString();
+}
+
+describe("interactivity — view submission", () => {
+  it("admin welcome modal submit closes the modal and DMs the target", async () => {
+    const res = await post(
+      "/slack/interactivity",
+      viewSubmissionBody("admin_welcome_modal", {
+        target: { target: { selected_user: "U999" } },
+      }),
+      "application/x-www-form-urlencoded",
+    );
+    // Empty 200 body tells Slack to close the modal.
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("");
+
+    const posts = callsTo("/api/chat.postMessage");
+    expect(posts).toHaveLength(1);
+    expect(new URLSearchParams(posts[0]!.body).get("channel")).toBe("U999");
+    // Panel replaced with the confirmation (target ≠ submitter).
+    const reply = JSON.parse(callsTo(RESPONSE_URL)[0]!.body);
+    expect(reply.replace_original).toBe(true);
+    expect(reply.text).toContain("Sent the welcome message to <@U999>");
+  });
+});
+
 describe("slash command", () => {
   it("/vc-bot-admin checks the invoker is an admin and replies via response_url", async () => {
     const body = new URLSearchParams({

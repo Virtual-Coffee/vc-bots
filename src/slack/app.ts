@@ -1,5 +1,21 @@
 import { SlackApp, type AckResponse } from "slack-cloudflare-workers";
 import { ADMIN_COMMAND, handleAdminCommand } from "../bots/admin";
+import {
+  COWORKING_MODAL_CALLBACK_ID,
+  handleCoworkingSubmit,
+  handlePanelCoworkingClick,
+  handlePanelHomeClick,
+  handlePanelReminderClick,
+  handlePanelWelcomeClick,
+  handleReminderSubmit,
+  handleWelcomeSubmit,
+  PANEL_COWORKING_ACTION_ID,
+  PANEL_HOME_ACTION_ID,
+  PANEL_REMINDER_ACTION_ID,
+  PANEL_WELCOME_ACTION_ID,
+  REMINDER_MODAL_CALLBACK_ID,
+  WELCOME_MODAL_CALLBACK_ID,
+} from "../bots/admin-panel";
 import { handleAppHomeOpened } from "../bots/app-home";
 import { handleJoinClick, handleJoinDismiss } from "../bots/coworking/join";
 import {
@@ -58,5 +74,29 @@ export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
     .action(CANCEL_ACTION_ID, ack, async ({ payload }) => handleJoinDismiss(payload, env))
     .command(ADMIN_COMMAND, ack, async ({ payload }) =>
       handleAdminCommand(payload, env),
+    )
+    // `/vc-bot-admin` (no args) panel buttons. Each is a per-user ephemeral, so the handlers
+    // may safely replace/delete via the click's response_url. Modal buttons open a modal,
+    // threading that response_url through `private_metadata` (a view_submission has none).
+    .action(PANEL_REMINDER_ACTION_ID, ack, async ({ payload }) =>
+      handlePanelReminderClick(payload, env),
+    )
+    .action(PANEL_WELCOME_ACTION_ID, ack, async ({ payload }) =>
+      handlePanelWelcomeClick(payload, env),
+    )
+    .action(PANEL_COWORKING_ACTION_ID, ack, async ({ payload }) =>
+      handlePanelCoworkingClick(payload, env),
+    )
+    .action(PANEL_HOME_ACTION_ID, ack, async ({ payload }) => handlePanelHomeClick(payload, env))
+    // Modal submits. The empty ack closes the modal; the real work runs in the lazy handler,
+    // which reaches the panel ephemeral via the response_url carried in private_metadata.
+    .viewSubmission(REMINDER_MODAL_CALLBACK_ID, async () => {}, async ({ payload }) =>
+      handleReminderSubmit(payload, env),
+    )
+    .viewSubmission(WELCOME_MODAL_CALLBACK_ID, async () => {}, async ({ payload }) =>
+      handleWelcomeSubmit(payload, env),
+    )
+    .viewSubmission(COWORKING_MODAL_CALLBACK_ID, async () => {}, async ({ payload }) =>
+      handleCoworkingSubmit(payload, env),
     );
 }

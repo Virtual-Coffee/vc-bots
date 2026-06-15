@@ -28,6 +28,28 @@ export async function respondEphemeral(
 }
 
 /**
+ * Replace the message an interaction came from with new content (`replace_original: true`).
+ * Only safe for per-user surfaces (the admin panel ephemeral) — on a shared channel message
+ * (e.g. the room's Join button) this would rewrite that message for everyone.
+ */
+export async function replaceEphemeral(
+  responseUrl: string,
+  text: string,
+  blocks?: AnyMessageBlock[],
+): Promise<void> {
+  await fetch(responseUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      response_type: "ephemeral",
+      replace_original: true,
+      text,
+      ...(blocks ? { blocks } : {}),
+    }),
+  });
+}
+
+/**
  * Delete the message an interaction came from. Only safe for per-user surfaces (the join
  * ephemeral) — on a shared channel message this would delete it for everyone.
  */

@@ -3,6 +3,7 @@ import type { Env } from "../env";
 import { log } from "../log";
 import { createSlackClient } from "../slack/client";
 import { respondEphemeral } from "../slack/response";
+import { adminPanelBlocks, PANEL_TEXT } from "./admin-panel";
 import { homeView } from "./app-home";
 import { type ReminderName, type SendResult, sendReminder } from "./reminders";
 import { welcomeBlocks } from "./welcome";
@@ -36,7 +37,7 @@ export interface AdminCommandPayload {
   response_url: string;
 }
 
-async function isWorkspaceAdmin(client: SlackAPIClient, userId: string): Promise<boolean> {
+export async function isWorkspaceAdmin(client: SlackAPIClient, userId: string): Promise<boolean> {
   try {
     const res = await client.users.info({ user: userId });
     return Boolean(res.user?.is_admin || res.user?.is_owner);
@@ -69,7 +70,7 @@ export async function handleAdminCommand(cmd: AdminCommandPayload, env: Env): Pr
   }
 }
 
-function reminderReply(sub: string, result: SendResult): string {
+export function reminderReply(sub: string, result: SendResult): string {
   const events = `${result.count} event${result.count === 1 ? "" : "s"}`;
   const scheduled =
     result.scheduled === undefined
@@ -91,6 +92,13 @@ async function runAdminCommand(
   sub: string | undefined,
   arg: string | undefined,
 ): Promise<void> {
+  // No subcommand → show the interactive admin panel (buttons + modals). `cmd.text` of ""
+  // splits to [""], so `sub` is the empty string here, not undefined.
+  if (!sub) {
+    await respondEphemeral(cmd.response_url, PANEL_TEXT, adminPanelBlocks());
+    return;
+  }
+
   switch (sub) {
     case "daily":
     case "weekly": {

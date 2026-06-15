@@ -127,6 +127,27 @@ describe("handleAdminCommand — coworking announce", () => {
   });
 });
 
+describe("handleAdminCommand — panel", () => {
+  it("no args replies with the interactive panel (buttons, never replacing)", async () => {
+    await handleAdminCommand(cmd(""), env);
+    const reply = recorded.find((c) => c.url === RESPONSE_URL);
+    expect(reply).toBeDefined();
+    const body = JSON.parse(reply!.body);
+    expect(body.replace_original).toBe(false);
+    const actionIds = JSON.stringify(body.blocks);
+    for (const id of [
+      "admin_panel_reminder",
+      "admin_panel_welcome",
+      "admin_panel_coworking",
+      "admin_panel_home",
+    ]) {
+      expect(actionIds).toContain(id);
+    }
+    // No work fired — the panel is just buttons.
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
+  });
+});
+
 describe("handleAdminCommand — failures", () => {
   it("reports an error back instead of leaving the waitUntil rejection uncaught", async () => {
     // The route has already ACKed by the time this runs (ctx.waitUntil), so a throw here would
