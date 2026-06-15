@@ -3,10 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   handleJoinClick,
   handleJoinDismiss,
-  isJoinClick,
-  isJoinDismissClick,
+  type JoinActionPayload,
 } from "../src/bots/coworking/join";
-import type { SlackBlockActionsPayload } from "../src/slack/types";
 
 interface RecordedCall {
   url: string;
@@ -46,32 +44,17 @@ afterEach(() => vi.unstubAllGlobals());
 const RESPONSE_URL = "https://hooks.slack.com/actions/resp-123";
 const ORIGIN = "https://bots.example";
 
-function payload(actionId = "coworking_join"): SlackBlockActionsPayload {
+function payload(actionId = "coworking_join"): JoinActionPayload {
   return {
-    type: "block_actions",
     user: { id: "U777" },
-    trigger_id: "T1",
     response_url: RESPONSE_URL,
-    actions: [{ action_id: actionId, type: "button" }],
+    actions: [{ action_id: actionId }],
   };
 }
 
 function responseUrlCalls(): RecordedCall[] {
   return recorded.filter((r) => r.url === RESPONSE_URL);
 }
-
-describe("isJoinClick / isJoinDismissClick", () => {
-  it("recognizes the room Join button action", () => {
-    expect(isJoinClick(payload())).toBe(true);
-    expect(isJoinClick(payload("something_else"))).toBe(false);
-  });
-
-  it("recognizes both ephemeral buttons (☕ Join url button and Cancel) as dismissals", () => {
-    expect(isJoinDismissClick(payload("coworking_open_zoom"))).toBe(true);
-    expect(isJoinDismissClick(payload("coworking_cancel"))).toBe(true);
-    expect(isJoinDismissClick(payload())).toBe(false);
-  });
-});
 
 describe("handleJoinClick", () => {
   it("registers via the DO and answers with a two-button ephemeral linking the /join redirect", async () => {

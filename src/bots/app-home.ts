@@ -1,19 +1,14 @@
-import type { AnyHomeTabBlock, HomeTabView } from "slack-web-api-client";
+import type { AnyHomeTabBlock, AppHomeOpenedEvent, HomeTabView } from "slack-cloudflare-workers";
 import type { Env } from "../env";
 import { createSlackClient } from "../slack/client";
-import type { SlackEvent } from "../slack/types";
-import { slackUserId } from "../slack/types";
 import { welcomeBlocks } from "./welcome";
 
 /**
  * App Home bot — responds to `app_home_opened` by publishing the Home tab view.
  */
-export async function handleAppHomeOpened(event: SlackEvent, env: Env): Promise<void> {
-  const userId = slackUserId(event.user);
-  if (!userId) return;
-
+export async function handleAppHomeOpened(event: AppHomeOpenedEvent, env: Env): Promise<void> {
   const client = createSlackClient(env);
-  await client.views.publish({ user_id: userId, view: homeView(env) });
+  await client.views.publish({ user_id: event.user, view: homeView(env) });
 }
 
 /**

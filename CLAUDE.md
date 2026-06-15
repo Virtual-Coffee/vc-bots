@@ -30,20 +30,44 @@ Object, and bindings behave exactly as in production. Bindings/migrations come f
 ## Architecture
 
 **Request flow.** `src/index.ts` is the Worker entrypoint (`fetch` + `scheduled` cron). `fetch`
-delegates to `src/router.ts`, a plain `method + path` switch (no router lib) over ~4 routes:
-`/zoom/webhook`, `/slack/events`, `/slack/interactivity`, `/slack/commands` (plus `/health`).
+delegates to `src/router.ts`, a plain `method + path` switch (no router lib) over the provider
+routes `/zoom/webhook`, `/slack/events`, `/slack/interactivity`, `/slack/commands`, plus
+`GET /join/<token>` (the co-working join redirect) and `/health`.
+All three `POST /slack/*` routes delegate to one path-agnostic `SlackApp`
+(`slack-cloudflare-workers`), built per request by `createSlackApp(env, publicBaseUrl)` in
+`src/slack/app.ts` — handler registrations (`.event()` / `.action()` / `.command()`) live there.
+Hand the request to `app.run(req, ctx)` **unread** (it reads the body itself).
 
 **Two invariants every route follows, in order:**
 
-1. **Verify the provider signature against the *raw* body first**, before parsing JSON
-   (`verifySlackRequest` / `verifyZoomRequest`). All HMAC goes through `src/crypto.ts` using
-   `crypto.subtle` — never hand-roll a timing-safe compare.
-2. **Handle the provider URL-verification handshake**, then dispatch.
+1. **Verify the provider signature against the *raw* body first**, before parsing JSON. The
+   Zoom route does this inline (`verifyZoomRequest`, HMAC via `src/crypto.ts` /
+   `crypto.subtle` — never hand-roll a timing-safe compare); the Slack routes get it from
+   `SlackApp`, which verifies before dispatching listeners.
+2. **Handle the provider URL-verification handshake**, then dispatch (`SlackApp` answers
+   Slack's `url_verification` itself).
 
 **ACK fast, work later.** Slack/Zoom impose a ~3s response window. Routes return `200`
-immediately and run the actual bot work via `ctx.waitUntil(...)` (Slack events, interactivity,
-slash commands). Final user-facing replies go back through Slack's `response_url`
-(`respondEphemeral`) rather than the HTTP response.
+immediately and run the actual bot work afterwards via `ctx.waitUntil(...)` — for Slack that
+is the `SlackApp` ack/lazy-handler split (every registration in `src/slack/app.ts` ACKs with a
+no-op and does the work in the lazy handler). Final user-facing replies go back through
+Slack's `response_url` via `src/slack/response.ts` (`respondEphemeral` / `deleteOriginal` /
+`replaceEphemeral`) rather than the HTTP response. ⚠️ Keep using those helpers — they hard-code
+`response_type: "ephemeral"`; the framework's `context.respond` posts params verbatim with no
+such guardrail, so **don't adopt it**. `respondEphemeral` pins `replace_original: false`;
+`replaceEphemeral` (`true`) and `deleteOriginal` are safe **only against per-user ephemerals**
+(the admin panel, the join ephemeral) — never the shared room message's `response_url`.
+
+**Modals (`.viewSubmission`).** `/vc-bot-admin` with no args posts an ephemeral admin panel
+(`src/bots/admin-panel.ts`): buttons open modals via `client.views.open({ trigger_id, view })`,
+and submits run through `.viewSubmission(callbackId, ack, lazy)` registrations in
+`src/slack/app.ts`. The view ack is an **empty `async () => {}`** — returning void closes the
+modal (the shared `ack` const's `AckResponse` type doesn't satisfy the view ack). A
+`view_submission` payload carries **no `response_url`**, so the panel's travels into the modal
+as `private_metadata` (`JSON.stringify({ response_url })`) and back out on submit; the handler
+then `replaceEphemeral`s the panel with output (reminder counts) or `deleteOriginal`s it when
+the result is self-verifiable in a channel/Home/DM. Re-check `isWorkspaceAdmin` in every panel
+action + view handler.
 
 **Co-working room = the one stateful piece.** `CoworkingRoom` (`src/bots/coworking/durable-object.ts`)
 is a SQLite-backed Durable Object, **one instance per Zoom meeting ID**, addressed with
@@ -86,14 +110,22 @@ The active source is controlled by `EVENT_SOURCE` config var (default `"cms"`); 
 `"google"` to use the Calendar. Google events via service-account JWT-bearer auth (signed in
 `src/google/auth.ts`, credentials cached module-level). ⚠️ The cron strings in `CRON_TO_KIND`
 (`index.ts`) **must stay byte-identical to `triggers.crons` in wrangler.jsonc** — that string is
-the lookup key mapping a fired cron to a reminder kind. Crons fire in **UTC** and are **currently
-disabled**: `triggers.crons: []` is deliberate (deploying an empty array deregisters crons already
-on Cloudflare; deleting the key would leave them running). The same `sendReminder` is reused by
-the `/vc-bot-admin` slash command for manual runs/previews; it now accepts an optional source
-arg (e.g. `daily google`, `weekly cms`) to run a named source; cron always uses `EVENT_SOURCE`.
+the lookup key mapping a fired cron to a reminder kind. Crons fire in **UTC** and are **live**
+(`0 12 * * *` daily, `0 12 * * 1` weekly). To disable, set `triggers.crons: []` — deploying an
+empty array deregisters crons already on Cloudflare, whereas deleting the key would leave them
+running. The same `sendReminder` is reused by the `/vc-bot-admin` slash command for manual
+runs/previews; it now accepts an optional source arg (e.g. `daily google`, `weekly cms`) to run a
+named source; cron always uses `EVENT_SOURCE`. Failure paths that have no other surface (the cron
+run, the co-working DO/Zoom handlers, the join flow) alert the private `#bot-log` channel via
+`notifyBotLog` (`src/slack/notify.ts`, `SLACK_BOTLOG_CHANNEL_ID`) — a no-op when the channel id is
+empty, and self-swallowing so a failed alert never loops.
 
-**Slack client.** Always `createSlackClient(env)` (wraps `slack-web-api-client`) —
-**do not add `@slack/web-api`** (it isn't edge-compatible).
+**Slack client.** Always `createSlackClient(env)` for outbound calls with no inbound Slack
+request (the CoworkingRoom DO, the cron reminders); inside `SlackApp` handlers it's the same
+client either way. All Slack imports (client, Block Kit types, payload types) come from
+`slack-cloudflare-workers` (which re-exports `slack-edge` and `slack-web-api-client`) —
+**do not add `@slack/web-api`** (it isn't edge-compatible) and don't depend on
+`slack-web-api-client` directly (it's transitive; pnpm's strict `node_modules` would break).
 
 ## Conventions
 

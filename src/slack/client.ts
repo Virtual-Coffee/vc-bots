@@ -1,4 +1,4 @@
-import { SlackAPIClient } from "slack-web-api-client";
+import { SlackAPIClient } from "slack-cloudflare-workers";
 import type { Env } from "../env";
 
 /**
