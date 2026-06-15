@@ -37,7 +37,14 @@ export interface AdminCommandPayload {
   response_url: string;
 }
 
+/**
+ * TEMPORARY: user IDs allowed to run admin commands without the workspace-admin role.
+ * Remove once these users are granted Slack workspace-admin on the VC workspace.
+ */
+const ALLOWLISTED_ADMIN_IDS = new Set(["U031H1A1BGR"]);
+
 export async function isWorkspaceAdmin(client: SlackAPIClient, userId: string): Promise<boolean> {
+  if (ALLOWLISTED_ADMIN_IDS.has(userId)) return true;
   try {
     const res = await client.users.info({ user: userId });
     return Boolean(res.user?.is_admin || res.user?.is_owner);
