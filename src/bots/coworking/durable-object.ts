@@ -31,7 +31,7 @@ import {
  */
 
 /** Force-end a session this long after it started if `meeting.ended` was never received. */
-const STALE_SESSION_MS = 6 * 60 * 60 * 1000;
+const STALE_SESSION_MS = 18 * 60 * 60 * 1000;
 
 /** Lifetime of a `/join/<token>` redirect — matches the Zoom invite link's own TTL
  *  (`DEFAULT_TTL` in zoom/invite-links.ts), past which the link is dead anyway. */
@@ -274,7 +274,7 @@ export class CoworkingRoom extends DurableObject<Env> {
     // worker wasn't reachable). One Zoom meeting ID has at most one live instance, and duplicate
     // start webhooks reuse the same uuid (deduped above), so a start with a NEW uuid proves the
     // old session is dead. Close it now (stats summary + fresh invite) instead of leaving the
-    // room wedged until the 6h stale-session alarm.
+    // room wedged until the 18h stale-session alarm.
     const staleSessions = this.sql
       .exec<SessionRow>("SELECT * FROM session WHERE status = 'active'")
       .toArray();

@@ -146,7 +146,7 @@ describe("CoworkingRoom — room message lifecycle", () => {
 
     // uuid-1's meeting.ended was never received; a new instance starts. One meeting ID can only
     // have one live instance, so uuid-1 is necessarily dead — close it and open uuid-2 now
-    // rather than dropping the start and waiting for the 6h stale-session alarm.
+    // rather than dropping the start and waiting for the 18h stale-session alarm.
     await stub.handleZoomEvent(event("meeting.started", "uuid-2"));
 
     const rows = await sessions(stub);
