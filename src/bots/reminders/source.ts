@@ -79,9 +79,12 @@ export function reminderRange(kind: ReminderName, nowMs: number): EventRange {
     // tomorrow's run time is announced (and scheduled) by today's run.
     return { rangeStart: toIso(now), rangeEnd: toIso(now.plus({ days: 1 })) };
   }
-  // Weekly quirk kept from the old bot: set({hour: 0}) zeroes only the hour, keeping the
-  // run's minutes/seconds. Harmless — the window just starts shortly after midnight.
-  return { rangeStart: toIso(now.set({ hour: 0 })), rangeEnd: toIso(now.plus({ weeks: 1 })) };
+  // The announced week: Monday 00:00 → next Monday 00:00 (Mon–Sun), in Eastern. Anchored to the
+  // start of the ISO week (Luxon `startOf("week")` is Monday-start), NOT to the run time, so the
+  // window is the same set the Monday weekly summary covers no matter which day this is called —
+  // the CalendarSync change-notices reuse this so they match exactly what members were told.
+  const weekStart = now.startOf("week");
+  return { rangeStart: toIso(weekStart), rangeEnd: toIso(weekStart.plus({ weeks: 1 })) };
 }
 
 function toIso(dt: DateTime): string {
