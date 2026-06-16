@@ -4,7 +4,7 @@ import type { Env } from "../src/env";
 import { getGoogleAccessToken, resetGoogleTokenCacheForTests } from "../src/google/auth";
 
 const CLIENT_EMAIL = "sa@test.iam.gserviceaccount.com";
-const SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const SCOPE = "https://www.googleapis.com/auth/calendar";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 let serviceAccountKey: string;

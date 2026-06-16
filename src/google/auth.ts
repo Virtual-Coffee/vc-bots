@@ -16,7 +16,7 @@ import { log } from "../log";
  */
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const SCOPE = "https://www.googleapis.com/auth/calendar";
 /** Re-fetch this far ahead of expiry to avoid using a token mid-flight as it lapses. */
 const EXPIRY_SKEW_MS = 60_000;
 
