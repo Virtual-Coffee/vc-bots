@@ -8,15 +8,22 @@ import type { EventRange, EventSource, ReminderEvent } from "../source";
  * Google Calendar event source: reads the shared "Virtual Coffee Events" calendar via the
  * service account (readonly scope: `https://www.googleapis.com/auth/calendar.readonly`).
  *
- * Extended-property key convention — all keys live in `extendedProperties.shared` (not
- * `private`) because shared properties are visible on every copy of the event to any reader
- * of the calendar, whereas private properties are per-calendar-copy and invisible to service
- * accounts reading a calendar they don't own:
+ * Extended-property key convention — the service account **manages** this calendar (it wrote
+ * the properties via the patch in `scripts/gcal.ts`), so it can read its own
+ * `extendedProperties.private` fields. `private` is now the canonical home for Zoom metadata,
+ * keeping the host code out of view for anyone merely subscribed to the public calendar (shared
+ * properties are visible to all readers). `shared` is still read as a fallback for events that
+ * have not yet been migrated.
  *
- *   - `joinLink`      — override for the event's join URL (takes precedence over conferenceData
- *                       and location).
- *   - `zoomHostCode`  — Zoom host key shown only in the event-admin mirror.
- *   - `slackChannelId`— per-event Slack channel (currently unused for routing, kept for future).
+ * `extendedProperties.private` keys (canonical):
+ *   - `joinLink`       — override join URL (beats conferenceData and location).
+ *   - `hostCode`       — Zoom host key shown only in the event-admin mirror.
+ *   - `slackChannelId` — per-event Slack channel (unused for routing, kept for future).
+ *
+ * `extendedProperties.shared` keys (legacy fallback):
+ *   - `joinLink`       — same semantics, used when private key absent.
+ *   - `zoomHostCode`   — legacy name for the Zoom host key.
+ *   - `slackChannelId` — same semantics.
  */
 
 const CALENDAR_BASE = "https://www.googleapis.com/calendar/v3/calendars";
@@ -111,13 +118,15 @@ function toReminderEvent(e: GoogleCalendarEvent): ReminderEvent | null {
     endsAt = end.isValid ? (end.toUTC().toISO() ?? null) : null;
   }
 
+  const priv = e.extendedProperties?.private;
   const shared = e.extendedProperties?.shared;
 
-  // joinLink: shared key wins, then first video conferenceData entry, then location.
+  // joinLink: private key wins, then shared, then first video conferenceData entry, then location.
   const videoEntryPoint = e.conferenceData?.entryPoints?.find(
     (ep) => ep.entryPointType === "video" && ep.uri !== undefined,
   );
-  const joinLink = shared?.["joinLink"] ?? videoEntryPoint?.uri ?? e.location ?? null;
+  const joinLink =
+    priv?.["joinLink"] ?? shared?.["joinLink"] ?? videoEntryPoint?.uri ?? e.location ?? null;
 
   return {
     id: e.id,
@@ -126,7 +135,8 @@ function toReminderEvent(e: GoogleCalendarEvent): ReminderEvent | null {
     endsAt,
     description: e.description ?? null,
     joinLink,
-    zoomHostCode: shared?.["zoomHostCode"] ?? null,
-    slackChannelId: shared?.["slackChannelId"] ?? null,
+    // Note: the private map's key is `hostCode`; the legacy shared key is `zoomHostCode`.
+    zoomHostCode: priv?.["hostCode"] ?? shared?.["zoomHostCode"] ?? null,
+    slackChannelId: priv?.["slackChannelId"] ?? shared?.["slackChannelId"] ?? null,
   };
 }
