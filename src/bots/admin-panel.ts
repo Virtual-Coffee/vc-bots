@@ -5,6 +5,7 @@ import { log } from "../log";
 import { createSlackClient } from "../slack/client";
 import { deleteOriginal, replaceEphemeral } from "../slack/response";
 import { isWorkspaceAdmin, reminderReply } from "./admin";
+import type { WatchStatus } from "./calendar-sync/durable-object";
 import { homeView } from "./app-home";
 import { type ReminderName, sendReminder } from "./reminders";
 import { welcomeBlocks } from "./welcome";
@@ -27,6 +28,9 @@ export const PANEL_REMINDER_ACTION_ID = "admin_panel_reminder";
 export const PANEL_WELCOME_ACTION_ID = "admin_panel_welcome";
 export const PANEL_COWORKING_ACTION_ID = "admin_panel_coworking";
 export const PANEL_HOME_ACTION_ID = "admin_panel_home";
+export const PANEL_WATCH_STATUS_ACTION_ID = "admin_panel_watch_status";
+export const PANEL_WATCH_START_ACTION_ID = "admin_panel_watch_start";
+export const PANEL_WATCH_STOP_ACTION_ID = "admin_panel_watch_stop";
 
 export const REMINDER_MODAL_CALLBACK_ID = "admin_reminder_modal";
 export const WELCOME_MODAL_CALLBACK_ID = "admin_welcome_modal";
@@ -68,6 +72,30 @@ export function adminPanelBlocks(): AnyMessageBlock[] {
           type: "button",
           action_id: PANEL_HOME_ACTION_ID,
           text: { type: "plain_text", text: "Publish App Home", emoji: true },
+        },
+      ],
+    },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: "*Calendar Watch* — Google Calendar push channel:" },
+    },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          action_id: PANEL_WATCH_STATUS_ACTION_ID,
+          text: { type: "plain_text", text: "Watch status", emoji: true },
+        },
+        {
+          type: "button",
+          action_id: PANEL_WATCH_START_ACTION_ID,
+          text: { type: "plain_text", text: "Start watch", emoji: true },
+        },
+        {
+          type: "button",
+          action_id: PANEL_WATCH_STOP_ACTION_ID,
+          text: { type: "plain_text", text: "Stop watch", emoji: true },
         },
       ],
     },
@@ -428,6 +456,75 @@ export async function handleCoworkingSubmit(
     await replaceEphemeral(responseUrl, ERROR_TEXT);
   } catch (err) {
     log.error("admin.panel.coworking_failed", { user: payload.user.id, err: String(err) });
+    await replaceEphemeral(responseUrl, ERROR_TEXT);
+  }
+}
+
+// ── Calendar Watch handlers (panel buttons) ─────────────────────────────────
+
+/**
+ * Render a `WatchStatus` as a concise human-readable line. The expiry is shown as a Slack
+ * date token (falls back to a readable UTC time outside Slack-rendered surfaces). NEVER
+ * includes the watch token — only the non-secret channel id.
+ */
+function watchStatusText(status: WatchStatus): string {
+  if (!status.active) return ":mute: Calendar watch is *not active*.";
+  const parts = [":satellite_antenna: Calendar watch is *active*."];
+  if (status.channelId) parts.push(`Channel: \`${status.channelId}\`.`);
+  if (status.expiresAt !== null) {
+    const secs = Math.floor(status.expiresAt / 1000);
+    const fallback = new Date(status.expiresAt).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+    parts.push(`Expires <!date^${secs}^{date_short_pretty} {time}|${fallback}>.`);
+  }
+  return parts.join(" ");
+}
+
+export async function handlePanelWatchStatusClick(
+  payload: AdminPanelActionPayload,
+  env: Env,
+): Promise<void> {
+  const responseUrl = await guardClick(payload, env);
+  if (!responseUrl) return;
+  try {
+    const status = await env.CALENDAR_SYNC.getByName("default").watchStatus();
+    await replaceEphemeral(responseUrl, watchStatusText(status));
+  } catch (err) {
+    log.error("admin.panel.watch_status_failed", { user: payload.user.id, err: String(err) });
+    await replaceEphemeral(responseUrl, ERROR_TEXT);
+  }
+}
+
+export async function handlePanelWatchStartClick(
+  payload: AdminPanelActionPayload,
+  env: Env,
+): Promise<void> {
+  const responseUrl = await guardClick(payload, env);
+  if (!responseUrl) return;
+  try {
+    const status = await env.CALENDAR_SYNC.getByName("default").ensureWatch();
+    await replaceEphemeral(responseUrl, watchStatusText(status));
+  } catch (err) {
+    log.error("admin.panel.watch_start_failed", { user: payload.user.id, err: String(err) });
+    await replaceEphemeral(responseUrl, ERROR_TEXT);
+  }
+}
+
+export async function handlePanelWatchStopClick(
+  payload: AdminPanelActionPayload,
+  env: Env,
+): Promise<void> {
+  const responseUrl = await guardClick(payload, env);
+  if (!responseUrl) return;
+  try {
+    const { stopped } = await env.CALENDAR_SYNC.getByName("default").stopWatch();
+    await replaceEphemeral(
+      responseUrl,
+      stopped
+        ? ":octagonal_sign: Calendar watch stopped."
+        : ":information_source: No active calendar watch to stop.",
+    );
+  } catch (err) {
+    log.error("admin.panel.watch_stop_failed", { user: payload.user.id, err: String(err) });
     await replaceEphemeral(responseUrl, ERROR_TEXT);
   }
 }

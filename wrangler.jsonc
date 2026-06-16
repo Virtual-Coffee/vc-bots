@@ -7,10 +7,16 @@
 
   // Co-working room state. One DO instance per Zoom meeting ID (addressed via getByName).
   "durable_objects": {
-    "bindings": [{ "name": "COWORKING_ROOM", "class_name": "CoworkingRoom" }]
+    "bindings": [
+      { "name": "COWORKING_ROOM", "class_name": "CoworkingRoom" },
+      { "name": "CALENDAR_SYNC", "class_name": "CalendarSync" }
+    ]
   },
   // SQLite-backed DO storage (GA, included on the Workers free plan).
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["CalendarSync"] }
+  ],
 
   // Event announcements. Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST
   // (accepted DST drift). These MUST stay byte-identical to CRON_TO_KIND in
@@ -46,10 +52,12 @@
     "SLACK_BOTLOG_CHANNEL_ID": "C0BATRPD3QC",
     "CMS_GRAPHQL_URL": "https://members.virtualcoffee.io/api",
     // Google Calendar event source ("Virtual Coffee Events", shared with the service account).
-    // TODO(config): set the real calendar id before testing `/vc-bot-admin daily google`.
-    "GOOGLE_CALENDAR_ID": "REPLACE_WITH_CALENDAR_ID@group.calendar.google.com",
+    "GOOGLE_CALENDAR_ID": "c_9605915e57e591ee12b82c98dc4c5e0aae1829024e1bc15e4026f5ee5b41d2f8@group.calendar.google.com",
     // Which event source the cron + default admin runs use. CMS→Google cutover = set "google".
-    "EVENT_SOURCE": "cms",
+    "EVENT_SOURCE": "google",
+    // Note: the Google Calendar push-notification (watch) address is derived from PUBLIC_BASE_URL
+    // as `${PUBLIC_BASE_URL}/google/notify`; its host must be domain-verified in Google Cloud
+    // Console. Override PUBLIC_BASE_URL in .dev.vars to point a watch at a local tunnel.
     "LOG_LEVEL": "info" // debug | info | warn | error (set LOG_LEVEL=debug in .dev.vars locally)
   }
 }

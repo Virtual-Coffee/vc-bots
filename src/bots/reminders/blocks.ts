@@ -1,4 +1,4 @@
-import type { AnyMessageBlock } from "slack-cloudflare-workers";
+import type { AnyMessageBlock, MessageAttachment } from "slack-cloudflare-workers";
 import { DateTime } from "luxon";
 import { htmlToMrkdwn } from "./html-to-mrkdwn";
 import type { ReminderEvent } from "./source";
@@ -14,6 +14,7 @@ import type { ReminderEvent } from "./source";
 export interface ReminderMessage {
   text: string;
   blocks: AnyMessageBlock[];
+  attachments?: MessageAttachment[];
 }
 
 /** Per-event "⏰ Starting Soon" announcement, scheduled to post ~10 min before the event. */
@@ -131,4 +132,45 @@ function section(text: string): AnyMessageBlock {
 
 function context(text: string): AnyMessageBlock {
   return { type: "context", elements: [{ type: "mrkdwn", text }] };
+}
+
+/** Standout notice that an event in the announced window was cancelled. */
+export function buildCancellationMessage(event: ReminderEvent): ReminderMessage {
+  return {
+    text: `Cancelled: ${event.title} — ${fallbackDate(event)}`,
+    blocks: [],
+    attachments: [
+      {
+        color: "#d9376e",
+        blocks: [
+          section("*:warning: Event Cancelled*"),
+          section(`*${event.title}*\n${dateToken(eventStart(event))}`),
+          section("This event has been cancelled."),
+        ],
+      },
+    ],
+  };
+}
+
+/** Standout notice that an event was rescheduled from oldStartsAt to its new start. */
+export function buildRescheduleMessage(
+  event: ReminderEvent,
+  oldStartsAt: string,
+): ReminderMessage {
+  const oldDt = DateTime.fromISO(oldStartsAt, { zone: "utc" });
+  return {
+    text: `Rescheduled: ${event.title} — now ${fallbackDate(event)}`,
+    blocks: [],
+    attachments: [
+      {
+        color: "#d9376e",
+        blocks: [
+          section("*:calendar: Event Rescheduled*"),
+          section(`*${event.title}*`),
+          section(`*Was:* ${dateToken(oldDt)}`),
+          section(`*Now:* ${dateToken(eventStart(event))}`),
+        ],
+      },
+    ],
+  };
 }

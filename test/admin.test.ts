@@ -71,9 +71,12 @@ describe("handleAdminCommand — reminders", () => {
     return { id: "1", title: "Soon", startDateLocalized: iso, endDateLocalized: iso };
   }
 
+  // These cases stub CMS GraphQL and assert source: "cms", so preview the cms source explicitly
+  // (the wrangler default is now "google" post-cutover). The command's optional `[source]` arg is
+  // exactly how an admin pins a source for a preview run.
   it("posts the weekly reminder to the channel and confirms the count", async () => {
     cmsEvents = [cmsEvt(Date.now() + 3_600_000)];
-    await handleAdminCommand(cmd("weekly"), env);
+    await handleAdminCommand(cmd("weekly cms"), env);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
     expect(replyText()).toContain("Posted the *weekly* reminder (1 event");
     expect(replyText()).toContain("source: *cms*");
@@ -81,7 +84,7 @@ describe("handleAdminCommand — reminders", () => {
 
   it("daily schedules a starting-soon pair and reports it", async () => {
     cmsEvents = [cmsEvt(Date.now() + 6 * 3_600_000)];
-    await handleAdminCommand(cmd("daily"), env);
+    await handleAdminCommand(cmd("daily cms"), env);
     expect(callsTo("/api/chat.scheduleMessage")).toHaveLength(2); // public + admin mirror
     // The summary itself is day-dependent (Mondays skip it), so assert the stable part.
     expect(replyText()).toContain("Scheduled 1 starting-soon message");
@@ -89,7 +92,7 @@ describe("handleAdminCommand — reminders", () => {
 
   it("reports when there are no upcoming events", async () => {
     cmsEvents = [];
-    await handleAdminCommand(cmd("weekly"), env);
+    await handleAdminCommand(cmd("weekly cms"), env);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
     expect(replyText()).toContain("No upcoming events");
   });

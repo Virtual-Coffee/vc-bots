@@ -20,6 +20,10 @@ CMS_TOKEN=...
 # Prod: `wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY` and paste the JSON when prompted.
 GOOGLE_SERVICE_ACCOUNT_KEY={"type":"service_account",...}
 
+# Google Calendar push-notification channel verification token (any random string, <=256 chars).
+# Set the same value in prod via `wrangler secret put GOOGLE_WATCH_TOKEN`.
+GOOGLE_WATCH_TOKEN=
+
 # Optional: override the wrangler.jsonc LOG_LEVEL ("info") for local dev.
 # LOG_LEVEL=debug
 

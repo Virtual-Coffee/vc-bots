@@ -1,4 +1,4 @@
-import type { CoworkingRoom } from "./index";
+import type { CalendarSync, CoworkingRoom } from "./index";
 
 /**
  * Worker bindings, secrets, and config vars.
@@ -11,6 +11,8 @@ export interface Env {
   // --- Bindings ---
   /** Co-working room Durable Object, keyed by Zoom meeting ID via `getByName`. */
   COWORKING_ROOM: DurableObjectNamespace<CoworkingRoom>;
+  /** Google Calendar sync Durable Object — one singleton instance via getByName("default"). */
+  CALENDAR_SYNC: DurableObjectNamespace<CalendarSync>;
 
   // --- Secrets (wrangler secret put / .dev.vars) ---
   SLACK_BOT_TOKEN: string;
@@ -22,12 +24,17 @@ export interface Env {
   CMS_TOKEN: string;
   /** Full Google service-account JSON (one line). Carries a private key — never log it. */
   GOOGLE_SERVICE_ACCOUNT_KEY: string;
+  /** Verification token echoed back in the X-Goog-Channel-Token header of every Calendar push notification. Never log it. */
+  GOOGLE_WATCH_TOKEN: string;
 
   // --- Config vars (wrangler.jsonc) ---
   ZOOM_MEETING_ID: string;
   /**
-   * Public base URL the join redirect is surfaced under (the Netlify rewrite in front of the
-   * Worker). May include a path prefix. Empty/unset falls back to the request origin (wrangler dev).
+   * Public base URL the Worker is reachable at (the Netlify rewrite in front of the Worker). May
+   * include a path prefix. Used for the join redirect surfaced in Slack AND as the base for the
+   * Google Calendar watch address (`${PUBLIC_BASE_URL}/google/notify`) — its host must be
+   * domain-verified in Google Cloud Console. Empty/unset falls back to the request origin for the
+   * join redirect (wrangler dev), but a watch can't be registered without it.
    */
   PUBLIC_BASE_URL: string;
   SLACK_COWORKING_CHANNEL_ID: string;

@@ -91,6 +91,19 @@ export async function runReminders(
     log.error("reminder.run_failed", { cron: controller.cron, error: String(error) });
     await notifyBotLog(env, "reminder.run_failed", { cron: controller.cron, error: String(error) });
   }
+
+  // Bootstrap/heal the Calendar watch on the daily run when Google is the active source. Guarded
+  // separately so a watch hiccup never masks the reminder result above.
+  if (name === "daily" && env.EVENT_SOURCE === "google") {
+    try {
+      const stub = env.CALENDAR_SYNC.getByName("default");
+      await stub.ensureWatch();
+      await stub.seed();
+    } catch (error) {
+      log.error("calendar_sync.bootstrap_failed", { error: String(error) });
+      await notifyBotLog(env, "calendar_sync.bootstrap_failed", { error: String(error) });
+    }
+  }
 }
 
 async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<SendResult> {
@@ -98,7 +111,7 @@ async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<
   const events = await source.fetchEvents(range);
   const client = createSlackClient(env);
 
-  const scheduled = await scheduleStartingSoon(client, env, events, nowMs, range);
+  const scheduled = await reconcileStartingSoon(client, env, events, nowMs, range);
 
   // Mondays get the weekly summary instead; the starting-soon scheduling above still ran.
   if (DateTime.fromMillis(nowMs, { zone: "America/New_York" }).weekday === 1) {
@@ -143,12 +156,21 @@ async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise
 }
 
 /**
- * Schedule each event's starting-soon pair (public announcement + event-admin mirror) for
- * start − 10 min. Clears this bot's scheduled messages in the window first, so re-runs
- * (manual `/vc-bot-admin daily`) reconcile instead of duplicating. Events starting too soon
- * to schedule are posted immediately; already-started events are skipped.
+ * Reconcile the bot's scheduled "Starting Soon" messages for the given daily window against
+ * `events`. Clears this bot's scheduled messages in the window first, then re-queues each
+ * event's public + event-admin pair for start − 10 min (or posts immediately if the slot has
+ * already passed). Returns the number of events handled.
+ *
+ * Shared by:
+ * - the **daily cron** (`sendDaily`) — runs at 12:00 UTC to seed the day's queue.
+ * - the **CalendarSync DO** — calls this after a Google Calendar change so the scheduled queue
+ *   matches the live calendar (drops cancelled events, re-queues moved ones at their new
+ *   start − 10 min).
+ *
+ * Callers can compute the daily window via `reminderRange("daily", nowMs)` (exported from
+ * `./source`).
  */
-async function scheduleStartingSoon(
+export async function reconcileStartingSoon(
   client: SlackAPIClient,
   env: Env,
   events: ReminderEvent[],

@@ -1,6 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { DateTime } from "luxon";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Env } from "../src/env";
 import {
   type AdminPanelActionPayload,
   type AdminViewSubmissionPayload,
@@ -167,7 +168,8 @@ describe("admin panel — reminder submit", () => {
         kind: { kind: { selected_option: { value: "weekly" } } },
         date: { date: { selected_date: "2024-06-18" } },
       }),
-      env,
+      // Pin cms: this case stubs CMS GraphQL and asserts source: "cms" (wrangler default is now google).
+      { ...env, EVENT_SOURCE: "cms" } as Env,
     );
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
     const reply = panelReply()!;
@@ -183,7 +185,8 @@ describe("admin panel — reminder submit", () => {
         kind: { kind: { selected_option: { value: "daily" } } },
         date: { date: { selected_date: "2024-01-01" } },
       }),
-      env,
+      // Pin cms (wrangler default is now google); this case only checks the Monday-skip path.
+      { ...env, EVENT_SOURCE: "cms" } as Env,
     );
     expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
     expect(panelReply()!.text).toContain("Mondays");
