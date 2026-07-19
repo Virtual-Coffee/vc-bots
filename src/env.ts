@@ -1,4 +1,4 @@
-import type { CoworkingRoom } from "./index";
+import type { CoworkingRoom, JobsOfTheDay } from "./index";
 
 /**
  * Worker bindings, secrets, and config vars.
@@ -11,6 +11,8 @@ export interface Env {
   // --- Bindings ---
   /** Co-working room Durable Object, keyed by Zoom meeting ID via `getByName`. */
   COWORKING_ROOM: DurableObjectNamespace<CoworkingRoom>;
+  /** Singleton scheduler state for the weekday Jobs of the Day Slack thread. */
+  JOBS_OF_THE_DAY: DurableObjectNamespace<JobsOfTheDay>;
 
   // --- Secrets (wrangler secret put / .dev.vars) ---
   SLACK_BOT_TOKEN: string;
@@ -29,6 +31,8 @@ export interface Env {
    */
   PUBLIC_BASE_URL: string;
   SLACK_COWORKING_CHANNEL_ID: string;
+  /** Private channel that receives the weekday Jobs of the Day thread starter. */
+  SLACK_JOBS_CHANNEL_ID: string;
   ROOM_TITLE: string;
   /** #events-style channel — the scheduled starting-soon messages post here. */
   SLACK_EVENTS_CHANNEL_ID: string;

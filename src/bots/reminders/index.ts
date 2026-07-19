@@ -25,12 +25,11 @@ export type { ReminderName } from "./source";
  * - `weekly` (Mondays 12:00 UTC): posts the "This Week's Events" summary.
  *
  * Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST (accepted DST drift).
- * ⚠️ The cron strings in `CRON_TO_KIND` MUST stay byte-identical to `triggers.crons` in
- * wrangler.jsonc. Currently DISABLED — `triggers.crons` is empty until the feature is
- * verified via `/vc-bot-admin`; restore the expressions there to go live.
+ * ⚠️ The cron strings in `CRON_TO_KIND` MUST stay byte-identical to their entries in
+ * `triggers.crons` in wrangler.jsonc. Other bot features may have additional cron entries.
  */
 
-// Maps each cron expression → reminder name. Keys must equal wrangler.jsonc cron strings.
+// Maps each event cron expression → reminder name. Keys must equal their wrangler cron strings.
 const CRON_TO_KIND: Record<string, ReminderName> = {
   "0 12 * * *": "daily",
   "0 12 * * 1": "weekly",

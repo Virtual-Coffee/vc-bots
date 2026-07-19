@@ -1,7 +1,8 @@
 # vc-bots
 
 VirtualCoffee's Slack/Zoom automation — a single Cloudflare Worker hosting the
-co-working room, the new-member welcome, the App Home tab, and event announcements.
+co-working room, the new-member welcome, the App Home tab, event announcements, and a weekday
+Jobs of the Day thread.
 
 ## What it does
 
@@ -11,6 +12,7 @@ co-working room, the new-member welcome, the App Home tab, and event announcemen
 | **Welcome** | Slack `team_join` event | DMs new members a welcome message. |
 | **App Home** | Slack `app_home_opened` event | Publishes the bot's App Home tab. |
 | **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee CMS (GraphQL), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel. Crons are live (daily + weekly); `/vc-bot-admin` can also fire a run manually. |
+| **Jobs of the Day** | Hourly cron with Eastern-time guards | Posts one weekday thread starter at 9am Eastern. At the following midnight it deletes the starter if it has no replies, or retains it when anyone replied. |
 
 There's also a `/vc-bot-admin` slash command for manual previews and admin actions
 (e.g. `daily` / `weekly` to fire an announcement run now, or `coworking invite`).
@@ -32,7 +34,7 @@ there's no signature to check), and `GET /health`. Every provider route:
    `200` immediately and run the real work via `ctx.waitUntil(...)`, replying through Slack's
    `response_url` when needed.
 
-**The co-working room is the one stateful piece.** `CoworkingRoom`
+**The co-working room is stateful.** `CoworkingRoom`
 (`src/bots/coworking/durable-object.ts`) is a SQLite-backed Durable Object, one instance per
 Zoom meeting ID. Routing all of a meeting's webhooks through a single instance serializes them,
 eliminating eventual-consistency races. Zoom `meeting.started` posts (or updates the standing
@@ -52,6 +54,12 @@ Correlating Zoom participants back to Slack members is best-effort by display na
 `member_link` table; people who join another way show as external guests. Personal `join_url`s
 (and the redirect tokens that resolve to them) carry a join credential — they are never logged.
 
+**Jobs of the Day has a serialized scheduler.** The singleton `JobsOfTheDay` Durable Object
+queues overlapping ticks while Slack requests are pending, remembers the current thread, prevents
+duplicate successful cron deliveries, and safely retries Slack failures. An hourly UTC cron is
+converted to `America/New_York`, so the weekday 9am post and next-midnight cleanup follow EST/EDT
+without changing cron expressions.
+
 ## Project layout
 
 ```
@@ -62,6 +70,7 @@ src/
   crypto.ts           timing-safe HMAC helpers on crypto.subtle
   log.ts              leveled logger (threshold from LOG_LEVEL)
   bots/
+    jobs-of-day.ts     weekday Slack thread scheduler + persisted cleanup state
     coworking/        the room: Durable Object, Zoom event handlers, join flow, message blocks
     reminders/        cron dispatch, event model + CMS source, Block Kit builders, html-to-mrkdwn
     welcome.ts        new-member welcome DM
@@ -102,6 +111,9 @@ Config and secrets are split deliberately:
   channel for error alerts; empty disables alerting and the bot must be invited before it can
   post), `CMS_GRAPHQL_URL`, and `LOG_LEVEL`. After changing bindings or vars, rerun
   `pnpm cf-types` and keep `src/env.ts` in sync by hand.
+- **Jobs channel**: `SLACK_JOBS_CHANNEL_ID` is the private channel ID for the weekday thread.
+  It is intentionally empty in the checked-in config until the bot is invited to
+  `#testing-things`; fill it before deployment.
 - **Secrets** go via `wrangler secret put <NAME>` in production and `.dev.vars` locally (see
   `.dev.vars.example`): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`,
   `ZOOM_WEBHOOK_SECRET_TOKEN`, `ZOOM_S2S_CLIENT_ID`, `ZOOM_S2S_CLIENT_SECRET`,
@@ -111,17 +123,21 @@ Config and secrets are split deliberately:
 
 - **Slack app**: event subscriptions for `team_join` and `app_home_opened` pointed at
   `/slack/events`, interactivity at `/slack/interactivity`, and the `/vc-bot-admin` slash
-  command at `/slack/commands`.
+  command at `/slack/commands`. Jobs of the Day additionally requires bot scopes `chat:write`
+  and `groups:history`; invite the bot to the private `#testing-things` channel before setting
+  `SLACK_JOBS_CHANNEL_ID`.
 - **Zoom app**: webhook subscriptions for `meeting.started`, `meeting.ended`,
   `meeting.participant_joined`, and `meeting.participant_left` pointed at `/zoom/webhook`,
   plus a Server-to-Server OAuth app for the invite-link API. The subscription is
   account-wide, so events arrive for every meeting under the account — the router ignores
   any meeting that isn't `ZOOM_MEETING_ID`. The co-working meeting must **not** require
   registration — invite links depend on it.
-- **Cron triggers** fire in **UTC**. The cron strings in `wrangler.jsonc` `triggers.crons`
+- **Cron triggers** fire in **UTC**. The event-reminder cron strings in `wrangler.jsonc`
+  `triggers.crons`
   must stay byte-identical to `CRON_TO_KIND` in `src/bots/reminders/index.ts` — the fired
-  cron string is the lookup key for the reminder kind. Two crons drive everything: `0 12 * * *`
-  (daily) and `0 12 * * 1` (weekly), both at 12:00 UTC (8am EDT / 7am EST). The per-event
+  cron string is the lookup key for the reminder kind. Those are `0 12 * * *` (daily) and
+  `0 12 * * 1` (weekly), both at 12:00 UTC (8am EDT / 7am EST). Jobs of the Day uses
+  `0 * * * *`; its handler selects weekday 9am and midnight in `America/New_York`. The per-event
   starting-soon messages need no extra cron granularity because the daily run schedules them
   via Slack's `chat.scheduleMessage`. The crons are **live**. To disable, set `triggers.crons`
   to an empty array `[]` — deploying `[]` deregisters any crons already on Cloudflare, whereas
