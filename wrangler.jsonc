@@ -7,20 +7,32 @@
 
   // Co-working room state. One DO instance per Zoom meeting ID (addressed via getByName).
   "durable_objects": {
-    "bindings": [{ "name": "COWORKING_ROOM", "class_name": "CoworkingRoom" }]
+    "bindings": [
+      { "name": "COWORKING_ROOM", "class_name": "CoworkingRoom" },
+      { "name": "JOBS_OF_THE_DAY", "class_name": "JobsOfTheDay" }
+    ]
   },
   // SQLite-backed DO storage (GA, included on the Workers free plan).
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["JobsOfTheDay"] }
+  ],
 
   // Event announcements. Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST
-  // (accepted DST drift). These MUST stay byte-identical to CRON_TO_KIND in
+  // (accepted DST drift). The two event expressions MUST stay byte-identical to CRON_TO_KIND in
   // src/bots/reminders/index.ts — that string is the lookup key mapping a fired cron to a
-  // reminder kind. To disable, set this to an empty array (NOT by dropping the key —
+  // reminder kind; the separate Eastern-time candidate expressions belong to Jobs of the Day.
+  // To disable all schedules, set this to an empty array (NOT by dropping the key —
   // deploying [] removes any crons registered on Cloudflare, whereas dropping the key
   // entirely would leave them running).
   // "0 12 * * *" — daily (summary + schedules the starting-soon messages)
   // "0 12 * * 1" — weekly (Monday summary; the daily run skips its summary that day)
-  "triggers": { "crons": ["0 12 * * *", "0 12 * * 1"] },
+  // Jobs of the Day uses UTC candidates for midnight (04:00/05:00) and 9am (13:00/14:00),
+  // then an America/New_York guard selects the correct EST/EDT run. Slack failures retry through
+  // a Durable Object alarm instead of an hourly cron. Event-reminder crons remain unchanged.
+  "triggers": {
+    "crons": ["0 4,5 * * *", "0 13,14 * * *", "0 12 * * *", "0 12 * * 1"]
+  },
 
   "observability": { "enabled": true },
 
@@ -32,6 +44,9 @@
     // used only for the user-facing join link. Empty/unset falls back to the request origin.
     "PUBLIC_BASE_URL": "https://virtualcoffee.io/bots",
     "SLACK_COWORKING_CHANNEL_ID": "C01SAU1B7B9",
+    // Private #testing-things channel. Invite the bot, grant groups:history, and fill its ID.
+    // Kept empty so a deploy cannot accidentally post to the wrong private channel.
+    "SLACK_JOBS_CHANNEL_ID": "",
     "ROOM_TITLE": "Co-Working Room",
     // Community maintainers @-mentioned at the end of the welcome message / App Home.
     "WELCOME_MAINTAINER_IDS": "U014HT3RNCU,U0157K5MUPJ,U01577R42TS,U01B9NQF2PR",

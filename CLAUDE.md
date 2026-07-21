@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A single Cloudflare Worker (`vc-bots`) hosting all of VirtualCoffee's Slack/Zoom automation:
-the co-working room, the new-member welcome, the App Home tab, and event announcements. Everything
+the co-working room, the new-member welcome, the App Home tab, event announcements, and the
+weekday Jobs of the Day thread. Everything
 runs on the edge runtime (`workerd`) — **no `node:*` modules**. Use Web APIs only: `fetch`,
 `crypto.subtle`, `btoa`, `URLSearchParams`, etc.
 
@@ -97,6 +98,18 @@ display name via the `member_link` table (the webhook carries no registrant id f
 joiners); uncorrelated people show as external guests. Personal `join_url`s and the redirect
 tokens that resolve to them carry a join credential — **never log them**.
 
+**Jobs of the Day** (`src/bots/jobs-of-day.ts`) uses a singleton `JobsOfTheDay` Durable Object.
+UTC cron candidates at 04:00/05:00 and 13:00/14:00 call `tick(scheduledTime)`; Luxon converts each
+timestamp to `America/New_York`, and local guards select midnight and weekday 9am across EST/EDT.
+This yields four lightweight cron invocations and two runs per day. The DO
+queues overlapping ticks in memory so Slack fetches cannot interleave, and stores the active
+channel/`ts`, last-posted date, and pending retry state so duplicate ticks are idempotent and Slack
+failures arm an hourly Durable Object retry alarm. Cleanup calls `conversations.replies` with
+`limit: 2`: any reply retains the root, while a reply-free root is deleted with `chat.delete`.
+Inspection errors always fail safe.
+The private channel requires `chat:write`, `groups:history`, bot membership, and
+`SLACK_JOBS_CHANNEL_ID`.
+
 **Event announcements** (`src/bots/reminders/`) run from the cron `scheduled()` handler and
 post to three channels: daily/weekly summaries → `SLACK_ANNOUNCEMENTS_CHANNEL_ID`; per-event
 "Starting Soon" messages → `SLACK_EVENTS_CHANNEL_ID`, each mirrored (with extras like the Zoom
@@ -107,7 +120,9 @@ weekly covers it) but still schedules. Event windows are computed in `America/Ne
 come through the `EventSource` abstraction (`source.ts`); the CMS GraphQL adapter
 (`sources/cms.ts`) is the only source today — a Google Calendar source is planned. ⚠️ The cron
 strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
-wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons
+wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. The
+additional `0 4,5 * * *` and `0 13,14 * * *` triggers belong to Jobs of the Day and are
+intentionally absent from `CRON_TO_KIND`. Event crons
 fire in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * 1` weekly). To disable, set
 `triggers.crons: []` — deploying an empty array deregisters crons already on Cloudflare, whereas
 deleting the key would leave them running. The same `sendReminder` is reused by the
