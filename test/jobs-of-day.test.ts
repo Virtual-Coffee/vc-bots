@@ -1,10 +1,16 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { JOBS_OF_DAY_CRON, runJobsOfTheDay } from "../src/bots/jobs-of-day";
+import {
+  JOBS_OF_DAY_CRONS,
+  type JobsOfTheDay,
+  runJobsOfTheDay,
+} from "../src/bots/jobs-of-day";
 
 const THREAD_TS = "1784293200.000100";
 const EDT_FRIDAY_9AM = Date.parse("2026-07-17T13:00:00Z");
 const EDT_SATURDAY_MIDNIGHT = Date.parse("2026-07-18T04:00:00Z");
+const FUTURE_EDT_FRIDAY_9AM = Date.parse("2030-07-19T13:00:00Z");
+const FUTURE_EDT_SATURDAY_MIDNIGHT = Date.parse("2030-07-20T04:00:00Z");
 
 interface RecordedCall {
   url: string;
@@ -68,10 +74,17 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 function jobs(name: string) {
   return env.JOBS_OF_THE_DAY.getByName(name);
+}
+
+function alarmTime(stub: ReturnType<typeof jobs>): Promise<number | null> {
+  return runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
 }
 
 function callsTo(fragment: string): RecordedCall[] {
@@ -107,10 +120,21 @@ describe("JobsOfTheDay — posting schedule", () => {
     );
   });
 
-  it("posts at 9am Eastern during standard time", async () => {
-    const result = await jobs("est-post").tick(Date.parse("2026-01-12T14:00:00Z"));
-    expect(result.outcome).toBe("posted");
-    expect(jobPosts()).toHaveLength(1);
+  it("selects the correct 9am candidate after spring-forward and fall-back", async () => {
+    const spring = jobs("spring-forward-post");
+    expect((await spring.tick(Date.parse("2026-03-09T13:00:00Z"))).outcome).toBe("posted");
+    expect(await spring.tick(Date.parse("2026-03-09T14:00:00Z"))).toEqual({
+      outcome: "skipped",
+      reason: "already-posted",
+    });
+
+    const fall = jobs("fall-back-post");
+    expect(await fall.tick(Date.parse("2026-11-02T13:00:00Z"))).toEqual({
+      outcome: "skipped",
+      reason: "not-due",
+    });
+    expect((await fall.tick(Date.parse("2026-11-02T14:00:00Z"))).outcome).toBe("posted");
+    expect(jobPosts()).toHaveLength(2);
   });
 
   it("skips weekends and non-9am initial ticks", async () => {
@@ -122,22 +146,29 @@ describe("JobsOfTheDay — posting schedule", () => {
     expect(jobPosts()).toHaveLength(0);
   });
 
-  it("retries a failed post on the next hourly tick, but only alerts once", async () => {
+  it("retries a failed post hourly by alarm, re-arms on failure, and alerts once", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FUTURE_EDT_FRIDAY_9AM);
     const stub = jobs("post-retry");
     postError = "service_unavailable";
 
-    expect(await stub.tick(EDT_FRIDAY_9AM)).toEqual({
+    expect(await stub.tick(FUTURE_EDT_FRIDAY_9AM)).toEqual({
       outcome: "failed",
       action: "post",
-      localDate: "2026-07-17",
+      localDate: "2030-07-19",
     });
-    expect(await stub.tick(Date.parse("2026-07-17T14:00:00Z"))).toEqual({
-      outcome: "posted",
-      localDate: "2026-07-17",
-      ts: THREAD_TS,
-    });
+    expect(await alarmTime(stub)).toBe(Date.parse("2030-07-19T14:00:00Z"));
 
-    expect(jobPosts()).toHaveLength(2);
+    postError = "service_unavailable";
+    vi.setSystemTime(Date.parse("2030-07-19T14:00:00Z"));
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await alarmTime(stub)).toBe(Date.parse("2030-07-19T15:00:00Z"));
+
+    vi.setSystemTime(Date.parse("2030-07-19T15:00:00Z"));
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await alarmTime(stub)).toBeNull();
+
+    expect(jobPosts()).toHaveLength(3);
     const botLogPosts = callsTo("/api/chat.postMessage").filter(
       (call) => new URLSearchParams(call.body).get("channel") === env.SLACK_BOTLOG_CHANNEL_ID,
     );
@@ -145,16 +176,17 @@ describe("JobsOfTheDay — posting schedule", () => {
   });
 
   it("expires a failed post at the next Eastern date boundary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FUTURE_EDT_FRIDAY_9AM);
     const stub = jobs("post-expiry");
     postError = "service_unavailable";
-    await stub.tick(EDT_FRIDAY_9AM);
+    await stub.tick(FUTURE_EDT_FRIDAY_9AM);
     recorded = [];
 
-    expect(await stub.tick(EDT_SATURDAY_MIDNIGHT)).toEqual({
-      outcome: "skipped",
-      reason: "not-due",
-    });
-    expect(await stub.tick(Date.parse("2026-07-18T13:00:00Z"))).toEqual({
+    vi.setSystemTime(FUTURE_EDT_SATURDAY_MIDNIGHT);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await alarmTime(stub)).toBeNull();
+    expect(await stub.tick(Date.parse("2030-07-20T13:00:00Z"))).toEqual({
       outcome: "skipped",
       reason: "weekend",
     });
@@ -190,6 +222,24 @@ describe("JobsOfTheDay — midnight cleanup", () => {
     });
     expect(callsTo("/api/conversations.replies")).toHaveLength(1);
     expect(callsTo("/api/chat.delete")).toHaveLength(1);
+  });
+
+  it("selects the correct midnight candidate in daylight and standard time", async () => {
+    const daylight = jobs("edt-midnight");
+    await daylight.tick(EDT_FRIDAY_9AM);
+    expect((await daylight.tick(EDT_SATURDAY_MIDNIGHT)).outcome).toBe("deleted");
+    expect(await daylight.tick(Date.parse("2026-07-18T05:00:00Z"))).toEqual({
+      outcome: "skipped",
+      reason: "not-due",
+    });
+
+    const standard = jobs("est-midnight");
+    await standard.tick(Date.parse("2026-01-12T14:00:00Z"));
+    expect(await standard.tick(Date.parse("2026-01-13T04:00:00Z"))).toEqual({
+      outcome: "skipped",
+      reason: "already-posted",
+    });
+    expect((await standard.tick(Date.parse("2026-01-13T05:00:00Z"))).outcome).toBe("deleted");
   });
 
   it("retains the starter when any reply exists", async () => {
@@ -231,44 +281,68 @@ describe("JobsOfTheDay — midnight cleanup", () => {
     expect(callsTo("/api/chat.delete")).toHaveLength(0);
   });
 
-  it("fails safe on a reply-read error and retries cleanup the next hour", async () => {
+  it("fails safe on a reply-read error and retries cleanup by alarm", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FUTURE_EDT_FRIDAY_9AM);
     const stub = jobs("cleanup-retry");
-    await stub.tick(EDT_FRIDAY_9AM);
+    await stub.tick(FUTURE_EDT_FRIDAY_9AM);
     repliesError = "service_unavailable";
     recorded = [];
 
-    expect(await stub.tick(EDT_SATURDAY_MIDNIGHT)).toEqual({
+    vi.setSystemTime(FUTURE_EDT_SATURDAY_MIDNIGHT);
+    expect(await stub.tick(FUTURE_EDT_SATURDAY_MIDNIGHT)).toEqual({
       outcome: "failed",
       action: "cleanup",
-      localDate: "2026-07-17",
+      localDate: "2030-07-19",
     });
     expect(callsTo("/api/chat.delete")).toHaveLength(0);
+    expect(await alarmTime(stub)).toBe(Date.parse("2030-07-20T05:00:00Z"));
 
-    expect(await stub.tick(Date.parse("2026-07-18T05:00:00Z"))).toEqual({
-      outcome: "deleted",
-      localDate: "2026-07-17",
-    });
+    vi.setSystemTime(Date.parse("2030-07-20T05:00:00Z"));
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(callsTo("/api/chat.delete")).toHaveLength(1);
+    expect(await alarmTime(stub)).toBeNull();
   });
 
-  it("fails safe on a delete error and retries cleanup the next hour", async () => {
+  it("fails safe on a delete error and retries cleanup by alarm", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FUTURE_EDT_FRIDAY_9AM);
     const stub = jobs("delete-retry");
-    await stub.tick(EDT_FRIDAY_9AM);
+    await stub.tick(FUTURE_EDT_FRIDAY_9AM);
     deleteError = "service_unavailable";
     recorded = [];
 
-    expect(await stub.tick(EDT_SATURDAY_MIDNIGHT)).toEqual({
+    vi.setSystemTime(FUTURE_EDT_SATURDAY_MIDNIGHT);
+    expect(await stub.tick(FUTURE_EDT_SATURDAY_MIDNIGHT)).toEqual({
       outcome: "failed",
       action: "cleanup",
-      localDate: "2026-07-17",
+      localDate: "2030-07-19",
     });
     expect(callsTo("/api/chat.delete")).toHaveLength(1);
 
-    expect(await stub.tick(Date.parse("2026-07-18T05:00:00Z"))).toEqual({
-      outcome: "deleted",
-      localDate: "2026-07-17",
-    });
+    vi.setSystemTime(Date.parse("2030-07-20T05:00:00Z"));
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(callsTo("/api/chat.delete")).toHaveLength(2);
+    expect(await alarmTime(stub)).toBeNull();
+  });
+
+  it("serializes a retry alarm with the alternate cron candidate", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FUTURE_EDT_FRIDAY_9AM);
+    const stub = jobs("alarm-cron-overlap");
+    postError = "service_unavailable";
+    await stub.tick(FUTURE_EDT_FRIDAY_9AM);
+    recorded = [];
+
+    const tenAm = Date.parse("2030-07-19T14:00:00Z");
+    vi.setSystemTime(tenAm);
+    await runInDurableObject(stub, (instance) => {
+      const scheduler = instance as JobsOfTheDay;
+      return Promise.all([scheduler.alarm(), scheduler.tick(tenAm)]);
+    });
+
+    expect(jobPosts()).toHaveLength(1);
+    expect(await alarmTime(stub)).toBeNull();
   });
 
   it("serializes overlapping midnight ticks so cleanup runs only once", async () => {
@@ -295,7 +369,7 @@ describe("JobsOfTheDay — midnight cleanup", () => {
 });
 
 describe("runJobsOfTheDay", () => {
-  it("dispatches only the hourly jobs cron", async () => {
+  it("dispatches both jobs candidates and ignores hourly and reminder crons", async () => {
     const singleton = env.JOBS_OF_THE_DAY.getByName("jobs-of-day");
     await runInDurableObject(singleton, (_instance, state) => state.storage.deleteAll());
 
@@ -303,12 +377,26 @@ describe("runJobsOfTheDay", () => {
       { cron: "0 12 * * *", scheduledTime: EDT_FRIDAY_9AM } as ScheduledController,
       env,
     );
+    await runJobsOfTheDay(
+      { cron: "0 * * * *", scheduledTime: EDT_FRIDAY_9AM } as ScheduledController,
+      env,
+    );
     expect(jobPosts()).toHaveLength(0);
 
     await runJobsOfTheDay(
-      { cron: JOBS_OF_DAY_CRON, scheduledTime: EDT_FRIDAY_9AM } as ScheduledController,
+      { cron: JOBS_OF_DAY_CRONS[1], scheduledTime: EDT_FRIDAY_9AM } as ScheduledController,
       env,
     );
     expect(jobPosts()).toHaveLength(1);
+
+    recorded = [];
+    await runJobsOfTheDay(
+      {
+        cron: JOBS_OF_DAY_CRONS[0],
+        scheduledTime: EDT_SATURDAY_MIDNIGHT,
+      } as ScheduledController,
+      env,
+    );
+    expect(callsTo("/api/chat.delete")).toHaveLength(1);
   });
 });

@@ -6,10 +6,11 @@ import { log, setLogLevel } from "../log";
 import { createSlackClient } from "../slack/client";
 import { notifyBotLog } from "../slack/notify";
 
-/** Hourly UTC tick; local-time guards below select 9am and midnight Eastern. */
-export const JOBS_OF_DAY_CRON = "0 * * * *";
+/** UTC candidates for midnight and 9am Eastern across EST/EDT. */
+export const JOBS_OF_DAY_CRONS = ["0 4,5 * * *", "0 13,14 * * *"] as const;
 
 const ZONE = "America/New_York";
+const RETRY_INTERVAL_MS = 60 * 60 * 1000;
 const INSTANCE_NAME = "jobs-of-day";
 const ACTIVE_THREAD_KEY = "active_thread";
 const LAST_POSTED_DATE_KEY = "last_posted_date";
@@ -34,7 +35,8 @@ export type JobTickResult =
  *
  * Cron delivery and Slack calls cannot be made atomic together. The in-memory queue serializes
  * overlapping RPC calls within this singleton DO, while durable state prevents duplicate
- * successful cron deliveries and gives failed calls an hourly retry path. The active message
+ * successful cron deliveries. Normal cron candidates run four times per day so 9am and midnight
+ * stay exact across EST/EDT; failed Slack calls arm an hourly retry alarm. The active message
  * pointer also means cleanup never scans channel history.
  */
 export class JobsOfTheDay extends DurableObject<Env> {
@@ -60,11 +62,39 @@ export class JobsOfTheDay extends DurableObject<Env> {
     return (async () => {
       await previous;
       try {
-        return await this.processTick(scheduledTime);
+        const result = await this.processTick(scheduledTime);
+        await this.updateRetryAlarm(result);
+        return result;
       } finally {
         release();
       }
     })();
+  }
+
+  /** Failure-only retry path; unexpected exceptions are rethrown for Cloudflare to retry. */
+  override async alarm(): Promise<void> {
+    try {
+      const result = await this.tick(Date.now());
+      log.debug("jobs_of_day.alarm", { ...result });
+    } catch (error) {
+      log.error("jobs_of_day.alarm_failed", { error: String(error) });
+      await notifyBotLog(this.env, "jobs_of_day.alarm_failed", { error: String(error) });
+      throw error;
+    }
+  }
+
+  private async updateRetryAlarm(result: JobTickResult): Promise<void> {
+    if (result.outcome === "failed") {
+      const retryAt = Date.now() + RETRY_INTERVAL_MS;
+      await this.ctx.storage.setAlarm(retryAt);
+      log.warn("jobs_of_day.retry_scheduled", {
+        action: result.action,
+        localDate: result.localDate,
+        retryAt,
+      });
+      return;
+    }
+    await this.ctx.storage.deleteAlarm();
   }
 
   private async processTick(scheduledTime: number): Promise<JobTickResult> {
@@ -220,12 +250,12 @@ function slackError(error: unknown): string {
   return error instanceof SlackAPIError ? error.error : String(error);
 }
 
-/** Dispatch the hourly cron into the one serialized scheduler instance. */
+/** Dispatch the DST-aware UTC cron candidates into the one serialized scheduler instance. */
 export async function runJobsOfTheDay(
   controller: ScheduledController,
   env: Env,
 ): Promise<void> {
-  if (controller.cron !== JOBS_OF_DAY_CRON) return;
+  if (!(JOBS_OF_DAY_CRONS as readonly string[]).includes(controller.cron)) return;
   try {
     const result = await env.JOBS_OF_THE_DAY.getByName(INSTANCE_NAME).tick(
       controller.scheduledTime,

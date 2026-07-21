@@ -21,15 +21,18 @@
   // Event announcements. Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST
   // (accepted DST drift). The two event expressions MUST stay byte-identical to CRON_TO_KIND in
   // src/bots/reminders/index.ts — that string is the lookup key mapping a fired cron to a
-  // reminder kind; the separate hourly expression belongs to Jobs of the Day. To disable all
-  // schedules, set this to an empty array (NOT by dropping the key —
+  // reminder kind; the separate Eastern-time candidate expressions belong to Jobs of the Day.
+  // To disable all schedules, set this to an empty array (NOT by dropping the key —
   // deploying [] removes any crons registered on Cloudflare, whereas dropping the key
   // entirely would leave them running).
   // "0 12 * * *" — daily (summary + schedules the starting-soon messages)
   // "0 12 * * 1" — weekly (Monday summary; the daily run skips its summary that day)
-  // Jobs of the Day uses the hourly trigger plus an America/New_York guard so 9am/midnight
-  // remain exact across daylight-saving changes. Event-reminder crons remain unchanged.
-  "triggers": { "crons": ["0 * * * *", "0 12 * * *", "0 12 * * 1"] },
+  // Jobs of the Day uses UTC candidates for midnight (04:00/05:00) and 9am (13:00/14:00),
+  // then an America/New_York guard selects the correct EST/EDT run. Slack failures retry through
+  // a Durable Object alarm instead of an hourly cron. Event-reminder crons remain unchanged.
+  "triggers": {
+    "crons": ["0 4,5 * * *", "0 13,14 * * *", "0 12 * * *", "0 12 * * 1"]
+  },
 
   "observability": { "enabled": true },
 

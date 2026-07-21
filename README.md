@@ -12,7 +12,7 @@ Jobs of the Day thread.
 | **Welcome** | Slack `team_join` event | DMs new members a welcome message. |
 | **App Home** | Slack `app_home_opened` event | Publishes the bot's App Home tab. |
 | **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee CMS (GraphQL), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel. Crons are live (daily + weekly); `/vc-bot-admin` can also fire a run manually. |
-| **Jobs of the Day** | Hourly cron with Eastern-time guards | Posts one weekday thread starter at 9am Eastern. At the following midnight it deletes the starter if it has no replies, or retains it when anyone replied. |
+| **Jobs of the Day** | Four daily UTC candidates with Eastern-time guards | Posts one weekday thread starter at 9am Eastern. At the following midnight it deletes the starter if it has no replies, or retains it when anyone replied. Slack failures retry through a Durable Object alarm. |
 
 There's also a `/vc-bot-admin` slash command for manual previews and admin actions
 (e.g. `daily` / `weekly` to fire an announcement run now, or `coworking invite`).
@@ -56,9 +56,10 @@ Correlating Zoom participants back to Slack members is best-effort by display na
 
 **Jobs of the Day has a serialized scheduler.** The singleton `JobsOfTheDay` Durable Object
 queues overlapping ticks while Slack requests are pending, remembers the current thread, prevents
-duplicate successful cron deliveries, and safely retries Slack failures. An hourly UTC cron is
-converted to `America/New_York`, so the weekday 9am post and next-midnight cleanup follow EST/EDT
-without changing cron expressions.
+duplicate successful cron deliveries, and safely retries Slack failures. UTC cron candidates at
+04:00/05:00 (midnight) and 13:00/14:00 (9am) are converted to `America/New_York`; local-time guards
+select the correct candidate so the post and cleanup follow EST/EDT exactly. Only failures arm an
+hourly Durable Object retry alarm.
 
 ## Project layout
 
@@ -137,7 +138,9 @@ Config and secrets are split deliberately:
   must stay byte-identical to `CRON_TO_KIND` in `src/bots/reminders/index.ts` — the fired
   cron string is the lookup key for the reminder kind. Those are `0 12 * * *` (daily) and
   `0 12 * * 1` (weekly), both at 12:00 UTC (8am EDT / 7am EST). Jobs of the Day uses
-  `0 * * * *`; its handler selects weekday 9am and midnight in `America/New_York`. The per-event
+  `0 4,5 * * *` and `0 13,14 * * *`; its handler selects the correct midnight and weekday 9am
+  candidate in `America/New_York`, yielding four lightweight invocations but only two effective
+  runs per day. Slack failures retry hourly through a Durable Object alarm. The per-event
   starting-soon messages need no extra cron granularity because the daily run schedules them
   via Slack's `chat.scheduleMessage`. The crons are **live**. To disable, set `triggers.crons`
   to an empty array `[]` — deploying `[]` deregisters any crons already on Cloudflare, whereas

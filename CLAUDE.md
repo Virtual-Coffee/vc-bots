@@ -99,12 +99,14 @@ joiners); uncorrelated people show as external guests. Personal `join_url`s and 
 tokens that resolve to them carry a join credential — **never log them**.
 
 **Jobs of the Day** (`src/bots/jobs-of-day.ts`) uses a singleton `JobsOfTheDay` Durable Object.
-The hourly UTC cron calls `tick(scheduledTime)`; Luxon converts that timestamp to
-`America/New_York`, posting at weekday 9am and checking the prior thread after midnight. The DO
+UTC cron candidates at 04:00/05:00 and 13:00/14:00 call `tick(scheduledTime)`; Luxon converts each
+timestamp to `America/New_York`, and local guards select midnight and weekday 9am across EST/EDT.
+This yields four lightweight cron invocations and two runs per day. The DO
 queues overlapping ticks in memory so Slack fetches cannot interleave, and stores the active
 channel/`ts`, last-posted date, and pending retry state so duplicate ticks are idempotent and Slack
-failures retry hourly. Cleanup calls `conversations.replies` with `limit: 2`: any reply retains the
-root, while a reply-free root is deleted with `chat.delete`. Inspection errors always fail safe.
+failures arm an hourly Durable Object retry alarm. Cleanup calls `conversations.replies` with
+`limit: 2`: any reply retains the root, while a reply-free root is deleted with `chat.delete`.
+Inspection errors always fail safe.
 The private channel requires `chat:write`, `groups:history`, bot membership, and
 `SLACK_JOBS_CHANNEL_ID`.
 
@@ -119,8 +121,8 @@ come through the `EventSource` abstraction (`source.ts`); the CMS GraphQL adapte
 (`sources/cms.ts`) is the only source today — a Google Calendar source is planned. ⚠️ The cron
 strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
 wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. The
-additional `0 * * * *` trigger belongs to Jobs of the Day and is intentionally absent from
-`CRON_TO_KIND`. Event crons
+additional `0 4,5 * * *` and `0 13,14 * * *` triggers belong to Jobs of the Day and are
+intentionally absent from `CRON_TO_KIND`. Event crons
 fire in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * 1` weekly). To disable, set
 `triggers.crons: []` — deploying an empty array deregisters crons already on Cloudflare, whereas
 deleting the key would leave them running. The same `sendReminder` is reused by the
