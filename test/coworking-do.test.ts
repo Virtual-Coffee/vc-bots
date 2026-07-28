@@ -118,6 +118,10 @@ describe("CoworkingRoom — room message lifecycle", () => {
     const update = callsTo("/api/chat.update").at(-1)!;
     expect(new URLSearchParams(update.body).get("ts")).toBe(STARTED_TS);
     expect(new URLSearchParams(update.body).get("blocks") ?? "").toContain("coworking_join");
+    // The open room carries the session start time, from the meeting.started event ts.
+    expect(new URLSearchParams(update.body).get("blocks") ?? "").toContain(
+      "Session started at <!date^1700000000^{time}|",
+    );
 
     // The session reuses the invite's ts as its tracked message.
     expect((await sessions(stub))[0]?.slack_message_ts).toBe(STARTED_TS);
@@ -218,6 +222,9 @@ describe("CoworkingRoom — room message lifecycle", () => {
     expect(ended).toContain("session has ended");
     expect(ended).toContain("1h 30m"); // total session length
     expect(ended).toContain("*Peak:* 2"); // peak concurrent attendance (section field)
+    // Session bookends, threaded from session.started_at + the ended event's ts.
+    expect(ended).toContain(`*Started:* <!date^${t0 / 1000}^{time}|`);
+    expect(ended).toContain(`*Ended:* <!date^${(t0 + 90 * 60_000) / 1000}^{time}|`);
     // Deduped roster: Ada as a member mention, Bob as a guest name — both retained though Ada left.
     expect(ended).toContain("<@U777>");
     expect(ended).toContain("Bob");

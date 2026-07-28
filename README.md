@@ -121,7 +121,9 @@ Config and secrets are split deliberately:
 - **Cron triggers** fire in **UTC**. The cron strings in `wrangler.jsonc` `triggers.crons`
   must stay byte-identical to `CRON_TO_KIND` in `src/bots/reminders/index.ts` — the fired
   cron string is the lookup key for the reminder kind. Two crons drive everything: `0 12 * * *`
-  (daily) and `0 12 * * 1` (weekly), both at 12:00 UTC (8am EDT / 7am EST). The per-event
+  (daily) and `0 12 * * MON` (weekly), both at 12:00 UTC (8am EDT / 7am EST). Cloudflare parses
+  weekdays Quartz-style (`1` = Sunday … `7` = Saturday, unlike Unix cron's `0` = Sunday), so
+  weekdays are spelled as 3-letter abbreviations to keep the intended day unambiguous. The per-event
   starting-soon messages need no extra cron granularity because the daily run schedules them
   via Slack's `chat.scheduleMessage`. The crons are **live**. To disable, set `triggers.crons`
   to an empty array `[]` — deploying `[]` deregisters any crons already on Cloudflare, whereas

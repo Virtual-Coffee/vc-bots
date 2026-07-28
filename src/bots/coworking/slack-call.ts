@@ -1,5 +1,7 @@
 import type { AnyMessageBlock, MessageAttachment } from "slack-cloudflare-workers";
+import { DateTime } from "luxon";
 import type { Env } from "../../env";
+import { dateToken } from "../../slack/date";
 import { formatDuration, roomClosedText } from "./zoom-events";
 
 /**
@@ -60,8 +62,20 @@ function presenceBlocks(present: PresenceUser[]): AnyMessageBlock[] {
   ];
 }
 
+/**
+ * A session instant as a per-viewer Slack date token. The DateTime is anchored to Eastern so the
+ * plain-text fallback reads unambiguously (`9:03 AM EDT`) for clients that can't render the token;
+ * everyone else sees their own timezone.
+ */
+function sessionTimeToken(ms: number): string {
+  return dateToken(DateTime.fromMillis(ms, { zone: "America/New_York" }), "{time}", "t ZZZZ");
+}
+
 /** End-of-session stats for the closed message. */
 export interface SessionStats {
+  /** Session bookends. Nullable — `session.started_at` is nullable in the DO schema. */
+  startedAtMs?: number | null;
+  endedAtMs?: number | null;
   durationMs: number;
   peak: number;
   /** Everyone who stopped by (deduped): members as mentions, guests as plain names. */
@@ -119,11 +133,18 @@ export function buildRoomIdleBlocks(env: Env): AnyMessageBlock[] {
 }
 
 /**
- * Channel message blocks for an open room: a full card — header, intro, the ☕ Join button
- * (per-user ephemeral), and a live presence list rendered as a rich-text bulleted roster.
- * Re-rendered on every join/leave via `chat.update`.
+ * Channel message blocks for an open room: a full card — header, intro, how long the room has been
+ * running, the ☕ Join button (per-user ephemeral), and a live presence list rendered as a
+ * rich-text bulleted roster. Re-rendered on every join/leave via `chat.update`.
+ *
+ * `startedAtMs` is omitted by the admin announce-only path, which posts a room-open message with no
+ * tracked session behind it — no session, no start time, so the line simply doesn't render.
  */
-export function buildRoomOpenBlocks(env: Env, present: PresenceUser[]): AnyMessageBlock[] {
+export function buildRoomOpenBlocks(
+  env: Env,
+  present: PresenceUser[],
+  startedAtMs?: number | null,
+): AnyMessageBlock[] {
   return [
     {
       type: "header",
@@ -133,17 +154,47 @@ export function buildRoomOpenBlocks(env: Env, present: PresenceUser[]): AnyMessa
       type: "section",
       text: { type: "mrkdwn", text: "Hop in for some focused work alongside friendly faces." },
     },
+    ...(startedAtMs
+      ? ([
+          {
+            type: "context",
+            elements: [
+              { type: "mrkdwn", text: `:clock3: Session started at ${sessionTimeToken(startedAtMs)}` },
+            ],
+          },
+        ] satisfies AnyMessageBlock[])
+      : []),
     joinButton("Join the co-working room"),
     ...presenceBlocks(present),
   ];
 }
 
 /**
- * Channel message blocks for an ended room: a full card — wrap-up header, the closed line,
- * Duration/Peak as two-column section fields, and a deduped "Dropped in" roster as fine print.
+ * Channel message blocks for an ended room: a full card — wrap-up header, the closed line, the
+ * session bookends and totals as section fields, and a deduped "Dropped in" roster as fine print.
  * No Join button — the session is over, and a fresh standing invite is posted separately.
+ *
+ * Slack flows `fields` into two columns in order, so Started/Ended/Duration/Peak reads as a 2×2
+ * grid. Each timestamp is guarded independently (`started_at` is nullable in the DO schema — the
+ * same reason `durationMs` degrades to 0); with both absent this falls back to the original
+ * Duration | Peak row.
  */
 export function buildRoomClosedBlocks(env: Env, stats: SessionStats): AnyMessageBlock[] {
+  const fields: { type: "mrkdwn"; text: string }[] = [];
+  if (stats.startedAtMs) {
+    fields.push({ type: "mrkdwn", text: `:clock3: *Started:* ${sessionTimeToken(stats.startedAtMs)}` });
+  }
+  if (stats.endedAtMs) {
+    fields.push({
+      type: "mrkdwn",
+      text: `:checkered_flag: *Ended:* ${sessionTimeToken(stats.endedAtMs)}`,
+    });
+  }
+  fields.push(
+    { type: "mrkdwn", text: `:stopwatch: *Duration:* ${formatDuration(stats.durationMs)}` },
+    { type: "mrkdwn", text: `:busts_in_silhouette: *Peak:* ${stats.peak}` },
+  );
+
   const blocks: AnyMessageBlock[] = [
     {
       type: "header",
@@ -153,13 +204,7 @@ export function buildRoomClosedBlocks(env: Env, stats: SessionStats): AnyMessage
       type: "section",
       text: { type: "mrkdwn", text: roomClosedText(env) },
     },
-    {
-      type: "section",
-      fields: [
-        { type: "mrkdwn", text: `:stopwatch: *Duration:* ${formatDuration(stats.durationMs)}` },
-        { type: "mrkdwn", text: `:busts_in_silhouette: *Peak:* ${stats.peak}` },
-      ],
-    },
+    { type: "section", fields },
   ];
   if (stats.attendees.length > 0) {
     blocks.push({
