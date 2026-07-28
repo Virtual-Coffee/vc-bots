@@ -97,6 +97,14 @@ function eventListText(events: ReminderEvent[]): string {
   return events.map((e) => `${e.title}: ${fallbackDate(e)}`).join(", ");
 }
 
+/** action_id of the Starting Soon "Join Event" button. Slack fires a `block_actions` interaction
+ *  for url buttons too, so this must stay registered in `src/slack/app.ts` — an unregistered
+ *  action 404s and Slack flags the click with a warning triangle. No lazy handler is needed: the
+ *  `url` does the navigating. ⚠️ Don't rename it to match the `coworking_*` convention —
+ *  starting-soon messages are queued a day ahead via `chat.scheduleMessage`, so already-posted
+ *  and already-scheduled buttons carry this exact string. */
+export const JOIN_EVENT_ACTION_ID = "button-join-event";
+
 /** Bold title + date token; a Join Event button only for real URLs (when asked for). */
 function titleSection(event: ReminderEvent, withButton: boolean): AnyMessageBlock {
   const text = {
@@ -113,7 +121,7 @@ function titleSection(event: ReminderEvent, withButton: boolean): AnyMessageBloc
         text: { type: "plain_text", text: "Join Event", emoji: true },
         value: `join_event_${event.id}`,
         url: link,
-        action_id: "button-join-event",
+        action_id: JOIN_EVENT_ACTION_ID,
       },
     };
   }
