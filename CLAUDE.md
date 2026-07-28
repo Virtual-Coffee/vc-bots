@@ -108,7 +108,10 @@ come through the `EventSource` abstraction (`source.ts`); the CMS GraphQL adapte
 (`sources/cms.ts`) is the only source today — a Google Calendar source is planned. ⚠️ The cron
 strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
 wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons
-fire in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * 1` weekly). To disable, set
+fire in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * MON` weekly). ⚠️ Cloudflare
+parses cron weekdays **Quartz-style — `1` = Sunday … `7` = Saturday**, not the Unix `0` = Sunday;
+spell weekdays as `MON`/`SUN` so a numeric field can't silently shift the day (Luxon's
+`weekday === 1` in `sendDaily` is ISO Monday and unrelated). To disable, set
 `triggers.crons: []` — deploying an empty array deregisters crons already on Cloudflare, whereas
 deleting the key would leave them running. The same `sendReminder` is reused by the
 `/vc-bot-admin` slash command for manual runs/previews. Failure paths that have no other surface

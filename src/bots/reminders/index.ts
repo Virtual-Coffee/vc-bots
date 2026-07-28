@@ -24,16 +24,20 @@ export type { ReminderName } from "./source";
  *   summary — except Mondays, when the weekly summary covers it (scheduling still runs).
  * - `weekly` (Mondays 12:00 UTC): posts the "This Week's Events" summary.
  *
- * Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST (accepted DST drift).
+ * Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST (accepted DST drift). Both crons
+ * are live in wrangler.jsonc.
  * ⚠️ The cron strings in `CRON_TO_KIND` MUST stay byte-identical to `triggers.crons` in
- * wrangler.jsonc. Currently DISABLED — `triggers.crons` is empty until the feature is
- * verified via `/vc-bot-admin`; restore the expressions there to go live.
+ * wrangler.jsonc — `controller.cron` is the configured expression character-for-character,
+ * so a mismatch means that reminder silently never runs.
+ * ⚠️ Cloudflare parses cron weekdays Quartz-style (1 = Sunday … 7 = Saturday), so the weekday
+ * is spelled `MON` rather than a number. Unrelated to the Luxon `weekday === 1` check in
+ * `sendDaily`, which is ISO (1 = Monday) and correct as written.
  */
 
 // Maps each cron expression → reminder name. Keys must equal wrangler.jsonc cron strings.
 const CRON_TO_KIND: Record<string, ReminderName> = {
   "0 12 * * *": "daily",
-  "0 12 * * 1": "weekly",
+  "0 12 * * MON": "weekly",
 };
 
 /** Post the starting-soon pair this many seconds before the event starts. */

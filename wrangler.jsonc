@@ -18,9 +18,12 @@
   // reminder kind. To disable, set this to an empty array (NOT by dropping the key —
   // deploying [] removes any crons registered on Cloudflare, whereas dropping the key
   // entirely would leave them running).
-  // "0 12 * * *" — daily (summary + schedules the starting-soon messages)
-  // "0 12 * * 1" — weekly (Monday summary; the daily run skips its summary that day)
-  "triggers": { "crons": ["0 12 * * *", "0 12 * * 1"] },
+  // ⚠️ Cloudflare parses weekdays Quartz-style: 1 = Sunday … 7 = Saturday, NOT the Unix
+  // convention (0 = Sunday). A numeric "1" here meant Sunday and fired the weekly a day
+  // early — always spell weekdays as 3-letter abbreviations, as Cloudflare's docs advise.
+  // "0 12 * * *"   — daily (summary + schedules the starting-soon messages)
+  // "0 12 * * MON" — weekly (Monday summary; the daily run skips its summary that day)
+  "triggers": { "crons": ["0 12 * * *", "0 12 * * MON"] },
 
   "observability": { "enabled": true },
 
