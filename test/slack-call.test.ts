@@ -33,6 +33,29 @@ describe("buildRoomOpenBlocks", () => {
     expect(empty).toMatch(/nobody/i);
     expect(empty).not.toContain("rich_text_list"); // no list when the room is empty
   });
+
+  it("shows the session start time as a per-viewer date token, above the Join button", () => {
+    const startedAt = Date.parse("2026-07-28T13:03:00Z");
+    const open = buildRoomOpenBlocks(env, [], startedAt);
+
+    const json = JSON.stringify(open);
+    // {time} only — the ended summary covers the date/duration side.
+    expect(json).toMatch(/<!date\^\d+\^\{time\}\|/); // integer token, per-viewer timezone
+    expect(json).toContain(String(Math.floor(startedAt / 1000)));
+    expect(json).toContain("Session started at");
+
+    // Session status reads before the call to action.
+    const contextIdx = open.findIndex((b) => JSON.stringify(b).includes("Session started at"));
+    const actionsIdx = open.findIndex((b) => b.type === "actions");
+    expect(contextIdx).toBeGreaterThan(-1);
+    expect(contextIdx).toBeLessThan(actionsIdx);
+  });
+
+  it("omits the start line when there's no tracked session (the admin announce path)", () => {
+    // Both the omitted and explicitly-null cases — updatePresence passes a nullable column.
+    expect(JSON.stringify(buildRoomOpenBlocks(env, []))).not.toContain("<!date");
+    expect(JSON.stringify(buildRoomOpenBlocks(env, [], null))).not.toContain("<!date");
+  });
 });
 
 describe("buildRoomIdleBlocks", () => {
@@ -96,6 +119,44 @@ describe("buildRoomClosedBlocks", () => {
     expect(blocks).toContain("<1m");
     expect(blocks).toContain("*Peak:* 0");
     expect(blocks).not.toContain("Dropped in");
+  });
+
+  it("bookends the summary with Started/Ended date tokens ahead of Duration/Peak", () => {
+    const startedAtMs = Date.parse("2026-07-28T13:03:00Z");
+    const endedAtMs = Date.parse("2026-07-28T14:33:00Z");
+    const closed = buildRoomClosedBlocks(env, {
+      startedAtMs,
+      endedAtMs,
+      durationMs: 90 * 60_000,
+      peak: 3,
+      attendees: [],
+    });
+
+    // Slack flows fields into two columns in order, so this order is what makes the 2×2 grid.
+    const fields = closed.flatMap((b) => (b.type === "section" && b.fields ? b.fields : []));
+    expect(fields.map((f) => f.text?.replace(/<!date\^\d+\^[^>]+>/, "<time>"))).toEqual([
+      ":clock3: *Started:* <time>",
+      ":checkered_flag: *Ended:* <time>",
+      ":stopwatch: *Duration:* 1h 30m",
+      ":busts_in_silhouette: *Peak:* 3",
+    ]);
+    const json = JSON.stringify(closed);
+    expect(json).toContain(String(Math.floor(startedAtMs / 1000)));
+    expect(json).toContain(String(Math.floor(endedAtMs / 1000)));
+  });
+
+  it("falls back to the Duration/Peak row when the session has no recorded start", () => {
+    // started_at is nullable in the DO schema — the same reason durationMs degrades to 0.
+    const closed = buildRoomClosedBlocks(env, {
+      startedAtMs: null,
+      endedAtMs: null,
+      durationMs: 0,
+      peak: 0,
+      attendees: [],
+    });
+    const fields = closed.flatMap((b) => (b.type === "section" && b.fields ? b.fields : []));
+    expect(fields).toHaveLength(2);
+    expect(JSON.stringify(closed)).not.toContain("<!date");
   });
 });
 

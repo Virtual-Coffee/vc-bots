@@ -1,5 +1,6 @@
 import type { AnyMessageBlock } from "slack-cloudflare-workers";
 import { DateTime } from "luxon";
+import { dateToken } from "../../slack/date";
 import { htmlToMrkdwn } from "./html-to-mrkdwn";
 import type { ReminderEvent } from "./source";
 
@@ -64,7 +65,7 @@ export function buildWeeklyMessage(events: ReminderEvent[]): ReminderMessage {
   const blocks: AnyMessageBlock[] = [
     header("📆 This Week's Events Are:"),
     ...events.map((event) =>
-      section(`*${dateToken(eventStart(event))}*\n${event.title}`),
+      section(`*${eventDateToken(event)}*\n${event.title}`),
     ),
     context("ℹ️ Links to join will be posted about 10 minutes before the event starts."),
     { type: "divider" as const },
@@ -78,13 +79,18 @@ function eventStart(event: ReminderEvent): DateTime {
   return DateTime.fromISO(event.startsAt, { zone: "utc" });
 }
 
-/** Per-viewer Slack date token (floored — Slack requires an integer timestamp). */
-function dateToken(dt: DateTime): string {
-  return `<!date^${Math.floor(dt.toSeconds())}^{date_long_pretty} {time}|${dt.toFormat("EEEE, fff")}>`;
+/** Slack display + plain-text fallback formats for an event's start. `eventStart` is UTC-zoned,
+ *  so the fallback reads in UTC. */
+const EVENT_DATE_FORMAT = "{date_long_pretty} {time}";
+const EVENT_FALLBACK_FORMAT = "EEEE, fff";
+
+/** Per-viewer Slack date token for an event's start. */
+function eventDateToken(event: ReminderEvent): string {
+  return dateToken(eventStart(event), EVENT_DATE_FORMAT, EVENT_FALLBACK_FORMAT);
 }
 
 function fallbackDate(event: ReminderEvent): string {
-  return eventStart(event).toFormat("EEEE, fff");
+  return eventStart(event).toFormat(EVENT_FALLBACK_FORMAT);
 }
 
 function eventListText(events: ReminderEvent[]): string {
@@ -95,7 +101,7 @@ function eventListText(events: ReminderEvent[]): string {
 function titleSection(event: ReminderEvent, withButton: boolean): AnyMessageBlock {
   const text = {
     type: "mrkdwn" as const,
-    text: `*${event.title}*\n${dateToken(eventStart(event))}`,
+    text: `*${event.title}*\n${eventDateToken(event)}`,
   };
   const link = event.joinLink;
   if (withButton && link && link.startsWith("http")) {

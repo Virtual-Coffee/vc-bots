@@ -296,7 +296,7 @@ export class CoworkingRoom extends DurableObject<Env> {
       const updated = await this.tryUpdateRoomMessage(
         currentTs,
         roomOpenText(this.env),
-        buildRoomOpenBlocks(this.env, []),
+        buildRoomOpenBlocks(this.env, [], startedAt),
       );
       if (updated) messageTs = currentTs;
     }
@@ -305,7 +305,7 @@ export class CoworkingRoom extends DurableObject<Env> {
       const res = await client.chat.postMessage({
         channel: this.env.SLACK_COWORKING_CHANNEL_ID,
         text: roomOpenText(this.env),
-        blocks: buildRoomOpenBlocks(this.env, []),
+        blocks: buildRoomOpenBlocks(this.env, [], startedAt),
       });
       messageTs = res.ts ?? null;
       if (res.ts) await this.ctx.storage.put(ROOM_MESSAGE_KEY, res.ts);
@@ -448,6 +448,8 @@ export class CoworkingRoom extends DurableObject<Env> {
   private async closeSession(session: SessionRow, endedAt: number): Promise<void> {
     if (session.slack_message_ts) {
       const stats = {
+        startedAtMs: session.started_at,
+        endedAtMs: endedAt,
         durationMs: session.started_at ? Math.max(0, endedAt - session.started_at) : 0,
         peak: session.peak_participants ?? 0,
         attendees: this.buildRoster(session.instance_uuid),
@@ -499,7 +501,7 @@ export class CoworkingRoom extends DurableObject<Env> {
     await this.tryUpdateRoomMessage(
       session.slack_message_ts,
       roomOpenText(this.env),
-      buildRoomOpenBlocks(this.env, present),
+      buildRoomOpenBlocks(this.env, present, session.started_at),
     );
   }
 
