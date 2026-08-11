@@ -38,10 +38,6 @@ export function roomOpenText(env: Env): string {
   return `:coffee: The *${env.ROOM_TITLE}* is now open! Tap Join to hop in.`;
 }
 
-export function roomIdleText(env: Env): string {
-  return `:coffee: The *${env.ROOM_TITLE}* is quiet right now — be the first to hop in and start a session!`;
-}
-
 export function roomClosedText(env: Env): string {
   return `:zzz: The *${env.ROOM_TITLE}* session has ended. Start a new one any time!`;
 }

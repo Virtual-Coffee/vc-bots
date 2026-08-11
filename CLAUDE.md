@@ -80,10 +80,16 @@ runtime to bind it. Schema (`session` / `member_link` / `participant` / `invite_
 idempotently in `migrate()` under `blockConcurrencyWhile`. A stale-session `alarm()` force-closes sessions that
 never received `meeting.ended`.
 
-The room is a self-managed channel message (no native Slack Call widget): Zoom `meeting.started`
-→ post (or update the standing invite into) the open-room message; `participant_joined/left` →
-edit its live presence list; `meeting.ended` → edit into a stats summary + post a fresh invite.
-Joining is per-user: the message's Join button mints a personal Zoom **invite link**
+The room is a self-managed channel message (no native Slack Call widget), **one message per
+session**: Zoom `meeting.started` → **always `chat.postMessage`** a new open-room message (never an
+edit — only a fresh post makes Slack notify the channel that the room opened);
+`participant_joined/left` → edit its live presence list; `meeting.ended` → edit into a stats summary
+that also carries the "start a new session" CTA (`buildRoomClosedBlocks(..., { invite: true })`, the
+default). That ended card is the standing invite until the next start, which posts its own message
+and then `retireLastCta()` re-renders the old card with `{ invite: false }` so only one live CTA
+exists at a time. The retire path re-renders from the `SessionStats` cached in DO storage under
+`last_closed_message` — `participant` rows are deleted at close, so the roster can't be re-derived
+from SQL. Joining is per-user: the message's Join button mints a personal Zoom **invite link**
 (`src/zoom/invite-links.ts`, name pre-filled — no registration, requires the meeting to not
 require registration) and replies via `response_url` with an **ephemeral message** carrying
 ☕ Join / Cancel buttons; clicking either deletes the ephemeral (`delete_original`), so the

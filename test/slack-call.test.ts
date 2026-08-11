@@ -5,7 +5,6 @@ import {
   JOIN_REDIRECT_ACTION_ID,
   buildJoinEphemeralAttachments,
   buildRoomClosedBlocks,
-  buildRoomIdleBlocks,
   buildRoomOpenBlocks,
 } from "../src/bots/coworking/slack-call";
 import { formatDuration } from "../src/bots/coworking/zoom-events";
@@ -58,17 +57,6 @@ describe("buildRoomOpenBlocks", () => {
   });
 });
 
-describe("buildRoomIdleBlocks", () => {
-  it("invites starting a session with the ephemeral-trigger Join button", () => {
-    const idle = buildRoomIdleBlocks(env);
-    expect(idle[0]?.type).toBe("header");
-    const blocks = JSON.stringify(idle);
-    expect(blocks).toContain("Start the co-working room");
-    expect(blocks).toContain(JOIN_ACTION_ID);
-    expect(blocks).not.toContain('"url"');
-  });
-});
-
 describe("buildJoinEphemeralAttachments", () => {
   it("pairs a ☕ Join url button (the redirect, not a Zoom link) with a Cancel button", () => {
     const redirect = "https://bots.example/join/abc123abc123abc1";
@@ -96,7 +84,7 @@ describe("buildJoinEphemeralAttachments", () => {
 });
 
 describe("buildRoomClosedBlocks", () => {
-  it("summarises length, peak, and a deduped roster — no Join button", () => {
+  it("summarises length, peak, and a deduped roster, then invites the next session", () => {
     const closed = buildRoomClosedBlocks(env, {
       durationMs: 90 * 60_000,
       peak: 3,
@@ -109,7 +97,27 @@ describe("buildRoomClosedBlocks", () => {
     expect(blocks).toContain("Dropped in (2)"); // roster label + size
     expect(blocks).toContain("<@U1>"); // member mention
     expect(blocks).toContain("Ben"); // guest name
-    expect(blocks).not.toContain(JOIN_ACTION_ID); // session is over
+    // The ended card doubles as the standing invite, so the next session starts from here.
+    expect(blocks).toContain("Start the co-working room");
+    expect(blocks).toContain(JOIN_ACTION_ID);
+    expect(blocks).not.toContain('"url"'); // per-user link comes from the ephemeral, not the button
+    expect(closed.at(-1)?.type).toBe("actions"); // the CTA closes out the card
+    expect(closed.at(-2)?.type).toBe("section"); // …under its nudge line
+    expect(closed.at(-3)?.type).toBe("divider"); // …separated from the stats
+  });
+
+  it("drops the CTA when the card is retired by a newer session", () => {
+    const stats = {
+      durationMs: 90 * 60_000,
+      peak: 3,
+      attendees: [{ slackUserId: "U1" }],
+    };
+    const retired = JSON.stringify(buildRoomClosedBlocks(env, stats, { invite: false }));
+    expect(retired).toContain("*Duration:* 1h 30m"); // the stats stay in channel history…
+    expect(retired).toContain("Dropped in (1)");
+    expect(retired).not.toContain(JOIN_ACTION_ID); // …only the live CTA moves on
+    expect(retired).not.toContain("Start the co-working room");
+    expect(retired).not.toContain("divider");
   });
 
   it("omits the roster line when nobody was recorded", () => {

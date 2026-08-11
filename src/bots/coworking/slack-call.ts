@@ -110,27 +110,9 @@ function joinButton(label: string): AnyMessageBlock {
   } as AnyMessageBlock;
 }
 
-/**
- * Channel message blocks for an idle room: a full card — header, a gentle nudge inviting
- * someone to start a session, and the Join button (no live Call yet — that arrives with
- * `meeting.started`).
- */
-export function buildRoomIdleBlocks(env: Env): AnyMessageBlock[] {
-  return [
-    {
-      type: "header",
-      text: { type: "plain_text", text: `☕ ${env.ROOM_TITLE}`, emoji: true },
-    },
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: "The room is quiet right now — be the first to hop in and start a session!",
-      },
-    },
-    joinButton("Start the co-working room"),
-  ];
-}
+/** The nudge above the ended message's "start the next session" button. */
+const ROOM_INVITE_NUDGE =
+  "The room's quiet now — be the first to hop in and start the next session!";
 
 /**
  * Channel message blocks for an open room: a full card — header, intro, how long the room has been
@@ -172,14 +154,23 @@ export function buildRoomOpenBlocks(
 /**
  * Channel message blocks for an ended room: a full card — wrap-up header, the closed line, the
  * session bookends and totals as section fields, and a deduped "Dropped in" roster as fine print.
- * No Join button — the session is over, and a fresh standing invite is posted separately.
+ *
+ * The ended message is also where the next session begins: by default it carries the invite CTA
+ * (nudge + Join button) below the stats, so there's no separate standing-invite message and the
+ * next `meeting.started` can post a *fresh* message — which is what makes Slack notify the channel
+ * that the room opened. Pass `{ invite: false }` to render the stats alone; that's how the previous
+ * session's card is retired once a new session takes over as the live CTA.
  *
  * Slack flows `fields` into two columns in order, so Started/Ended/Duration/Peak reads as a 2×2
  * grid. Each timestamp is guarded independently (`started_at` is nullable in the DO schema — the
  * same reason `durationMs` degrades to 0); with both absent this falls back to the original
  * Duration | Peak row.
  */
-export function buildRoomClosedBlocks(env: Env, stats: SessionStats): AnyMessageBlock[] {
+export function buildRoomClosedBlocks(
+  env: Env,
+  stats: SessionStats,
+  { invite = true }: { invite?: boolean } = {},
+): AnyMessageBlock[] {
   const fields: { type: "mrkdwn"; text: string }[] = [];
   if (stats.startedAtMs) {
     fields.push({ type: "mrkdwn", text: `:clock3: *Started:* ${sessionTimeToken(stats.startedAtMs)}` });
@@ -216,6 +207,13 @@ export function buildRoomClosedBlocks(env: Env, stats: SessionStats): AnyMessage
         },
       ],
     });
+  }
+  if (invite) {
+    blocks.push(
+      { type: "divider" },
+      { type: "section", text: { type: "mrkdwn", text: ROOM_INVITE_NUDGE } },
+      joinButton("Start the co-working room"),
+    );
   }
   return blocks;
 }

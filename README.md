@@ -7,13 +7,13 @@ co-working room, the new-member welcome, the App Home tab, and event announcemen
 
 | Bot | Trigger | Behavior |
 | --- | --- | --- |
-| **Co-working room** | Zoom webhooks + a Slack Join button | Keeps a live "open room" message in the co-working channel: who's in the room, a ☕ Join button that hands each member a personal Zoom invite link, and a stats summary when the meeting ends. |
+| **Co-working room** | Zoom webhooks + a Slack Join button | Posts a fresh "open room" message in the co-working channel each time a session starts (so the channel gets notified): who's in the room, a ☕ Join button that hands each member a personal Zoom invite link, and a stats summary when the meeting ends — which also carries the button that starts the next session. |
 | **Welcome** | Slack `team_join` event | DMs new members a welcome message. |
 | **App Home** | Slack `app_home_opened` event | Publishes the bot's App Home tab. |
 | **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee CMS (GraphQL), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel. Crons are live (daily + weekly); `/vc-bot-admin` can also fire a run manually. |
 
 There's also a `/vc-bot-admin` slash command for manual previews and admin actions
-(e.g. `daily` / `weekly` to fire an announcement run now, or `coworking invite`).
+(e.g. `daily` / `weekly` to fire an announcement run now, or `coworking open`).
 
 ## Architecture at a glance
 
@@ -35,10 +35,13 @@ there's no signature to check), and `GET /health`. Every provider route:
 **The co-working room is the one stateful piece.** `CoworkingRoom`
 (`src/bots/coworking/durable-object.ts`) is a SQLite-backed Durable Object, one instance per
 Zoom meeting ID. Routing all of a meeting's webhooks through a single instance serializes them,
-eliminating eventual-consistency races. Zoom `meeting.started` posts (or updates the standing
-invite into) the open-room message; `participant_joined/left` edit its live presence list;
-`meeting.ended` turns it into a stats summary and posts a fresh invite. A stale-session alarm
-force-closes sessions whose `meeting.ended` webhook never arrived.
+eliminating eventual-consistency races. Zoom `meeting.started` **posts a new** open-room message
+— a fresh post is what makes Slack notify the channel that the room opened, where an edit would be
+silent; `participant_joined/left` edit its live presence list; `meeting.ended` turns it into a stats
+summary that also carries the "start a new session" button. That ended card *is* the standing
+invite: the next `meeting.started` posts its own message and strips the button off the old one, so
+exactly one live CTA exists at a time. A stale-session alarm force-closes sessions whose
+`meeting.ended` webhook never arrived.
 
 **Joining is per-user.** The message's Join button mints a personal Zoom invite link
 (`src/zoom/invite-links.ts`) with the member's name pre-filled — no Zoom registration involved
