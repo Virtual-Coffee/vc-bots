@@ -30,7 +30,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.10",
     "@types/luxon": "^3.7.1",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.0",
     "wrangler": "^4.95.0"
   },
