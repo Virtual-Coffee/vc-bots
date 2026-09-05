@@ -1,6 +1,9 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CANCEL_ACTION_ID,
+  JOIN_REDIRECT_ACTION_ID,
+  buildJoinEphemeralAttachments,
   handleJoinClick,
   handleJoinDismiss,
   type JoinActionPayload,
@@ -76,5 +79,33 @@ describe("handleJoinDismiss", () => {
     const replies = responseUrlCalls();
     expect(replies).toHaveLength(1);
     expect(JSON.parse(replies[0]!.body)).toEqual({ delete_original: true });
+  });
+});
+
+describe("buildJoinEphemeralAttachments", () => {
+  const roomEnv = { ROOM_TITLE: "Co-Working Room" };
+
+  it("pairs a ☕ Join url button (the redirect, not a Zoom link) with a Cancel button", () => {
+    const redirect = "https://bots.example/join/abc123abc123abc1";
+    const attachments = JSON.stringify(buildJoinEphemeralAttachments(roomEnv, redirect));
+    expect(attachments).toContain(JOIN_REDIRECT_ACTION_ID);
+    expect(attachments).toContain(CANCEL_ACTION_ID);
+    expect(attachments).toContain(redirect); // the button url is the Worker redirect…
+    expect(attachments).not.toContain("zoom.us"); // …never the token-bearing Zoom url
+    expect(attachments).toContain("Code of Conduct");
+  });
+
+  it("renders as one color-bar invitation: header up top, CoC section above the buttons", () => {
+    const attachments = buildJoinEphemeralAttachments(
+      roomEnv,
+      "https://bots.example/join/abc123abc123abc1",
+    );
+    expect(attachments).toHaveLength(1);
+    const invite = attachments[0];
+    // The accent bar (card and alert blocks are rejected in messages — color is the standout).
+    expect(invite?.color).toBe("#d9376e");
+    expect(invite?.fallback).toContain(roomEnv.ROOM_TITLE);
+    const types = invite?.blocks?.map((b) => b.type);
+    expect(types).toEqual(["header", "section", "section", "actions"]);
   });
 });

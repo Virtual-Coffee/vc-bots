@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { JOIN_REDIRECT_ACTION_ID } from "../src/bots/coworking/join";
 import {
-  CANCEL_ACTION_ID,
   JOIN_ACTION_ID,
-  JOIN_REDIRECT_ACTION_ID,
-  buildJoinEphemeralAttachments,
   buildRoomClosedBlocks,
   buildRoomOpenBlocks,
 } from "../src/bots/coworking/slack-call";
@@ -54,32 +52,6 @@ describe("buildRoomOpenBlocks", () => {
     // Both the omitted and explicitly-null cases — updatePresence passes a nullable column.
     expect(JSON.stringify(buildRoomOpenBlocks(env, []))).not.toContain("<!date");
     expect(JSON.stringify(buildRoomOpenBlocks(env, [], null))).not.toContain("<!date");
-  });
-});
-
-describe("buildJoinEphemeralAttachments", () => {
-  it("pairs a ☕ Join url button (the redirect, not a Zoom link) with a Cancel button", () => {
-    const redirect = "https://bots.example/join/abc123abc123abc1";
-    const attachments = JSON.stringify(buildJoinEphemeralAttachments(env, redirect));
-    expect(attachments).toContain(JOIN_REDIRECT_ACTION_ID);
-    expect(attachments).toContain(CANCEL_ACTION_ID);
-    expect(attachments).toContain(redirect); // the button url is the Worker redirect…
-    expect(attachments).not.toContain("zoom.us"); // …never the token-bearing Zoom url
-    expect(attachments).toContain("Code of Conduct");
-  });
-
-  it("renders as one color-bar invitation: header up top, CoC section above the buttons", () => {
-    const attachments = buildJoinEphemeralAttachments(
-      env,
-      "https://bots.example/join/abc123abc123abc1",
-    );
-    expect(attachments).toHaveLength(1);
-    const invite = attachments[0];
-    // The accent bar (card and alert blocks are rejected in messages — color is the standout).
-    expect(invite?.color).toBe("#d9376e");
-    expect(invite?.fallback).toContain(env.ROOM_TITLE);
-    const types = invite?.blocks?.map((b) => b.type);
-    expect(types).toEqual(["header", "section", "section", "actions"]);
   });
 });
 
