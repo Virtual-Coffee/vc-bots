@@ -23,7 +23,7 @@ import {
   handleJoinClick,
   handleJoinDismiss,
 } from "../bots/coworking/join";
-import { JOIN_ACTION_ID } from "../bots/coworking/slack-call";
+import { JOIN_ACTION_ID } from "../bots/coworking/room-message";
 import { JOIN_EVENT_ACTION_ID } from "../bots/reminders/blocks";
 import { handleTeamJoin } from "../bots/welcome";
 import type { Env } from "../env";

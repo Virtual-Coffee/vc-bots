@@ -1,10 +1,9 @@
-import type { Env } from "../../env";
 import type { ZoomMeetingEvent, ZoomParticipant } from "../../zoom/types";
 
 /**
- * Pure helpers for interpreting Zoom meeting events and building the parity (plain-message)
- * co-working notifications. The Durable Object (durable-object.ts) owns the state machine and
- * Slack I/O; these are the side-effect-free bits, kept here so they're easy to unit-test.
+ * Pure helpers for interpreting Zoom meeting events. The Durable Object (durable-object.ts) owns
+ * the session state machine and `RoomMessage` (room-message.ts) the channel message; these are
+ * the side-effect-free bits, kept here so they're easy to unit-test.
  */
 
 export interface ParticipantIdentity {
@@ -30,25 +29,4 @@ export function participantIdentity(p: ZoomParticipant): ParticipantIdentity {
     zoomUserId,
     displayName: p.user_name?.trim() || "A guest",
   };
-}
-
-// --- Parity message copy ---
-
-export function roomOpenText(env: Env): string {
-  return `:coffee: The *${env.ROOM_TITLE}* is now open! Tap Join to hop in.`;
-}
-
-export function roomClosedText(env: Env): string {
-  return `:zzz: The *${env.ROOM_TITLE}* session has ended. Start a new one any time!`;
-}
-
-/** Human-friendly session length: `"1h 23m"`, `"45m"`, or `"<1m"` for anything under a minute. */
-export function formatDuration(ms: number): string {
-  const totalMinutes = Math.floor(ms / 60_000);
-  if (totalMinutes < 1) return "<1m";
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours === 0) return `${minutes}m`;
-  if (minutes === 0) return `${hours}h`;
-  return `${hours}h ${minutes}m`;
 }

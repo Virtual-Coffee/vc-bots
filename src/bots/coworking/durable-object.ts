@@ -1,37 +1,27 @@
 import { DurableObject } from "cloudflare:workers";
-import { SlackAPIError, type AnyMessageBlock } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
-import { createSlackClient } from "../../slack/client";
 import { getCachedZoomToken } from "../../zoom/oauth";
 import { createInviteLink } from "../../zoom/invite-links";
 import type { ZoomMeetingEvent } from "../../zoom/types";
 import {
   type PresenceUser,
+  RoomMessage,
   type SessionStats,
-  buildRoomClosedBlocks,
-  buildRoomOpenBlocks,
-} from "./slack-call";
-import {
-  eventTimeMs,
-  instanceUuid,
-  participantIdentity,
-  roomClosedText,
-  roomOpenText,
-} from "./zoom-events";
+  createSlackRoomChannelPort,
+} from "./room-message";
+import { eventTimeMs, instanceUuid, participantIdentity } from "./zoom-events";
 
 /**
  * Co-working room — one Durable Object instance per Zoom meeting ID. All events for a meeting
  * serialize through this single instance, so the session row is always written before a join
  * is processed (no eventual-consistency race).
  *
- * Mints per-user Zoom invite links (name pre-filled), posts a self-managed room message, and keeps
- * its presence list in sync as people join/leave.
- *
- * Message lifecycle: each `meeting.started` posts a NEW channel message (so Slack notifies the
- * channel that the room is open), edits it in place through the session's joins and leaves, and on
- * close turns it into the stats summary — which also carries the "start a new session" button until
- * the next session start strips it. One message per session, one live CTA at a time.
+ * The DO owns the session state machine (the `session` / `participant` / `member_link` /
+ * `invite_link` tables, the stale-session alarm, and the join tokens) and mints per-user Zoom
+ * invite links. Everything about the room message — the cards, the copy, the standing-invite
+ * hand-off between sessions and announcements — is delegated to `RoomMessage`; the DO only
+ * remembers each session's message ts and tells RoomMessage what happened.
  */
 
 /** Force-end a session this long after it started if `meeting.ended` was never received. */
@@ -46,22 +36,6 @@ function randomToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
-
-/** DO storage key for the ts of an admin-posted (announce-only) room message. */
-const ADMIN_ANNOUNCEMENT_KEY = "admin_announcement_ts";
-
-/**
- * DO storage key for the last ended-session message — the one carrying the live "start a new
- * session" CTA until the next `meeting.started` retires it. The cached value is the `SessionStats`
- * rather than rendered blocks: `participant` rows are deleted at close, so the card can't be
- * re-derived from SQL later, and stats survive future block-shape changes.
- */
-const LAST_CLOSED_KEY = "last_closed_message";
-
-/** Storage key of the retired standing-invite pointer, cleaned up on the next session start. */
-const LEGACY_ROOM_MESSAGE_KEY = "idle_invite_ts";
-
-type LastClosed = { ts: string; stats: SessionStats };
 
 // Type aliases (not interfaces) so they satisfy `exec<T>`'s `Record<string, SqlStorageValue>`.
 type SessionRow = {
@@ -91,11 +65,13 @@ type ParticipantRow = {
 
 export class CoworkingRoom extends DurableObject<Env> {
   private readonly sql: SqlStorage;
+  private readonly roomMessage: RoomMessage;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     setLogLevel(env.LOG_LEVEL); // the DO runs in its own isolate
     this.sql = ctx.storage.sql;
+    this.roomMessage = new RoomMessage(createSlackRoomChannelPort(env), ctx.storage, env);
     ctx.blockConcurrencyWhile(async () => this.migrate());
   }
 
@@ -214,31 +190,16 @@ export class CoworkingRoom extends DurableObject<Env> {
   }
 
   /**
-   * Admin (`/vc-bot-admin coworking open`) announce-only: post a plain room-open message — the
-   * Join button still works, but there's no tracked session, so this never
-   * collides with the Zoom-driven flow. Remembers the message ts so `close` can update it.
+   * Admin (`/vc-bot-admin coworking open`): post an announcement — a room message with no
+   * session behind it, so it never collides with the Zoom-driven flow.
    */
   async adminAnnounceOpen(): Promise<void> {
-    const res = await createSlackClient(this.env).chat.postMessage({
-      channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-      text: roomOpenText(this.env),
-      blocks: buildRoomOpenBlocks(this.env, []),
-    });
-    if (res.ts) await this.ctx.storage.put(ADMIN_ANNOUNCEMENT_KEY, res.ts);
-    log.info("coworking.admin_announce", { action: "open", ts: res.ts });
+    await this.roomMessage.announceOpen();
   }
 
-  /** Admin (`/vc-bot-admin coworking close`): update the last announce-only message to ended. */
+  /** Admin (`/vc-bot-admin coworking close`): turn the open announcement into an ended card. */
   async adminAnnounceClose(): Promise<{ closed: boolean }> {
-    const ts = await this.ctx.storage.get<string>(ADMIN_ANNOUNCEMENT_KEY);
-    if (!ts) return { closed: false };
-    // Either way the pointer is spent: a vanished announcement counts as "nothing to close".
-    const closed = await this.tryUpdateRoomMessage(ts, roomClosedText(this.env), [
-      { type: "section", text: { type: "mrkdwn", text: roomClosedText(this.env) } },
-    ]);
-    await this.ctx.storage.delete(ADMIN_ANNOUNCEMENT_KEY);
-    log.info("coworking.admin_announce", { action: "close", closed });
-    return { closed };
+    return this.roomMessage.announceClose();
   }
 
   async handleZoomEvent(event: ZoomMeetingEvent): Promise<void> {
@@ -276,8 +237,8 @@ export class CoworkingRoom extends DurableObject<Env> {
     // A different instance is still marked active — its meeting.ended never arrived (e.g. the
     // worker wasn't reachable). One Zoom meeting ID has at most one live instance, and duplicate
     // start webhooks reuse the same uuid (deduped above), so a start with a NEW uuid proves the
-    // old session is dead. Close it now (stats summary) instead of leaving the room wedged until
-    // the 18h stale-session alarm; its CTA is retired below like any other previous session's.
+    // old session is stale. Close it now (ended card) instead of leaving the room wedged until
+    // the 18h stale-session alarm; its standing invite is retired below like any previous card's.
     const staleSessions = this.sql
       .exec<SessionRow>("SELECT * FROM session WHERE status = 'active'")
       .toArray();
@@ -286,18 +247,8 @@ export class CoworkingRoom extends DurableObject<Env> {
       await this.closeSession(stale, startedAt);
     }
 
-    const client = createSlackClient(this.env);
-
-    // Always a NEW message, never an edit of the previous session's card: a fresh post is what
-    // makes Slack notify the channel that the room just opened (an edit is silent).
     log.debug("coworking.started.post", { instance: uuid });
-    const res = await client.chat.postMessage({
-      channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-      text: roomOpenText(this.env),
-      blocks: buildRoomOpenBlocks(this.env, [], startedAt),
-    });
-    const messageTs = res.ts ?? null;
-    if (!res.ts) log.warn("coworking.room_msg.no_ts", { instance: uuid });
+    const messageTs = await this.roomMessage.open(startedAt);
 
     log.debug("coworking.started.session_row", { instance: uuid });
     this.sql.exec(
@@ -314,10 +265,10 @@ export class CoworkingRoom extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(Date.now() + STALE_SESSION_MS);
     log.info("coworking.started", { instance: uuid });
 
-    // Retire the previous card's CTA last: after the new message is up (so a failed post never
-    // leaves the channel with no way in) and after the session is recorded (so a failure here
-    // can't wedge the room by dropping the joins that follow).
-    await this.retireLastCta();
+    // Retire the previous standing invite last: after the new message is up (so a failed post
+    // never leaves the channel with no way in) and after the session is recorded (so a failure
+    // here can't wedge the room by dropping the joins that follow).
+    await this.roomMessage.retirePrevious();
   }
 
   private async onParticipantJoined(event: ZoomMeetingEvent): Promise<void> {
@@ -408,35 +359,6 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   // --- Helpers ---
 
-  /**
-   * `chat.update` that treats a vanished target — the message was deleted by hand, or the stored
-   * ts was minted against another channel (a stale dev pointer) — as recoverable: warn and return
-   * false so the caller can post a fresh message, instead of wedging the room on a dead ts.
-   * Any other failure still throws.
-   */
-  private async tryUpdateRoomMessage(
-    ts: string,
-    text: string,
-    blocks: AnyMessageBlock[],
-  ): Promise<boolean> {
-    try {
-      await createSlackClient(this.env).chat.update({
-        channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-        ts,
-        text,
-        blocks,
-      });
-      return true;
-    } catch (err) {
-      const code = err instanceof SlackAPIError ? err.error : String(err);
-      if (code.includes("message_not_found") || code.includes("channel_not_found")) {
-        log.warn("coworking.room_msg.stale_pointer", { ts, error: code });
-        return false;
-      }
-      throw err;
-    }
-  }
-
   private async closeSession(session: SessionRow, endedAt: number): Promise<void> {
     if (session.slack_message_ts) {
       const stats: SessionStats = {
@@ -446,22 +368,9 @@ export class CoworkingRoom extends DurableObject<Env> {
         peak: session.peak_participants ?? 0,
         attendees: this.buildRoster(session.instance_uuid),
       };
-      log.debug("coworking.end.update_msg", { ts: session.slack_message_ts, peak: stats.peak });
-      // The stats summary carries the "start a new session" CTA, so this message *is* the standing
-      // invite until the next session opens. If the room message was deleted mid-session, the
-      // warning is enough — the session must still flip to ended, and there's simply no card left
-      // to carry the CTA.
-      const updated = await this.tryUpdateRoomMessage(
-        session.slack_message_ts,
-        roomClosedText(this.env),
-        buildRoomClosedBlocks(this.env, stats),
-      );
-      if (updated) {
-        await this.ctx.storage.put<LastClosed>(LAST_CLOSED_KEY, {
-          ts: session.slack_message_ts,
-          stats,
-        });
-      }
+      // The ended card carries the standing invite. A vanished card is RoomMessage's problem to
+      // shrug at — the session must still flip to ended either way.
+      await this.roomMessage.close(session.slack_message_ts, stats);
     }
 
     this.sql.exec(
@@ -475,42 +384,8 @@ export class CoworkingRoom extends DurableObject<Env> {
   }
 
   /**
-   * Strip the invite CTA from the previous session's ended card so only one live "start a session"
-   * button exists at a time. Re-renders it from the cached stats with `{ invite: false }` — the
-   * roster is gone from SQL by now, which is why the stats ride along in storage.
-   */
-  private async retireLastCta(): Promise<void> {
-    const last = await this.ctx.storage.get<LastClosed>(LAST_CLOSED_KEY);
-    if (last) {
-      log.debug("coworking.cta.retire", { ts: last.ts });
-      await this.tryUpdateRoomMessage(
-        last.ts,
-        roomClosedText(this.env),
-        buildRoomClosedBlocks(this.env, last.stats, { invite: false }),
-      );
-      await this.ctx.storage.delete(LAST_CLOSED_KEY);
-    }
-
-    // One-shot cleanup of the retired lifecycle's standing invite: a "the room is quiet" message
-    // carries no history worth keeping, so delete it outright rather than leave a live button
-    // behind. Best-effort — a failure here must never fail the session start.
-    const legacyTs = await this.ctx.storage.get<string>(LEGACY_ROOM_MESSAGE_KEY);
-    if (legacyTs) {
-      try {
-        await createSlackClient(this.env).chat.delete({
-          channel: this.env.SLACK_COWORKING_CHANNEL_ID,
-          ts: legacyTs,
-        });
-      } catch (err) {
-        log.warn("coworking.legacy_invite.delete_failed", { ts: legacyTs, err: String(err) });
-      }
-      await this.ctx.storage.delete(LEGACY_ROOM_MESSAGE_KEY);
-    }
-  }
-
-  /**
-   * Re-render the open-room message's presence list from the live `participant` rows. Called after
-   * every join/leave; no-op if the session has no posted message to edit.
+   * Re-render the open card's presence from the live `participant` rows. Called after every
+   * join/leave; no-op if the session has no posted message to edit.
    */
   private async updatePresence(session: SessionRow): Promise<void> {
     if (!session.slack_message_ts) return;
@@ -525,14 +400,7 @@ export class CoworkingRoom extends DurableObject<Env> {
         ? { slackUserId: r.slack_user_id }
         : { displayName: r.display_name ?? "A guest" },
     );
-    log.debug("coworking.presence.update", { instance: session.instance_uuid, count: present.length });
-    // A vanished message just warns and skips — a join/leave webhook must never throw over it;
-    // closeSession / the next session will re-point the message.
-    await this.tryUpdateRoomMessage(
-      session.slack_message_ts,
-      roomOpenText(this.env),
-      buildRoomOpenBlocks(this.env, present, session.started_at),
-    );
+    await this.roomMessage.showPresence(session.slack_message_ts, present, session.started_at);
   }
 
   /**
@@ -593,5 +461,4 @@ export class CoworkingRoom extends DurableObject<Env> {
       .exec<SessionRow>("SELECT * FROM session WHERE instance_uuid = ?", uuid)
       .toArray()[0];
   }
-
 }
