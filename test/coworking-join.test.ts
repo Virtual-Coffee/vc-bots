@@ -5,39 +5,12 @@ import {
   handleJoinDismiss,
   type JoinActionPayload,
 } from "../src/bots/coworking/join";
+import { installFetchRecorder, type FetchRecorder, type RecordedCall } from "./helpers/fetch-recorder";
 
-interface RecordedCall {
-  url: string;
-  body: string;
-}
-let recorded: RecordedCall[];
+let fetched: FetchRecorder;
 
 beforeEach(() => {
-  recorded = [];
-  const spy = vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-    let url: string;
-    let body = "";
-    if (input instanceof Request) {
-      url = input.url;
-      body = new TextDecoder().decode(await input.clone().arrayBuffer());
-    } else {
-      url = String(input); // string or URL
-      body = typeof init?.body === "string" ? init.body : "";
-    }
-    recorded.push({ url, body });
-
-    if (url.includes("/api/users.profile.get")) {
-      return Response.json({ ok: true, profile: { real_name: "Ada" } });
-    }
-    if (url.includes("zoom.us/oauth/token")) {
-      return Response.json({ access_token: "zt", token_type: "bearer", expires_in: 3600 });
-    }
-    if (url.includes("api.zoom.us/v2/meetings/")) {
-      return Response.json({ attendees: [{ name: "Ada", join_url: "https://zoom.us/w/personal-9" }] });
-    }
-    return Response.json({ ok: true });
-  });
-  vi.stubGlobal("fetch", spy);
+  fetched = installFetchRecorder({ zoomJoinUrl: "https://zoom.us/w/personal-9" });
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -53,7 +26,7 @@ function payload(actionId = "coworking_join"): JoinActionPayload {
 }
 
 function responseUrlCalls(): RecordedCall[] {
-  return recorded.filter((r) => r.url === RESPONSE_URL);
+  return fetched.calls.filter((r) => r.url === RESPONSE_URL);
 }
 
 describe("handleJoinClick", () => {
@@ -80,29 +53,9 @@ describe("handleJoinClick", () => {
   });
 
   it("answers with an error ephemeral when registration fails", async () => {
-    // Re-stub: same routes, but the Zoom invite-link call now fails.
-    recorded = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-        const url = input instanceof Request ? input.url : String(input);
-        const body =
-          input instanceof Request
-            ? new TextDecoder().decode(await input.clone().arrayBuffer())
-            : typeof init?.body === "string"
-              ? init.body
-              : "";
-        recorded.push({ url, body });
-
-        if (url.includes("/api/users.profile.get")) {
-          return Response.json({ ok: true, profile: { real_name: "Ada" } });
-        }
-        if (url.includes("zoom.us/oauth/token")) {
-          return Response.json({ access_token: "zt", token_type: "bearer", expires_in: 3600 });
-        }
-        if (url.includes("api.zoom.us/v2/meetings/")) return new Response("nope", { status: 400 });
-        return Response.json({ ok: true });
-      }),
+    // Same routes, but the Zoom invite-link call now fails.
+    fetched.respondWith((call) =>
+      call.url.includes("api.zoom.us/v2/meetings/") ? new Response("nope", { status: 400 }) : undefined,
     );
 
     await handleJoinClick(payload(), env, ORIGIN);

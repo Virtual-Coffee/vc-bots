@@ -1,47 +1,17 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ZoomMeetingEventType } from "../src/zoom/types";
+import { installFetchRecorder, type FetchRecorder } from "./helpers/fetch-recorder";
 
 const STARTED_TS = "1700000000.000100";
 /** ts of the *second* message the bot posts — every session start is now its own message. */
 const SECOND_TS = "1700000001.000100";
 
-interface RecordedCall {
-  url: string;
-  body: string;
-}
-let recorded: RecordedCall[];
-/** Each `chat.postMessage` answers with its own ts, so tests can tell the cards apart. */
-let postCount: number;
+let fetched: FetchRecorder;
 
 beforeEach(() => {
-  recorded = [];
-  postCount = 0;
-  const spy = vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-    let url: string;
-    let body = "";
-    if (input instanceof Request) {
-      url = input.url;
-      body = new TextDecoder().decode(await input.clone().arrayBuffer());
-    } else {
-      url = String(input); // string or URL
-      body = typeof init?.body === "string" ? init.body : "";
-    }
-    recorded.push({ url, body });
-
-    if (url.includes("zoom.us/oauth/token")) {
-      return Response.json({ access_token: "zoom-token", token_type: "bearer", expires_in: 3600 });
-    }
-    if (url.includes("api.zoom.us/v2/meetings/")) {
-      return Response.json({ attendees: [{ name: "Member", join_url: "https://zoom.us/w/personal-1" }] });
-    }
-    if (url.includes("/api/chat.postMessage")) {
-      const ts = postCount++ === 0 ? STARTED_TS : SECOND_TS;
-      return Response.json({ ok: true, ts, channel: "C0B6C3BFEDD" });
-    }
-    return Response.json({ ok: true, ts: STARTED_TS, channel: "C0B6C3BFEDD" });
-  });
-  vi.stubGlobal("fetch", spy);
+  // Each `chat.postMessage` answers with its own ts, so tests can tell the cards apart.
+  fetched = installFetchRecorder({ postTs: [STARTED_TS, SECOND_TS] });
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -74,14 +44,8 @@ function eventAt(
 function room(name: string) {
   return env.COWORKING_ROOM.getByName(name);
 }
-function callsTo(fragment: string): RecordedCall[] {
-  return recorded.filter((r) => r.url.includes(fragment));
-}
-/** The `blocks` payload (JSON string) of the most recent call to a Slack endpoint. */
-function lastBlocks(fragment: string): string {
-  const call = callsTo(fragment).at(-1);
-  return call ? (new URLSearchParams(call.body).get("blocks") ?? "") : "";
-}
+const callsTo = (fragment: string) => fetched.callsTo(fragment);
+const lastBlocks = (fragment: string) => fetched.lastBlocks(fragment);
 async function sessions(stub: ReturnType<typeof room>) {
   return runInDurableObject(stub, (_i, state) =>
     state.storage.sql.exec("SELECT * FROM session").toArray(),
@@ -468,27 +432,17 @@ describe("CoworkingRoom — admin announce-only", () => {
 describe("CoworkingRoom — stale room-message pointer self-healing", () => {
   const FRESH_TS = "1700000099.000200";
 
-  /** Re-stub fetch so chat.update reports the target message vanished (deleted by hand). */
+  /** From here on chat.update reports the target message vanished (deleted by hand). */
   function stubVanishedMessage() {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-        let url: string;
-        let body = "";
-        if (input instanceof Request) {
-          url = input.url;
-          body = new TextDecoder().decode(await input.clone().arrayBuffer());
-        } else {
-          url = String(input);
-          body = typeof init?.body === "string" ? init.body : "";
-        }
-        recorded.push({ url, body });
-        if (url.includes("/api/chat.update")) {
-          return Response.json({ ok: false, error: "message_not_found" });
-        }
+    fetched.respondWith((call) => {
+      if (call.url.includes("/api/chat.update")) {
+        return Response.json({ ok: false, error: "message_not_found" });
+      }
+      if (call.url.includes("/api/chat.postMessage")) {
         return Response.json({ ok: true, ts: FRESH_TS, channel: "C0B6C3BFEDD" });
-      }),
-    );
+      }
+      return undefined;
+    });
   }
 
   it("survives the room message being deleted mid-session", async () => {
