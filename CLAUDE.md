@@ -140,3 +140,20 @@ client either way. All Slack imports (client, Block Kit types, payload types) co
   `import type` for type-only imports.
 - `slackify-html` is **edge-incompatible** (throws on workerd); a local `html-to-mrkdwn`
   converter replaces it. Don't re-add it.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues in `Virtual-Coffee/vc-bots`, managed with the `gh` CLI.
+See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, using their default label strings.
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root.
+See `docs/agents/domain.md`.
