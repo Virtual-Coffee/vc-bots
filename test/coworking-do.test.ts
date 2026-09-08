@@ -1,38 +1,23 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ZoomMeetingEventType } from "../src/zoom/types";
+import { installFetchRecorder, type FetchRecorder } from "./helpers/fetch-recorder";
+
+/**
+ * The co-working room end to end: real DO, real Slack adapter, `fetch` recorded and stubbed.
+ * Card layouts and the standing-invite pointer transitions are covered in room-message.test.ts;
+ * this suite asserts the session state machine and what reaches Slack.
+ */
 
 const STARTED_TS = "1700000000.000100";
+/** ts of the *second* message the bot posts — every session start is its own message. */
+const SECOND_TS = "1700000001.000100";
 
-interface RecordedCall {
-  url: string;
-  body: string;
-}
-let recorded: RecordedCall[];
+let fetched: FetchRecorder;
 
 beforeEach(() => {
-  recorded = [];
-  const spy = vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-    let url: string;
-    let body = "";
-    if (input instanceof Request) {
-      url = input.url;
-      body = new TextDecoder().decode(await input.clone().arrayBuffer());
-    } else {
-      url = String(input); // string or URL
-      body = typeof init?.body === "string" ? init.body : "";
-    }
-    recorded.push({ url, body });
-
-    if (url.includes("zoom.us/oauth/token")) {
-      return Response.json({ access_token: "zoom-token", token_type: "bearer", expires_in: 3600 });
-    }
-    if (url.includes("api.zoom.us/v2/meetings/")) {
-      return Response.json({ attendees: [{ name: "Member", join_url: "https://zoom.us/w/personal-1" }] });
-    }
-    return Response.json({ ok: true, ts: STARTED_TS, channel: "C0B6C3BFEDD" });
-  });
-  vi.stubGlobal("fetch", spy);
+  // Each `chat.postMessage` answers with its own ts, so tests can tell the cards apart.
+  fetched = installFetchRecorder({ postTs: [STARTED_TS, SECOND_TS] });
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -65,14 +50,11 @@ function eventAt(
 function room(name: string) {
   return env.COWORKING_ROOM.getByName(name);
 }
-function callsTo(fragment: string): RecordedCall[] {
-  return recorded.filter((r) => r.url.includes(fragment));
-}
-/** The `blocks` payload (JSON string) of the most recent call to a Slack endpoint. */
-function lastBlocks(fragment: string): string {
-  const call = callsTo(fragment).at(-1);
-  return call ? (new URLSearchParams(call.body).get("blocks") ?? "") : "";
-}
+const callsTo = (fragment: string) => fetched.callsTo(fragment);
+const lastBlocks = (fragment: string) => fetched.lastBlocks(fragment);
+/** The `ts` field of the most recent `chat.update` — which card was edited last. */
+const lastUpdatedTs = () => fetched.form(callsTo("/api/chat.update").at(-1)!).get("ts");
+
 async function sessions(stub: ReturnType<typeof room>) {
   return runInDurableObject(stub, (_i, state) =>
     state.storage.sql.exec("SELECT * FROM session").toArray(),
@@ -87,13 +69,13 @@ async function participants(stub: ReturnType<typeof room>) {
 // --- tests ---
 
 describe("CoworkingRoom — room message lifecycle", () => {
-  it("meeting.started posts an open presence message", async () => {
+  it("meeting.started posts an open card", async () => {
     const stub = room("m1");
     await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
 
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
     const open = lastBlocks("/api/chat.postMessage");
-    expect(open).toContain("coworking_join"); // modal-trigger Join button
+    expect(open).toContain("coworking_join"); // the Join button
 
     const rows = await sessions(stub);
     expect(rows[0]?.status).toBe("active");
@@ -106,50 +88,73 @@ describe("CoworkingRoom — room message lifecycle", () => {
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
   });
 
-  it("edits the standing invite in place into the active room (invite → active)", async () => {
+  it("posts a NEW message for every session start so the channel gets notified", async () => {
     const stub = room("life1");
-    await stub.adminPostInvite(); // posts the idle invite, remembers its ts
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+    await stub.handleZoomEvent(event("meeting.ended", "uuid-1"));
+    await stub.handleZoomEvent(event("meeting.started", "uuid-2"));
+
+    // One post per start — the previous session's card is never edited back into an open card,
+    // because an edit is silent and wouldn't notify the channel.
+    const posts = callsTo("/api/chat.postMessage");
+    expect(posts).toHaveLength(2);
+    const open = fetched.form(posts.at(-1)!).get("blocks") ?? "";
+    expect(open).toContain("coworking_join");
+    // The open card carries the session start time, from the meeting.started event ts.
+    expect(open).toContain("Session started at <!date^1700000000^{time}|");
+
+    // The new session tracks its own message, not the previous one.
+    const rows = await sessions(stub);
+    expect(rows.find((r) => r.instance_uuid === "uuid-2")?.slack_message_ts).toBe(SECOND_TS);
+    expect(rows.find((r) => r.instance_uuid === "uuid-1")?.slack_message_ts).toBe(STARTED_TS);
+  });
+
+  it("hands the standing invite to the ended card, then retires it on the next start", async () => {
+    const stub = room("cta1");
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+    await stub.handleZoomEvent(event("meeting.ended", "uuid-1"));
+
+    // The ended card IS the standing invite — no separate invite message is posted.
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
+    const closed = lastBlocks("/api/chat.update");
+    expect(closed).toContain("session has ended");
+    expect(closed).toContain("coworking_join");
+
+    await stub.handleZoomEvent(event("meeting.started", "uuid-2"));
+
+    // The old card keeps its stats but loses its button, so only one standing invite exists.
+    expect(lastUpdatedTs()).toBe(STARTED_TS);
+    const retired = lastBlocks("/api/chat.update");
+    expect(retired).toContain("session has ended");
+    expect(retired).not.toContain("coworking_join");
+  });
+
+  it("deletes the standing invite left over from the retired lifecycle", async () => {
+    const stub = room("legacy1");
+    const legacyTs = "1699999999.000001";
+    await runInDurableObject(stub, async (_i, state) =>
+      state.storage.put("idle_invite_ts", legacyTs),
+    );
 
     await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
 
-    // No second post — the invite message itself is updated into the open-room view.
-    expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
-    const update = callsTo("/api/chat.update").at(-1)!;
-    expect(new URLSearchParams(update.body).get("ts")).toBe(STARTED_TS);
-    expect(new URLSearchParams(update.body).get("blocks") ?? "").toContain("coworking_join");
-    // The open room carries the session start time, from the meeting.started event ts.
-    expect(new URLSearchParams(update.body).get("blocks") ?? "").toContain(
-      "Session started at <!date^1700000000^{time}|",
-    );
-
-    // The session reuses the invite's ts as its tracked message.
-    expect((await sessions(stub))[0]?.slack_message_ts).toBe(STARTED_TS);
+    const deletes = callsTo("/api/chat.delete");
+    expect(deletes).toHaveLength(1);
+    expect(fetched.form(deletes[0]!).get("ts")).toBe(legacyTs);
+    expect(
+      await runInDurableObject(stub, (_i, state) => state.storage.get("idle_invite_ts")),
+    ).toBeUndefined();
   });
 
-  it("keeps the room-message pointer after a session starts (reused, not consumed)", async () => {
-    const stub = room("ptr1");
-    await stub.adminPostInvite();
-    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
-
-    // The pointer still points at the (now active) message so later transitions reuse it —
-    // it is no longer deleted on consume, which is what caused the duplicate-post regression.
-    const pointer = await runInDurableObject(stub, (_i, state) =>
-      state.storage.get<string>("idle_invite_ts"),
-    );
-    expect(pointer).toBe(STARTED_TS);
-  });
-
-  it("a start with a new uuid force-closes a stale active session instead of wedging the room", async () => {
+  it("a start with a new uuid force-closes a stale session instead of wedging the room", async () => {
     const stub = room("dbl1");
-    await stub.adminPostInvite(); // invite (post #1)
-    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // edits invite → active
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // post #1
     await stub.handleZoomEvent(
       event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
     );
 
     // uuid-1's meeting.ended was never received; a new instance starts. One meeting ID can only
-    // have one live instance, so uuid-1 is necessarily dead — close it and open uuid-2 now
+    // have one live instance, so uuid-1 is necessarily stale — close it and open uuid-2 now
     // rather than dropping the start and waiting for the 18h stale-session alarm.
     await stub.handleZoomEvent(event("meeting.started", "uuid-2"));
 
@@ -157,14 +162,14 @@ describe("CoworkingRoom — room message lifecycle", () => {
     expect(rows.find((r) => r.instance_uuid === "uuid-1")?.status).toBe("ended");
     expect(rows.find((r) => r.instance_uuid === "uuid-2")?.status).toBe("active");
 
-    // The stale session got its ended summary, and the fresh invite from closeSession (post #2)
-    // was edited into the new open room.
-    const endedSummary = callsTo("/api/chat.update").some((c) =>
-      (new URLSearchParams(c.body).get("blocks") ?? "").includes("session has ended"),
+    // The stale session got its ended card, and uuid-2 opened as its own new message (post #2).
+    const endedCard = callsTo("/api/chat.update").some((c) =>
+      (fetched.form(c).get("blocks") ?? "").includes("session has ended"),
     );
-    expect(endedSummary).toBe(true);
+    expect(endedCard).toBe(true);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
-    expect(lastBlocks("/api/chat.update")).toContain("coworking_join");
+    // uuid-1's card is the last thing edited — retired, so its invite is gone.
+    expect(lastBlocks("/api/chat.update")).not.toContain("coworking_join");
 
     // The wedge is gone: a join on the new instance lands and shows up in presence.
     await stub.handleZoomEvent(
@@ -173,32 +178,22 @@ describe("CoworkingRoom — room message lifecycle", () => {
     expect(lastBlocks("/api/chat.update")).toContain("Bob");
   });
 
-  it("recovers after a missed meeting.ended: alarm closes, next start reuses the fresh invite", async () => {
+  it("recovers after a missed meeting.ended: the alarm closes and leaves a usable invite", async () => {
     const stub = room("miss1");
-    await stub.adminPostInvite(); // invite (post #1)
-    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // edits invite → active
-    // meeting.ended never arrives → the stale-session alarm force-closes it and posts a fresh
-    // invite (post #2), advancing the pointer.
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // post #1
+    // meeting.ended never arrives → the stale-session alarm force-closes it. The ended card
+    // carries the invite, so no extra message is needed to keep the room reachable.
     expect(await runDurableObjectAlarm(stub)).toBe(true);
-    expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
+    expect(lastBlocks("/api/chat.update")).toContain("coworking_join");
 
-    // The next session reuses that fresh invite in place — no orphaned duplicate.
+    // The next session opens as its own message and retires the alarm-closed card.
     await stub.handleZoomEvent(event("meeting.started", "uuid-2"));
     expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
-    expect(new URLSearchParams(callsTo("/api/chat.update").at(-1)!.body).get("ts")).toBe(STARTED_TS);
+    expect(lastUpdatedTs()).toBe(STARTED_TS);
   });
 
-  it("re-running the admin invite edits the standing message instead of posting a duplicate", async () => {
-    const stub = room("reinv1");
-    await stub.adminPostInvite(); // post #1
-    await stub.adminPostInvite(); // reuse in place → chat.update, no new post
-
-    expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
-    expect(callsTo("/api/chat.update")).toHaveLength(1);
-    expect(lastBlocks("/api/chat.update")).toContain("coworking_join");
-  });
-
-  it("posts the ended summary with session length, peak attendance, and a deduped roster", async () => {
+  it("posts the ended card with session length, peak attendance, and a deduped roster", async () => {
     const stub = room("stats1");
     await stub.handleJoinRequest({ slackUserId: "U777", displayName: "Ada" }); // member link
 
@@ -217,7 +212,7 @@ describe("CoworkingRoom — room message lifecycle", () => {
     // Ends 90 minutes after it started.
     await stub.handleZoomEvent(eventAt("meeting.ended", "uuid-1", t0 + 90 * 60_000));
 
-    // The ended summary is the close update (the post-end invite is a postMessage, not an update).
+    // The ended card is the close update — the last edit of the session's own message.
     const ended = lastBlocks("/api/chat.update");
     expect(ended).toContain("session has ended");
     expect(ended).toContain("1h 30m"); // total session length
@@ -231,20 +226,19 @@ describe("CoworkingRoom — room message lifecycle", () => {
     expect(ended).toContain("(2)");
   });
 
-  it("meeting.ended closes the message, posts a fresh invite, and clears participants", async () => {
+  it("meeting.ended closes the message in place and clears participants", async () => {
     const stub = room("m3");
-    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // open message
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // open card
     await stub.handleZoomEvent(
       event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
     );
     await stub.handleZoomEvent(event("meeting.ended", "uuid-1"));
 
-    // The last chat.update is the "session has ended" close.
+    // The last chat.update is the "session has ended" close, and it carries the standing invite.
     expect(lastBlocks("/api/chat.update")).toContain("session has ended");
-    // The open message (started) + the standing invite (ended) = two postMessage calls.
-    const posts = callsTo("/api/chat.postMessage");
-    expect(posts).toHaveLength(2);
-    expect(new URLSearchParams(posts.at(-1)!.body).get("blocks") ?? "").toContain("coworking_join");
+    expect(lastBlocks("/api/chat.update")).toContain("coworking_join");
+    // A whole session is exactly one posted message.
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
 
     const rows = await sessions(stub);
     expect(rows[0]?.status).toBe("ended");
@@ -253,14 +247,14 @@ describe("CoworkingRoom — room message lifecycle", () => {
 });
 
 describe("CoworkingRoom — participant correlation & presence", () => {
-  it("shows an un-registered participant as an external guest", async () => {
+  it("shows an unmatched participant as a guest", async () => {
     const stub = room("c1");
     await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
     await stub.handleZoomEvent(
       event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Guest" }),
     );
 
-    // The presence message lists the guest by display name (no mention).
+    // The presence list shows the guest by display name (no mention).
     const presence = lastBlocks("/api/chat.update");
     expect(presence).toContain("Guest");
     expect(presence).not.toContain('"user_id"'); // no mention element — guests are plain text
@@ -315,7 +309,7 @@ describe("CoworkingRoom — participant correlation & presence", () => {
     await stub.handleZoomEvent(joined);
 
     expect(await participants(stub)).toHaveLength(1);
-    // The presence line lists Ada exactly once.
+    // The presence list shows Ada exactly once.
     const presence = lastBlocks("/api/chat.update");
     expect(presence.split("Ada").length - 1).toBe(1);
   });
@@ -330,7 +324,7 @@ describe("CoworkingRoom — participant correlation & presence", () => {
       event("meeting.participant_left", "uuid-1", { user_id: "p1", user_name: "Ada" }),
     );
 
-    // The row is soft-deleted (retained for end-of-session stats) but marked as left.
+    // The row is soft-deleted (retained for the roster) but marked as left.
     const parts = await participants(stub);
     expect(parts).toHaveLength(1);
     expect(parts[0]?.left_at).not.toBeNull();
@@ -358,7 +352,7 @@ describe("CoworkingRoom — handleJoinRequest", () => {
       displayName: "Xavier",
     });
 
-    // The raw join_url never leaves the DO — callers only get the redirect token.
+    // The raw join_url never leaves the DO — callers only get the join token.
     expect(token).toMatch(/^[0-9a-f]{32}$/);
     expect(callsTo("api.zoom.us/v2/meetings/")).toHaveLength(1);
     const links = await runInDurableObject(stub, (_i, state) =>
@@ -409,15 +403,30 @@ describe("CoworkingRoom — handleJoinRequest", () => {
   });
 });
 
-describe("CoworkingRoom — admin announce-only", () => {
-  it("open posts a plain announcement and close updates it", async () => {
+describe("CoworkingRoom — announcements", () => {
+  it("open posts an open card; close turns it into an ended card that carries the invite", async () => {
     const stub = room("ann1");
     await stub.adminAnnounceOpen();
-    expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
+    const posts = callsTo("/api/chat.postMessage");
+    expect(posts).toHaveLength(1);
+    const open = fetched.form(posts[0]!).get("blocks") ?? "";
+    expect(open).toContain("coworking_join"); // the Join button works with no session behind it
+    expect(open).not.toContain("Session started at"); // no session, no start line
 
     const { closed } = await stub.adminAnnounceClose();
     expect(closed).toBe(true);
     expect(callsTo("/api/chat.update")).toHaveLength(1);
+    expect(lastUpdatedTs()).toBe(STARTED_TS);
+    const ended = lastBlocks("/api/chat.update");
+    expect(ended).toContain("That's a wrap");
+    expect(ended).toContain("*Peak:* 0");
+    expect(ended).not.toContain("Dropped in"); // no roster
+    expect(ended).toContain("coworking_join"); // the standing invite
+
+    // The announcement's ended card is retired by the next session like any other.
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+    expect(lastUpdatedTs()).toBe(STARTED_TS);
+    expect(lastBlocks("/api/chat.update")).not.toContain("coworking_join");
   });
 
   it("close is a no-op when nothing was announced", async () => {
@@ -426,82 +435,64 @@ describe("CoworkingRoom — admin announce-only", () => {
     expect(callsTo("/api/chat.update")).toHaveLength(0);
   });
 
-  it("invite posts a 'start a session' message with the modal-trigger Join button", async () => {
+  it("a session start closes a lingering open announcement without the invite", async () => {
     const stub = room("ann3");
-    await stub.adminPostInvite();
+    await stub.adminAnnounceOpen(); // STARTED_TS
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // SECOND_TS
 
-    const posts = callsTo("/api/chat.postMessage");
-    expect(posts).toHaveLength(1);
-    const blocks = new URLSearchParams(posts[0]!.body).get("blocks") ?? "";
-    expect(blocks).toContain("coworking_join");
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
+    expect(lastUpdatedTs()).toBe(STARTED_TS);
+    const ended = lastBlocks("/api/chat.update");
+    expect(ended).toContain("That's a wrap");
+    expect(ended).not.toContain("coworking_join");
+    // The announcement is spent — nothing left for an admin close to edit.
+    expect(await stub.adminAnnounceClose()).toEqual({ closed: false });
   });
 });
 
-describe("CoworkingRoom — stale room-message pointer self-healing", () => {
+describe("CoworkingRoom — vanished room message self-healing", () => {
   const FRESH_TS = "1700000099.000200";
 
-  /** Re-stub fetch so chat.update reports the target message vanished (deleted by hand). */
+  /** From here on chat.update reports the target message vanished (deleted by hand). */
   function stubVanishedMessage() {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-        let url: string;
-        let body = "";
-        if (input instanceof Request) {
-          url = input.url;
-          body = new TextDecoder().decode(await input.clone().arrayBuffer());
-        } else {
-          url = String(input);
-          body = typeof init?.body === "string" ? init.body : "";
-        }
-        recorded.push({ url, body });
-        if (url.includes("/api/chat.update")) {
-          return Response.json({ ok: false, error: "message_not_found" });
-        }
+    fetched.respondWith((call) => {
+      if (call.url.includes("/api/chat.update")) {
+        return Response.json({ ok: false, error: "message_not_found" });
+      }
+      if (call.url.includes("/api/chat.postMessage")) {
         return Response.json({ ok: true, ts: FRESH_TS, channel: "C0B6C3BFEDD" });
-      }),
-    );
+      }
+      return undefined;
+    });
   }
-
-  it("re-running the admin invite re-posts when the standing message was deleted", async () => {
-    const stub = room("heal1");
-    await stub.adminPostInvite(); // post #1, stores the pointer
-
-    stubVanishedMessage();
-    await stub.adminPostInvite(); // update 404s → fresh post, pointer advances — no throw
-
-    expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
-    const pointer = await runInDurableObject(stub, (_i, state) =>
-      state.storage.get<string>("idle_invite_ts"),
-    );
-    expect(pointer).toBe(FRESH_TS);
-  });
-
-  it("meeting.started posts a fresh open message when the standing invite was deleted", async () => {
-    const stub = room("heal2");
-    await stub.adminPostInvite();
-
-    stubVanishedMessage();
-    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
-
-    expect(callsTo("/api/chat.postMessage")).toHaveLength(2);
-    expect((await sessions(stub))[0]?.slack_message_ts).toBe(FRESH_TS);
-  });
 
   it("survives the room message being deleted mid-session", async () => {
     const stub = room("heal3");
-    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // posts the open message
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1")); // posts the open card
 
     stubVanishedMessage();
     // The presence update 404s — the join webhook must not throw over it.
     await stub.handleZoomEvent(
       event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
     );
-    // The close update 404s too — the session still ends and the fresh invite still posts.
+    // The close update 404s too — the session must still end.
     await stub.handleZoomEvent(event("meeting.ended", "uuid-1"));
 
     expect((await sessions(stub))[0]?.status).toBe("ended");
-    expect(callsTo("/api/chat.postMessage")).toHaveLength(2); // open message + fresh invite
+  });
+
+  it("a start still opens the room when the previous ended card was deleted", async () => {
+    const stub = room("heal5");
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+    await stub.handleZoomEvent(event("meeting.ended", "uuid-1")); // ended card holds the invite
+
+    stubVanishedMessage();
+    // Retiring the vanished card 404s — the new session must still open normally.
+    await stub.handleZoomEvent(event("meeting.started", "uuid-2"));
+
+    expect((await sessions(stub)).find((r) => r.instance_uuid === "uuid-2")?.slack_message_ts).toBe(
+      FRESH_TS,
+    );
   });
 
   it("admin close treats a deleted announcement as nothing-to-close", async () => {
