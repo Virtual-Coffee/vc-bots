@@ -17,12 +17,13 @@ import {
   WELCOME_MODAL_CALLBACK_ID,
 } from "../bots/admin-panel";
 import { handleAppHomeOpened } from "../bots/app-home";
-import { handleJoinClick, handleJoinDismiss } from "../bots/coworking/join";
 import {
   CANCEL_ACTION_ID,
-  JOIN_ACTION_ID,
   JOIN_REDIRECT_ACTION_ID,
-} from "../bots/coworking/slack-call";
+  handleJoinClick,
+  handleJoinDismiss,
+} from "../bots/coworking/join";
+import { JOIN_ACTION_ID } from "../bots/coworking/room-message";
 import { JOIN_EVENT_ACTION_ID } from "../bots/reminders/blocks";
 import { handleTeamJoin } from "../bots/welcome";
 import type { Env } from "../env";

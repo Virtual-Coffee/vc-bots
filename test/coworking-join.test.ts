@@ -1,43 +1,19 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CANCEL_ACTION_ID,
+  JOIN_REDIRECT_ACTION_ID,
+  buildJoinEphemeralAttachments,
   handleJoinClick,
   handleJoinDismiss,
   type JoinActionPayload,
 } from "../src/bots/coworking/join";
+import { installFetchRecorder, type FetchRecorder, type RecordedCall } from "./helpers/fetch-recorder";
 
-interface RecordedCall {
-  url: string;
-  body: string;
-}
-let recorded: RecordedCall[];
+let fetched: FetchRecorder;
 
 beforeEach(() => {
-  recorded = [];
-  const spy = vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-    let url: string;
-    let body = "";
-    if (input instanceof Request) {
-      url = input.url;
-      body = new TextDecoder().decode(await input.clone().arrayBuffer());
-    } else {
-      url = String(input); // string or URL
-      body = typeof init?.body === "string" ? init.body : "";
-    }
-    recorded.push({ url, body });
-
-    if (url.includes("/api/users.profile.get")) {
-      return Response.json({ ok: true, profile: { real_name: "Ada" } });
-    }
-    if (url.includes("zoom.us/oauth/token")) {
-      return Response.json({ access_token: "zt", token_type: "bearer", expires_in: 3600 });
-    }
-    if (url.includes("api.zoom.us/v2/meetings/")) {
-      return Response.json({ attendees: [{ name: "Ada", join_url: "https://zoom.us/w/personal-9" }] });
-    }
-    return Response.json({ ok: true });
-  });
-  vi.stubGlobal("fetch", spy);
+  fetched = installFetchRecorder({ zoomJoinUrl: "https://zoom.us/w/personal-9" });
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -53,7 +29,7 @@ function payload(actionId = "coworking_join"): JoinActionPayload {
 }
 
 function responseUrlCalls(): RecordedCall[] {
-  return recorded.filter((r) => r.url === RESPONSE_URL);
+  return fetched.calls.filter((r) => r.url === RESPONSE_URL);
 }
 
 describe("handleJoinClick", () => {
@@ -80,29 +56,9 @@ describe("handleJoinClick", () => {
   });
 
   it("answers with an error ephemeral when registration fails", async () => {
-    // Re-stub: same routes, but the Zoom invite-link call now fails.
-    recorded = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-        const url = input instanceof Request ? input.url : String(input);
-        const body =
-          input instanceof Request
-            ? new TextDecoder().decode(await input.clone().arrayBuffer())
-            : typeof init?.body === "string"
-              ? init.body
-              : "";
-        recorded.push({ url, body });
-
-        if (url.includes("/api/users.profile.get")) {
-          return Response.json({ ok: true, profile: { real_name: "Ada" } });
-        }
-        if (url.includes("zoom.us/oauth/token")) {
-          return Response.json({ access_token: "zt", token_type: "bearer", expires_in: 3600 });
-        }
-        if (url.includes("api.zoom.us/v2/meetings/")) return new Response("nope", { status: 400 });
-        return Response.json({ ok: true });
-      }),
+    // Same routes, but the Zoom invite-link call now fails.
+    fetched.respondWith((call) =>
+      call.url.includes("api.zoom.us/v2/meetings/") ? new Response("nope", { status: 400 }) : undefined,
     );
 
     await handleJoinClick(payload(), env, ORIGIN);
@@ -123,5 +79,33 @@ describe("handleJoinDismiss", () => {
     const replies = responseUrlCalls();
     expect(replies).toHaveLength(1);
     expect(JSON.parse(replies[0]!.body)).toEqual({ delete_original: true });
+  });
+});
+
+describe("buildJoinEphemeralAttachments", () => {
+  const roomEnv = { ROOM_TITLE: "Co-Working Room" };
+
+  it("pairs a ☕ Join url button (the redirect, not a Zoom link) with a Cancel button", () => {
+    const redirect = "https://bots.example/join/abc123abc123abc1";
+    const attachments = JSON.stringify(buildJoinEphemeralAttachments(roomEnv, redirect));
+    expect(attachments).toContain(JOIN_REDIRECT_ACTION_ID);
+    expect(attachments).toContain(CANCEL_ACTION_ID);
+    expect(attachments).toContain(redirect); // the button url is the Worker redirect…
+    expect(attachments).not.toContain("zoom.us"); // …never the token-bearing Zoom url
+    expect(attachments).toContain("Code of Conduct");
+  });
+
+  it("renders as one color-bar invitation: header up top, CoC section above the buttons", () => {
+    const attachments = buildJoinEphemeralAttachments(
+      roomEnv,
+      "https://bots.example/join/abc123abc123abc1",
+    );
+    expect(attachments).toHaveLength(1);
+    const invite = attachments[0];
+    // The accent bar (card and alert blocks are rejected in messages — color is the standout).
+    expect(invite?.color).toBe("#d9376e");
+    expect(invite?.fallback).toContain(roomEnv.ROOM_TITLE);
+    const types = invite?.blocks?.map((b) => b.type);
+    expect(types).toEqual(["header", "section", "section", "actions"]);
   });
 });

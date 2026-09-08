@@ -173,15 +173,12 @@ function coworkingModal(responseUrl: string): ModalView {
         options: [
           { text: { type: "plain_text", text: "Announce room open" }, value: "open" },
           { text: { type: "plain_text", text: "Close announcement" }, value: "close" },
-          { text: { type: "plain_text", text: "Post 'start a session' invite" }, value: "invite" },
         ],
       },
     },
     {
       type: "context",
-      elements: [
-        { type: "mrkdwn", text: "Open and invite post to the live co-working channel." },
-      ],
+      elements: [{ type: "mrkdwn", text: "Open posts to the live co-working channel." }],
     },
   ];
   return {
@@ -408,11 +405,6 @@ export async function handleCoworkingSubmit(
     if (op === "open") {
       await stub.adminAnnounceOpen();
       await deleteOriginal(responseUrl); // the announcement is visible in-channel
-      return;
-    }
-    if (op === "invite") {
-      await stub.adminPostInvite();
-      await deleteOriginal(responseUrl);
       return;
     }
     if (op === "close") {
