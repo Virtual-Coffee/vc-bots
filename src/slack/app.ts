@@ -23,12 +23,14 @@ import {
   WELCOME_MODAL_CALLBACK_ID,
 } from "../bots/admin-panel";
 import { handleAppHomeOpened } from "../bots/app-home";
-import { handleJoinClick, handleJoinDismiss } from "../bots/coworking/join";
 import {
   CANCEL_ACTION_ID,
-  JOIN_ACTION_ID,
   JOIN_REDIRECT_ACTION_ID,
-} from "../bots/coworking/slack-call";
+  handleJoinClick,
+  handleJoinDismiss,
+} from "../bots/coworking/join";
+import { JOIN_ACTION_ID } from "../bots/coworking/room-message";
+import { JOIN_EVENT_ACTION_ID } from "../bots/reminders/blocks";
 import { handleTeamJoin } from "../bots/welcome";
 import type { Env } from "../env";
 
@@ -78,6 +80,10 @@ export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
     // per-user join ephemeral; deleting THAT original is safe.
     .action(JOIN_REDIRECT_ACTION_ID, ack, async ({ payload }) => handleJoinDismiss(payload, env))
     .action(CANCEL_ACTION_ID, ack, async ({ payload }) => handleJoinDismiss(payload, env))
+    // The reminders "Join Event" button is also a url button — the browser opens Zoom on its
+    // own. This registration exists purely so the click is ACKed instead of 404ing ("no listener
+    // found"), which Slack renders as a warning triangle. No lazy handler: nothing to do.
+    .action(JOIN_EVENT_ACTION_ID, ack)
     .command(ADMIN_COMMAND, ack, async ({ payload }) =>
       handleAdminCommand(payload, env),
     )

@@ -24,8 +24,11 @@ pnpm vitest -t "name of test"               # tests matching a name
 
 Tests run inside `workerd` (via `@cloudflare/vitest-pool-workers`), so Web Crypto, the Durable
 Object, and bindings behave exactly as in production. Bindings/migrations come from
-`wrangler.jsonc`. Tests stub network by spying on `fetch` (see `test/coworking-do.test.ts`); use
-`runInDurableObject` / `runDurableObjectAlarm` from `cloudflare:test` to drive the DO.
+`wrangler.jsonc`. Tests stub network by spying on `fetch` (`installFetchRecorder` in
+`test/helpers/fetch-recorder.ts` records every call and answers with canned Slack/Zoom responses);
+use `runInDurableObject` / `runDurableObjectAlarm` from `cloudflare:test` to drive the DO. The
+room message has its own unit suite (`test/room-message.test.ts`) against the fake channel port in
+`test/helpers/room-channel-fake.ts` — layout and pointer assertions belong there, not in the DO suite.
 
 ## Architecture
 
@@ -78,16 +81,35 @@ instance serializes them, so there are no eventual-consistency races (a member_l
 written before the join that reads it). The DO must be re-exported from `src/index.ts` for the
 runtime to bind it. Schema (`session` / `member_link` / `participant` / `invite_link`) is created
 idempotently in `migrate()` under `blockConcurrencyWhile`. A stale-session `alarm()` force-closes sessions that
-never received `meeting.ended`.
+never received `meeting.ended`. The DO owns only the session state machine and the join tokens;
+everything about the channel message is delegated to `RoomMessage`.
 
-The room is a self-managed channel message (no native Slack Call widget): Zoom `meeting.started`
-→ post (or update the standing invite into) the open-room message; `participant_joined/left` →
-edit its live presence list; `meeting.ended` → edit into a stats summary + post a fresh invite.
-Joining is per-user: the message's Join button mints a personal Zoom **invite link**
+**The room message** (`RoomMessage`, `src/bots/coworking/room-message.ts`) is the single
+self-managed channel message per session (no native Slack Call widget), and the module owns its
+cards, copy, and cross-session pointers. The DO calls `open` / `showPresence` / `close` /
+`retirePrevious` / `announceOpen` / `announceClose`; Slack sits behind the three-call
+`RoomChannelPort` (post / update / delete on the co-working channel — `createSlackRoomChannelPort`
+is the adapter, and it classifies `message_not_found` / `channel_not_found` as `"vanished"` so a
+hand-deleted card never wedges the room). Lifecycle: `meeting.started` → `open` **always posts**
+a fresh open card (never an edit — only a fresh post makes Slack notify the channel);
+`participant_joined/left` → `showPresence` edits the presence list; `meeting.ended` → `close`
+edits it into the ended card, which carries the **standing invite** and is remembered as the
+*last closed card*. The next room message (a session start or an announcement) calls
+`retirePrevious` last, which re-renders that card with `{ invite: false }`, closes any lingering
+open announcement (without invite), and runs the one-shot legacy `idle_invite_ts` delete — so
+exactly one standing invite exists at a time. Pointers live in DO storage under
+`last_closed_message` (the cached `SessionStats` — `participant` rows are deleted at close, so the
+roster can't be re-derived from SQL) and `room_message:announcement`; the DO never touches them.
+Announcements (`/vc-bot-admin coworking open|close`) join the same chain: `announceClose` renders
+the full ended card (peak 0, no roster) with the invite, and it becomes the last closed card.
+The session row keeps `slack_message_ts`; the DO passes it into `showPresence`/`close`.
+Block Kit layouts are private to `room-message.ts` and hand-tuned — keep them byte-for-byte when
+moving code. Joining is per-user: the message's Join button mints a personal Zoom **invite link**
 (`src/zoom/invite-links.ts`, name pre-filled — no registration, requires the meeting to not
 require registration) and replies via `response_url` with an **ephemeral message** carrying
-☕ Join / Cancel buttons; clicking either deletes the ephemeral (`delete_original`), so the
-surface dismisses itself (a modal can't — Slack has no API to close one from a button click).
+☕ Join / Cancel buttons (`buildJoinEphemeralAttachments` in `src/bots/coworking/join.ts`);
+clicking either deletes the ephemeral (`delete_original`), so the surface dismisses itself (a
+modal can't — Slack has no API to close one from a button click).
 The ☕ Join url is the Worker's own `GET /join/<token>` redirect, built on `PUBLIC_BASE_URL`
 (the virtualcoffee.io/bots Netlify rewrite; empty falls back to the request origin); tokens
 live in the DO's `invite_link` table and expire with the Zoom link, keeping the token-bearing
@@ -111,10 +133,13 @@ The active source is controlled by `EVENT_SOURCE` config var (default `"cms"`); 
 `src/google/auth.ts`, credentials cached module-level). ⚠️ The cron strings in `CRON_TO_KIND`
 (`index.ts`) **must stay byte-identical to `triggers.crons` in wrangler.jsonc** — that string is
 the lookup key mapping a fired cron to a reminder kind. Crons fire in **UTC** and are **live**
-(`0 12 * * *` daily, `0 12 * * 1` weekly). To disable, set `triggers.crons: []` — deploying an
+(`0 12 * * *` daily, `0 12 * * MON` weekly). ⚠️ Cloudflare parses cron weekdays
+**Quartz-style — `1` = Sunday … `7` = Saturday**, not the Unix `0` = Sunday; spell weekdays as
+`MON`/`SUN` so a numeric field can't silently shift the day (Luxon's `weekday === 1` in
+`sendDaily` is ISO Monday and unrelated). To disable, set `triggers.crons: []` — deploying an
 empty array deregisters crons already on Cloudflare, whereas deleting the key would leave them
 running. The same `sendReminder` is reused by the `/vc-bot-admin` slash command for manual
-runs/previews; it now accepts an optional source arg (e.g. `daily google`, `weekly cms`) to run a
+runs/previews; it accepts an optional source arg (e.g. `daily google`, `weekly cms`) to run a
 named source; cron always uses `EVENT_SOURCE`. Failure paths that have no other surface (the cron
 run, the co-working DO/Zoom handlers, the join flow) alert the private `#bot-log` channel via
 `notifyBotLog` (`src/slack/notify.ts`, `SLACK_BOTLOG_CHANNEL_ID`) — a no-op when the channel id is
@@ -143,3 +168,20 @@ client either way. All Slack imports (client, Block Kit types, payload types) co
   `import type` for type-only imports.
 - `slackify-html` is **edge-incompatible** (throws on workerd); a local `html-to-mrkdwn`
   converter replaces it. Don't re-add it.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues in `Virtual-Coffee/vc-bots`, managed with the `gh` CLI.
+See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, using their default label strings.
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root.
+See `docs/agents/domain.md`.

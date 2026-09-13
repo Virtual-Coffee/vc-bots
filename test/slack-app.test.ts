@@ -188,6 +188,19 @@ describe("interactivity", () => {
     expect(replies).toHaveLength(1);
     expect(JSON.parse(replies[0]!.body)).toEqual({ delete_original: true });
   });
+
+  // The reminders Join Event button is a url button: unregistered it 404s ("no listener found")
+  // and Slack marks the click with a warning triangle. The literal is deliberate — asserting
+  // against JOIN_EVENT_ACTION_ID would let a rename pass while breaking already-posted buttons.
+  it("button-join-event ACKs the url button click with no follow-up work", async () => {
+    const res = await post(
+      "/slack/interactivity",
+      blockActionBody("button-join-event"),
+      "application/x-www-form-urlencoded",
+    );
+    expect(res.status).toBe(200);
+    expect(callsTo(RESPONSE_URL)).toHaveLength(0);
+  });
 });
 
 function viewSubmissionBody(callbackId: string, values: unknown): string {

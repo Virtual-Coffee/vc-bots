@@ -4,6 +4,7 @@ import {
   buildStartingSoonAdminMessage,
   buildStartingSoonMessage,
   buildWeeklyMessage,
+  JOIN_EVENT_ACTION_ID,
 } from "../src/bots/reminders/blocks";
 import type { ReminderEvent } from "../src/bots/reminders/source";
 
@@ -33,7 +34,7 @@ describe("buildStartingSoonMessage", () => {
       type: "section",
       accessory: {
         type: "button",
-        action_id: "button-join-event",
+        action_id: JOIN_EVENT_ACTION_ID,
         value: "join_event_1",
         url: "https://zoom.us/j/123",
       },
