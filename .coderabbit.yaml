@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit review config for vc-bots. Reference: https://docs.coderabbit.ai/getting-started/yaml-configuration
+language: "en-US"
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  poem: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    # Only the default branch (main) is targeted unless listed here.
+    base_branches: []
+    ignore_title_keywords:
+      - "WIP"
+      - "[skip review]"
+
+  # Generated / vendored files that add noise, not signal.
+  path_filters:
+    - "!worker-configuration.d.ts"
+    - "!pnpm-lock.yaml"
+    - "!node_modules/**"
+    - "!.wrangler/**"
+    - "!dist/**"
+
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        This is a Cloudflare Worker on workerd. Flag any `node:*` import — only Web APIs are
+        allowed (fetch, crypto.subtle, btoa, URLSearchParams). Flag `@slack/web-api` or direct
+        `slack-web-api-client` imports; everything Slack comes from `slack-cloudflare-workers`.
+        Flag bare `console.*` — use the leveled `log` from `src/log.ts`. Flag any log line that
+        could carry a credential: Zoom join_url / invite tokens, Zoom host keys, Google
+        service-account JSON, JWT assertions, access tokens, Slack tokens. Type-only imports
+        must use `import type` (verbatimModuleSyntax).
+    - path: "src/router.ts"
+      instructions: |
+        Every provider route must verify the signature against the raw body before parsing
+        JSON, then handle the URL-verification handshake, then ACK within ~3s and defer work to
+        `ctx.waitUntil`. Flag any hand-rolled timing-safe comparison — use `src/crypto.ts`.
+    - path: "src/slack/**"
+      instructions: |
+        User-facing replies go through `src/slack/response.ts` (`respondEphemeral` /
+        `replaceEphemeral` / `deleteOriginal`), never `context.respond`. `replaceEphemeral` and
+        `deleteOriginal` are only valid against per-user ephemerals — flag any use against the
+        shared room message's `response_url`. Every admin-panel action and view handler must
+        re-check `isWorkspaceAdmin`.
+    - path: "src/bots/coworking/room-message.ts"
+      instructions: |
+        Block Kit layouts here are hand-tuned. When code is moved, confirm block shapes are
+        byte-for-byte unchanged. Do not suggest Slack `alert` or `card` blocks — they are
+        invalid in messages.
+    - path: "src/bots/reminders/**"
+      instructions: |
+        The host key must only reach the event-admin mirror channel — flag it in any log line
+        or in the public events/announcements channels. Event windows are computed in
+        America/New_York. Join Link, description rendering, and host-key sourcing follow docs/adr/0001.
+    - path: "src/index.ts"
+      instructions: |
+        The `CRON_TO_KIND` keys must be byte-identical to `triggers.crons` in wrangler.jsonc —
+        flag any drift. The `CoworkingRoom` Durable Object must remain re-exported here.
+    - path: "wrangler.jsonc"
+      instructions: |
+        Cron strings must match `CRON_TO_KIND` in src/index.ts exactly. Cloudflare parses cron
+        weekdays Quartz-style (1 = Sunday); weekdays must be spelled MON/SUN, never numeric.
+        Binding or var changes need a matching update to src/env.ts and a `pnpm cf-types` run.
+    - path: "src/env.ts"
+      instructions: |
+        Must stay in sync with `vars` and bindings in wrangler.jsonc. Secrets never belong in
+        `vars`.
+    - path: "test/**"
+      instructions: |
+        Tests run inside workerd via @cloudflare/vitest-pool-workers. Network is stubbed with
+        `installFetchRecorder` (test/helpers/fetch-recorder.ts); flag any test that hits the
+        network or mocks Web Crypto instead of using the real runtime. Room-message layout and
+        pointer assertions belong in test/room-message.test.ts against the fake channel port,
+        not in the Durable Object suite. On block-shape mismatches between test and code, the
+        code is usually the intended change — say so rather than assuming the test is right.
+    - path: "docs/adr/**"
+      instructions: |
+        Check that the decision, context, and consequences are stated and that code comments
+        pointing here are one-line pointers, not restatements.
+
+  tools:
+    gitleaks:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CLAUDE.md"
+      - "CONTEXT.md"
+      - "docs/adr/**/*.md"
+      - "docs/agents/**/*.md"
