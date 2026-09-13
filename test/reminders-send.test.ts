@@ -162,6 +162,20 @@ describe("sendReminder — daily, host key in the event-admin mirror", () => {
     );
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
   });
+
+  it("validates every event before touching the schedule: a later bad event leaves it intact", async () => {
+    staleScheduled = [{ id: "QSTALE", channel_id: "COLD", post_at: NOW / 1000 + 3600 }];
+    googleEvents = [
+      evt("1", "2026-05-28T18:00:00", ZOOM_LOCATION),
+      evt("2", "2026-05-28T20:00:00", ZOOM_LOCATION, null),
+    ];
+    await expect(sendReminder("daily", env, NOW)).rejects.toThrow(
+      'No host code on Zoom event "Event 2" (2)',
+    );
+    // Nothing was cleared and nothing was scheduled — the run rejected before any mutation.
+    expect(forms("/api/chat.deleteScheduledMessage")).toHaveLength(0);
+    expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
+  });
 });
 
 describe("sendReminder — weekly", () => {

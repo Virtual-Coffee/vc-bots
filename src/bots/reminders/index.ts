@@ -183,20 +183,28 @@ export async function reconcileStartingSoon(
   nowMs: number,
   range: EventRange,
 ): Promise<number> {
+  const nowSeconds = Math.floor(nowMs / 1000);
+  const startSecondsOf = (event: ReminderEvent): number =>
+    Math.floor(DateTime.fromISO(event.startsAt, { zone: "utc" }).toSeconds());
+
+  // Validate every upcoming event BEFORE the first Slack mutation, so a bad event rejects the
+  // run with the existing schedule intact rather than after it has been cleared. A Zoom event
+  // must carry its host key; a non-Zoom Join Link simply has no host key line.
+  for (const event of events) {
+    if (startSecondsOf(event) <= nowSeconds) continue;
+    if (parseZoomMeetingId(event.joinLink ?? "") && !event.hostKey) {
+      throw new Error(`No host code on Zoom event "${event.title}" (${event.id})`);
+    }
+  }
+
   await clearScheduledInWindow(client, nowMs, range);
 
-  const nowSeconds = Math.floor(nowMs / 1000);
   let handled = 0;
   for (const event of events) {
-    const startSeconds = Math.floor(DateTime.fromISO(event.startsAt, { zone: "utc" }).toSeconds());
+    const startSeconds = startSecondsOf(event);
     if (startSeconds <= nowSeconds) {
       log.info("reminder.event_already_started", { id: event.id, startsAt: event.startsAt });
       continue;
-    }
-
-    // A Zoom event must carry its host key; a non-Zoom Join Link simply has no host key line.
-    if (parseZoomMeetingId(event.joinLink ?? "") && !event.hostKey) {
-      throw new Error(`No host code on Zoom event "${event.title}" (${event.id})`);
     }
 
     const channel = env.SLACK_EVENTS_CHANNEL_ID;
