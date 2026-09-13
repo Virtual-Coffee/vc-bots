@@ -206,6 +206,33 @@ describe("joinLink precedence", () => {
     expect(events[0]!.joinLink).toBe("https://zoom.us/j/conference");
   });
 
+  it("treats a blank/whitespace location as absent and falls back to conferenceData", async () => {
+    const e: GoogleCalendarEvent = {
+      id: "ev-blank",
+      summary: "Blank location",
+      ...timed,
+      location: "   ",
+      conferenceData: {
+        entryPoints: [{ entryPointType: "video", uri: "https://zoom.us/j/conference" }],
+      },
+    };
+    pageQueue.push({ items: [e] });
+    const events = await createGoogleCalendarSource(testEnv).fetchEvents(RANGE);
+    expect(events[0]!.joinLink).toBe("https://zoom.us/j/conference");
+  });
+
+  it("trims surrounding whitespace off the location", async () => {
+    const e: GoogleCalendarEvent = {
+      id: "ev-trim",
+      summary: "Padded location",
+      ...timed,
+      location: "  https://zoom.us/j/81323022832 ",
+    };
+    pageQueue.push({ items: [e] });
+    const events = await createGoogleCalendarSource(testEnv).fetchEvents(RANGE);
+    expect(events[0]!.joinLink).toBe("https://zoom.us/j/81323022832");
+  });
+
   it("returns null when neither location nor video conferenceData is present", async () => {
     const e: GoogleCalendarEvent = { id: "ev-none", summary: "No link", ...timed };
     pageQueue.push({ items: [e] });

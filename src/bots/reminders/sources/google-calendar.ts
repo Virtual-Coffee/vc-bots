@@ -102,11 +102,13 @@ function toReminderEvent(e: GoogleCalendarEvent): ReminderEvent | null {
     endsAt = end.isValid ? (end.toUTC().toISO() ?? null) : null;
   }
 
-  // Join Link: `location` is canonical; a video conferenceData entry is the fallback.
+  // Join Link: `location` is canonical (blank/whitespace counts as absent); a video
+  // conferenceData entry is the fallback.
   const videoEntryPoint = e.conferenceData?.entryPoints?.find(
     (ep) => ep.entryPointType === "video" && ep.uri !== undefined,
   );
-  const joinLink = e.location ?? videoEntryPoint?.uri ?? null;
+  const location = e.location?.trim() || null;
+  const joinLink = location ?? videoEntryPoint?.uri ?? null;
 
   // Host key: the private `hostCode` property; empty/whitespace counts as absent.
   const hostKey = e.extendedProperties?.private?.hostCode?.trim() || null;
