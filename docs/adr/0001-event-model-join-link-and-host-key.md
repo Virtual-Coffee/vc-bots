@@ -33,7 +33,7 @@ still carried the CMS GraphQL source it was meant to replace.
 ## Consequences
 
 - `ReminderEvent` loses `zoomHostCode` and `slackChannelId`.
-- The Zoom S2S app needs the `meeting:read:admin` and `user:read:admin` scopes.
+- The Zoom S2S app needs the `meeting:read:meeting:admin` and `user:read:user:admin` granular scopes.
 - `CMS_TOKEN`, `CMS_GRAPHQL_URL`, `graphql`, and `graphql-request` are gone.
 - Calendar migration (manual): set `location` on the Morning/Afternoon Crowd series, clear the
   old `joinLink`/`hostCode` properties, and convert existing descriptions to Markdown.

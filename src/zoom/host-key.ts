@@ -4,7 +4,7 @@
  * The host key is a per-Zoom-user setting, so it is resolved from the event's Join Link at
  * send time: meeting id → `GET /meetings/{id}` → `host_id` → `GET /users/{host_id}` →
  * `host_key`. S2S apps can't call `/users/me`, hence the two hops. Requires the
- * `meeting:read:admin` and `user:read:admin` scopes on the S2S app.
+ * `meeting:read:meeting:admin` and `user:read:user:admin` granular scopes on the S2S app.
  *
  * @see https://developers.zoom.us/docs/api/meetings/ (Get a meeting; Get a user)
  */

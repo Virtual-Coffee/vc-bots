@@ -112,7 +112,7 @@ Config and secrets are split deliberately:
 - **Secrets** go via `wrangler secret put <NAME>` in production and `.dev.vars` locally (see
   `.dev.vars.example`): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`,
   `ZOOM_WEBHOOK_SECRET_TOKEN`, `ZOOM_S2S_CLIENT_ID`, `ZOOM_S2S_CLIENT_SECRET`,
-  `ZOOM_S2S_ACCOUNT_ID` (the S2S app needs `meeting:read:admin` + `user:read:admin` for the
+  `ZOOM_S2S_ACCOUNT_ID` (the S2S app needs `meeting:read:meeting:admin` + `user:read:user:admin` for the
   host-key lookup), `GOOGLE_SERVICE_ACCOUNT_KEY` (Google Calendar service account).
 
 ### Provider setup
@@ -123,7 +123,7 @@ Config and secrets are split deliberately:
 - **Zoom app**: webhook subscriptions for `meeting.started`, `meeting.ended`,
   `meeting.participant_joined`, and `meeting.participant_left` pointed at `/zoom/webhook`,
   plus a Server-to-Server OAuth app for the invite-link API and the event host-key lookup
-  (the latter needs the `meeting:read:admin` + `user:read:admin` scopes). The subscription is
+  (the latter needs the `meeting:read:meeting:admin` + `user:read:user:admin` scopes). The subscription is
   account-wide, so events arrive for every meeting under the account — the router ignores
   any meeting that isn't `ZOOM_MEETING_ID`. The co-working meeting must **not** require
   registration — invite links depend on it.
