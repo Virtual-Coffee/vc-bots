@@ -32,16 +32,14 @@ export function buildStartingSoonMessage(event: ReminderEvent): ReminderMessage 
   return { text: `Starting soon: ${event.title}: ${fallbackDate(event)}`, blocks };
 }
 
-/** Event-admin mirror of the starting-soon message, with host info for moderators. `hostKey`
- *  is the Zoom host key resolved at send time (`src/zoom/host-key.ts`); null = no Zoom meeting. */
+/** Event-admin mirror of the starting-soon message, with host info for moderators. */
 export function buildStartingSoonAdminMessage(
   event: ReminderEvent,
   targetChannelId: string,
-  hostKey: string | null,
 ): ReminderMessage {
   const blocks: AnyMessageBlock[] = [header("⏰ Starting Soon:"), titleSection(event, true)];
   if (event.joinLink) blocks.push(section(`*Location:* ${event.joinLink}`));
-  if (hostKey) blocks.push(section(`*Host Code:* ${hostKey}`));
+  if (event.hostKey) blocks.push(section(`*Host Code:* ${event.hostKey}`));
   blocks.push(section(`*Announcement posted to:* <#${targetChannelId}>`), { type: "divider" });
 
   return { text: `Starting soon: ${event.title}: ${fallbackDate(event)}`, blocks };

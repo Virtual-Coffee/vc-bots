@@ -213,7 +213,7 @@ describe("joinLink precedence", () => {
     expect(events[0]!.joinLink).toBeNull();
   });
 
-  it("ignores extendedProperties on the payload (docs/adr/0001)", async () => {
+  it("ignores a private joinLink property: location still wins (docs/adr/0001)", async () => {
     const e = {
       id: "ev-ext",
       summary: "Legacy properties",
@@ -227,7 +227,44 @@ describe("joinLink precedence", () => {
     pageQueue.push({ items: [e] });
     const events = await createGoogleCalendarSource(testEnv).fetchEvents(RANGE);
     expect(events[0]!.joinLink).toBe("https://zoom.us/j/location");
-    expect(JSON.stringify(events[0])).not.toMatch(/111222|999000|PRIVATE|SHARED/);
+    expect(JSON.stringify(events[0])).not.toMatch(/999000|PRIVATE|SHARED/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. hostKey mapping
+// ---------------------------------------------------------------------------
+
+describe("hostKey mapping", () => {
+  const timed = {
+    start: { dateTime: "2026-06-12T19:00:00-04:00" },
+    end: { dateTime: "2026-06-12T20:00:00-04:00" },
+  };
+
+  it("reads extendedProperties.private.hostCode, trimmed", async () => {
+    const e: GoogleCalendarEvent = {
+      id: "ev-host",
+      summary: "Host key",
+      ...timed,
+      location: "https://zoom.us/j/81323022832",
+      extendedProperties: { private: { hostCode: " 111222 " } },
+    };
+    pageQueue.push({ items: [e] });
+    const events = await createGoogleCalendarSource(testEnv).fetchEvents(RANGE);
+    expect(events[0]!.hostKey).toBe("111222");
+  });
+
+  it("maps a missing or blank hostCode to null", async () => {
+    const missing: GoogleCalendarEvent = { id: "ev-nohost", summary: "No host key", ...timed };
+    const blank: GoogleCalendarEvent = {
+      id: "ev-blank",
+      summary: "Blank host key",
+      ...timed,
+      extendedProperties: { private: { hostCode: "   " } },
+    };
+    pageQueue.push({ items: [missing, blank] });
+    const events = await createGoogleCalendarSource(testEnv).fetchEvents(RANGE);
+    expect(events.map((ev) => ev.hostKey)).toEqual([null, null]);
   });
 });
 

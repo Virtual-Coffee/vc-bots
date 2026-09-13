@@ -91,15 +91,6 @@ function makeFetchSpy() {
       return Response.json({ ok: true, ts: "1", scheduled_message_id: "x" });
     }
 
-    // Zoom: the S2S token + the host-key lookups `reconcileStartingSoon` makes per Zoom Join Link.
-    if (hostname === "zoom.us") {
-      return Response.json({ access_token: "zoom-token", token_type: "bearer", expires_in: 3600 });
-    }
-    if (hostname === "api.zoom.us") {
-      if (pathname.startsWith("/v2/meetings/")) return Response.json({ host_id: "HOST1" });
-      if (pathname.startsWith("/v2/users/")) return Response.json({ host_key: "123456" });
-    }
-
     return Response.json({ ok: true });
   });
 }
@@ -154,13 +145,20 @@ function watchCalls(): RecordedCall[] {
 }
 
 /** A timed Google Calendar Events: list item; `location` is the Join Link. */
-function timedEvent(id: string, startDateTime: string, summary = "Event", location?: string) {
+function timedEvent(
+  id: string,
+  startDateTime: string,
+  summary = "Event",
+  location?: string,
+  hostCode?: string,
+) {
   return {
     id,
     summary,
     start: { dateTime: startDateTime },
     end: { dateTime: DateTime.fromISO(startDateTime).plus({ hours: 1 }).toISO() },
     location,
+    ...(hostCode === undefined ? {} : { extendedProperties: { private: { hostCode } } }),
   };
 }
 
@@ -336,8 +334,8 @@ describe("CalendarSync — processNotification", () => {
   it("re-queues the daily starting-soon pair with the Zoom host key in the event-admin mirror", async () => {
     const stub = syncStub();
 
-    // Later today (in the daily window), with a Zoom Join Link as the location.
-    const zoom = timedEvent("evt-1", at(6), "Event", "https://us02web.zoom.us/j/81323022832?pwd=x");
+    // Later today (in the daily window), with a Zoom Join Link as the location and its host code.
+    const zoom = timedEvent("evt-1", at(6), "Event", "https://us02web.zoom.us/j/81323022832?pwd=x", "123456");
     eventsList = { items: [zoom] };
     await withSync(stub, (instance) => instance.seed(NOW));
 
@@ -348,6 +346,5 @@ describe("CalendarSync — processNotification", () => {
     expect(scheduled).toHaveLength(2);
     expect(new URLSearchParams(scheduled[0]!.body).get("blocks")).not.toContain("*Host Code:*");
     expect(new URLSearchParams(scheduled[1]!.body).get("blocks")).toContain("*Host Code:* 123456");
-    expect(recorded.filter((r) => r.url.includes("api.zoom.us/v2/users/HOST1"))).toHaveLength(1);
   });
 });

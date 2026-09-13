@@ -2,16 +2,15 @@ import { vi } from "vitest";
 
 /**
  * Records every outbound `fetch` a test triggers (Slack Web API, Zoom OAuth, Zoom invite links,
- * Zoom meeting/user lookups, Google Calendar, Slack `response_url`s) and answers each with a
- * canned response, so end-to-end suites can run against the real Worker/DO code with no network.
+ * Google Calendar, Slack `response_url`s) and answers each with a canned response, so
+ * end-to-end suites can run against the real Worker/DO code with no network.
  *
  * `installFetchRecorder` stubs the global `fetch` (undo it with `vi.unstubAllGlobals()` in
  * `afterEach`). Answers come from the test's own `respond` override first, then the defaults:
- * Zoom OAuth → a token, Zoom invite links → one attendee with `zoomJoinUrl`, Zoom meeting GET →
- * `{ host_id }`, Zoom user GET → `{ host_key: zoomHostKey }`, Google OAuth → a token, Google
- * Calendar events list → `{ items: googleEvents }`, `users.profile.get` → `profileName`,
- * `chat.postMessage` → the next ts in `postTs` (the last one repeats), and anything else →
- * `{ ok: true }` with `defaultTs`.
+ * Zoom OAuth → a token, Zoom invite links → one attendee with `zoomJoinUrl`, Google OAuth → a
+ * token, Google Calendar events list → `{ items: googleEvents }`, `users.profile.get` →
+ * `profileName`, `chat.postMessage` → the next ts in `postTs` (the last one repeats), and
+ * anything else → `{ ok: true }` with `defaultTs`.
  */
 
 export interface RecordedCall {
@@ -37,8 +36,6 @@ export interface FetchRecorderOptions {
   zoomJoinUrl?: string;
   /** `real_name` the `users.profile.get` stub returns. */
   profileName?: string;
-  /** `host_key` the Zoom user stub returns (the meeting stub's `host_id` is always `HOST1`). */
-  zoomHostKey?: string;
   /** Events: list items the Google Calendar stub returns (a single page); a thunk is re-read per call. */
   googleEvents?: object[] | (() => object[]);
 }
@@ -57,10 +54,8 @@ export interface FetchRecorder {
 }
 
 const DEFAULT_TS = "1700000000.000100";
-/** `host_id` every stubbed Zoom meeting reports. */
-export const ZOOM_HOST_ID = "HOST1";
-/** `host_key` the stubbed Zoom user reports unless `zoomHostKey` overrides it. */
-export const ZOOM_HOST_KEY = "123456";
+/** The `extendedProperties.private.hostCode` the Zoom-link Google fixtures carry. */
+export const HOST_CODE = "123456";
 
 export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchRecorder {
   const calls: RecordedCall[] = [];
@@ -70,7 +65,6 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
   const defaultTs = options.defaultTs ?? DEFAULT_TS;
   const zoomJoinUrl = options.zoomJoinUrl ?? "https://zoom.us/w/personal-1";
   const profileName = options.profileName ?? "Ada";
-  const zoomHostKey = options.zoomHostKey ?? ZOOM_HOST_KEY;
   const googleEvents = () => {
     const events = options.googleEvents ?? [];
     return typeof events === "function" ? events() : events;
@@ -100,12 +94,6 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
     }
     if (method === "POST" && url.includes("api.zoom.us/v2/meetings/")) {
       return Response.json({ attendees: [{ name: profileName, join_url: zoomJoinUrl }] });
-    }
-    if (url.includes("api.zoom.us/v2/meetings/")) {
-      return Response.json({ host_id: ZOOM_HOST_ID });
-    }
-    if (url.includes("api.zoom.us/v2/users/")) {
-      return Response.json({ host_key: zoomHostKey });
     }
     if (url.startsWith("https://oauth2.googleapis.com/token")) {
       return Response.json({ access_token: "g-tok", expires_in: 3600 });

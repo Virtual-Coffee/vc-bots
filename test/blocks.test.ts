@@ -17,6 +17,7 @@ function evt(overrides: Partial<ReminderEvent> = {}): ReminderEvent {
     startsAt: "2026-05-28T15:00:00.000Z",
     description: "Bring **questions**!",
     joinLink: "https://zoom.us/j/123",
+    hostKey: "9876",
     ...overrides,
   };
 }
@@ -72,14 +73,17 @@ describe("buildStartingSoonMessage", () => {
 
 describe("buildStartingSoonAdminMessage", () => {
   it("includes location, host code, and the target channel", () => {
-    const { blocks } = buildStartingSoonAdminMessage(evt(), "C123", "9876");
+    const { blocks } = buildStartingSoonAdminMessage(evt(), "C123");
     expect(json(blocks)).toContain("*Location:* https://zoom.us/j/123");
     expect(json(blocks)).toContain("*Host Code:* 9876");
     expect(json(blocks)).toContain("*Announcement posted to:* <#C123>");
   });
 
   it("omits the host code and location sections when absent", () => {
-    const { blocks } = buildStartingSoonAdminMessage(evt({ joinLink: null }), FALLBACK_CHANNEL, null);
+    const { blocks } = buildStartingSoonAdminMessage(
+      evt({ joinLink: null, hostKey: null }),
+      FALLBACK_CHANNEL,
+    );
     expect(json(blocks)).not.toContain("*Host Code:*");
     expect(json(blocks)).not.toContain("*Location:*");
     expect(json(blocks)).toContain(`*Announcement posted to:* <#${FALLBACK_CHANNEL}>`);

@@ -24,6 +24,9 @@ export interface ReminderEvent {
   description?: string | null;
   /** URL or free-text location (a non-URL renders as a "Location:" line, not a button). */
   joinLink?: string | null;
+  /** Zoom host key from `extendedProperties.private.hostCode`; shown only in the event-admin
+   *  mirror; never log it. */
+  hostKey?: string | null;
 }
 
 /** ISO range passed to the provider (computed in America/New_York). */

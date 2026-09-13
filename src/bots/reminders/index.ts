@@ -4,7 +4,7 @@ import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
-import { createHostKeyResolver, parseZoomMeetingId } from "../../zoom/host-key";
+import { parseZoomMeetingId } from "../../zoom/join-link";
 import {
   buildDailyMessage,
   buildStartingSoonAdminMessage,
@@ -165,8 +165,7 @@ async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise
  * `events`. Clears this bot's scheduled messages in the window first, then re-queues each
  * event's public + event-admin pair for start − 10 min (or posts immediately if the slot has
  * already passed). Returns the number of events handled. The event-admin mirror carries the
- * Zoom host key, resolved from the Join Link per meeting (`src/zoom/host-key.ts`); a Zoom
- * failure rejects the whole run (docs/adr/0001).
+ * event's host key; a Zoom Join Link without one rejects the whole run (docs/adr/0001).
  *
  * Shared by:
  * - the **daily cron** (`sendDaily`) — runs at 12:00 UTC to seed the day's queue.
@@ -185,7 +184,6 @@ export async function reconcileStartingSoon(
   range: EventRange,
 ): Promise<number> {
   await clearScheduledInWindow(client, nowMs, range);
-  const resolveHostKey = createHostKeyResolver(env);
 
   const nowSeconds = Math.floor(nowMs / 1000);
   let handled = 0;
@@ -196,13 +194,14 @@ export async function reconcileStartingSoon(
       continue;
     }
 
-    // Only announced events cost Zoom calls; a non-Zoom Join Link simply has no host key line.
-    const meetingId = event.joinLink ? parseZoomMeetingId(event.joinLink) : null;
-    const hostKey = meetingId ? await resolveHostKey(meetingId) : null;
+    // A Zoom event must carry its host key; a non-Zoom Join Link simply has no host key line.
+    if (parseZoomMeetingId(event.joinLink ?? "") && !event.hostKey) {
+      throw new Error(`No host code on Zoom event "${event.title}" (${event.id})`);
+    }
 
     const channel = env.SLACK_EVENTS_CHANNEL_ID;
     const message = buildStartingSoonMessage(event);
-    const adminMessage = buildStartingSoonAdminMessage(event, channel, hostKey);
+    const adminMessage = buildStartingSoonAdminMessage(event, channel);
     const postAt = startSeconds - STARTING_SOON_LEAD_SECONDS;
     const common = { unfurl_links: false, unfurl_media: false };
 

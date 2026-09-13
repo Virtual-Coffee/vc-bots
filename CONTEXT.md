@@ -69,7 +69,7 @@ The event's `location`: where members go to attend. A URL becomes the Join Event
 _Avoid_: joinLink property, Zoom link, meeting link
 
 **Host key**:
-Zoom's per-user key that lets a moderator claim host in the meeting. Resolved from Zoom when the starting-soon pair is queued and shown only in the event-admin mirror; never logged.
+Zoom's per-user key that lets a moderator claim host in the meeting. Stored as `extendedProperties.private.hostCode` on the event (the calendar is private); shown only in the event-admin mirror; never logged.
 _Avoid_: host code field, zoomHostCode, hostCode property
 
 **Starting-soon pair**:

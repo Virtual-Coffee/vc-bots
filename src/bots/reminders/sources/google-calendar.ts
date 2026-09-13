@@ -5,10 +5,9 @@ import { log } from "../../../log";
 import type { EventRange, EventSource, ReminderEvent } from "../source";
 
 /**
- * Google Calendar event source: reads the shared "Virtual Coffee Events" calendar via the
- * service account (readonly scope: `https://www.googleapis.com/auth/calendar.readonly`).
- * The Join Link is the event's `location`; nothing is read from `extendedProperties`
- * (docs/adr/0001).
+ * Google Calendar event source: reads the private "Virtual Coffee Events" calendar via the
+ * service account (scope `https://www.googleapis.com/auth/calendar`, see `src/google/auth.ts`).
+ * Join Link = `location`, host key = `extendedProperties.private.hostCode` (docs/adr/0001).
  */
 
 const CALENDAR_BASE = "https://www.googleapis.com/calendar/v3/calendars";
@@ -23,6 +22,7 @@ export interface GoogleCalendarEvent {
   start?: { dateTime?: string; date?: string; timeZone?: string };
   end?: { dateTime?: string; date?: string; timeZone?: string };
   conferenceData?: { entryPoints?: Array<{ entryPointType?: string; uri?: string }> };
+  extendedProperties?: { private?: Record<string, string> };
 }
 
 export function createGoogleCalendarSource(env: Env): EventSource {
@@ -108,6 +108,9 @@ function toReminderEvent(e: GoogleCalendarEvent): ReminderEvent | null {
   );
   const joinLink = e.location ?? videoEntryPoint?.uri ?? null;
 
+  // Host key: the private `hostCode` property; empty/whitespace counts as absent.
+  const hostKey = e.extendedProperties?.private?.hostCode?.trim() || null;
+
   return {
     id: e.id,
     title: e.summary ?? "(untitled event)",
@@ -115,5 +118,6 @@ function toReminderEvent(e: GoogleCalendarEvent): ReminderEvent | null {
     endsAt,
     description: e.description ?? null,
     joinLink,
+    hostKey,
   };
 }

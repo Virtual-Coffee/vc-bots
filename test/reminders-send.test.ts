@@ -3,11 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendReminder } from "../src/bots/reminders";
 import type { GoogleCalendarEvent } from "../src/bots/reminders/sources/google-calendar";
 import { resetGoogleTokenCacheForTests } from "../src/google/auth";
-import {
-  type FetchRecorder,
-  installFetchRecorder,
-  ZOOM_HOST_KEY,
-} from "./helpers/fetch-recorder";
+import { parseZoomMeetingId } from "../src/zoom/join-link";
+import { type FetchRecorder, HOST_CODE, installFetchRecorder } from "./helpers/fetch-recorder";
 
 // Thursday 2026-05-28, 12:00 UTC (8:00 EDT). Monday variant for the daily summary skip.
 const NOW = Date.parse("2026-05-28T12:00:00Z");
@@ -35,14 +32,23 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-/** A timed calendar event at `startUtc` (ISO, UTC); `location` is the Join Link. */
-function evt(id: string, startUtc: string, location?: string): GoogleCalendarEvent {
+/**
+ * A timed calendar event at `startUtc` (ISO, UTC); `location` is the Join Link. A Zoom Join
+ * Link carries the `HOST_CODE` private property unless `hostCode` overrides it (null = none).
+ */
+function evt(
+  id: string,
+  startUtc: string,
+  location?: string,
+  hostCode: string | null = location && parseZoomMeetingId(location) ? HOST_CODE : null,
+): GoogleCalendarEvent {
   return {
     id,
     summary: `Event ${id}`,
     start: { dateTime: `${startUtc}Z` },
     end: { dateTime: `${startUtc}Z` },
     location,
+    ...(hostCode === null ? {} : { extendedProperties: { private: { hostCode } } }),
   };
 }
 
@@ -109,7 +115,6 @@ describe("sendReminder — daily", () => {
 
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
     expect(forms("/api/chat.postMessage")).toHaveLength(1); // summary only
-    expect(rec.callsTo("zoom.us")).toHaveLength(0); // nothing announced → no host-key lookups
   });
 
   it("skips the summary on Mondays (weekly covers it) but still schedules", async () => {
@@ -129,38 +134,32 @@ describe("sendReminder — daily", () => {
 });
 
 describe("sendReminder — daily, host key in the event-admin mirror", () => {
-  it("resolves the Zoom host key from the Join Link and shows it only in the admin mirror", async () => {
+  it("shows the calendar's private hostCode only in the admin mirror", async () => {
     googleEvents = [evt("1", "2026-05-28T18:00:00", ZOOM_LOCATION)];
     await sendReminder("daily", env, NOW);
 
     const scheduled = forms("/api/chat.scheduleMessage");
     expect(scheduled).toHaveLength(2);
     expect(scheduled[0]?.get("blocks")).not.toContain("*Host Code:*"); // public
-    expect(scheduled[1]?.get("blocks")).toContain(`*Host Code:* ${ZOOM_HOST_KEY}`); // admin
-
-    // meeting id parsed from the Join Link → meeting GET → user GET
-    expect(rec.callsTo("api.zoom.us/v2/meetings/81323022832")).toHaveLength(1);
-    expect(rec.callsTo("api.zoom.us/v2/users/HOST1")).toHaveLength(1);
+    expect(scheduled[1]?.get("blocks")).toContain(`*Host Code:* ${HOST_CODE}`); // admin
+    expect(rec.callsTo("zoom.us")).toHaveLength(0); // the key comes from the calendar, not Zoom
   });
 
-  it("omits the host code line for a non-Zoom Join Link and makes no Zoom calls", async () => {
+  it("omits the host code line for a non-Zoom Join Link without failing", async () => {
     googleEvents = [evt("1", "2026-05-28T18:00:00", "https://meet.google.com/abc-defg-hij")];
-    await sendReminder("daily", env, NOW);
+    const result = await sendReminder("daily", env, NOW);
+    expect(result).toEqual({ posted: true, count: 1, scheduled: 1, source: "google" });
 
     const scheduled = forms("/api/chat.scheduleMessage");
     expect(scheduled).toHaveLength(2);
     expect(scheduled[1]?.get("blocks")).not.toContain("*Host Code:*");
-    expect(rec.callsTo("zoom.us")).toHaveLength(0);
   });
 
-  it("fails the run when Zoom errors", async () => {
-    googleEvents = [evt("1", "2026-05-28T18:00:00", ZOOM_LOCATION)];
-    rec.respondWith((call) =>
-      call.url.includes("api.zoom.us/v2/meetings/")
-        ? new Response("boom", { status: 500 })
-        : undefined,
+  it("fails the run, naming the event, when a Zoom event has no hostCode", async () => {
+    googleEvents = [evt("1", "2026-05-28T18:00:00", ZOOM_LOCATION, null)];
+    await expect(sendReminder("daily", env, NOW)).rejects.toThrow(
+      'No host code on Zoom event "Event 1" (1)',
     );
-    await expect(sendReminder("daily", env, NOW)).rejects.toThrow("Zoom get-meeting failed: 500");
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
   });
 });
@@ -177,7 +176,6 @@ describe("sendReminder — weekly", () => {
     expect(posts[0]?.get("text")).toContain("This weeks events are:");
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
     expect(forms("/api/chat.scheduledMessages.list")).toHaveLength(0);
-    expect(rec.callsTo("zoom.us")).toHaveLength(0); // the weekly never needs a host key
   });
 
   it("posts nothing when the week is empty", async () => {

@@ -129,13 +129,13 @@ weekly covers it) but still schedules. Event windows are computed in `America/Ne
 come through the `EventSource` abstraction (`source.ts`); Google Calendar
 (`sources/google-calendar.ts`, service-account JWT-bearer auth signed in `src/google/auth.ts`)
 is the only registered source and the `EVENT_SOURCE` default. Per `docs/adr/0001`: the Join Link
-is the event's `location` (video `conferenceData` is the fallback; `extendedProperties` is never
-read), descriptions are **Markdown** rendered with `slackify-markdown`, and the host key is
-**not** an event field — `reconcileStartingSoon` resolves it from Zoom at send time
-(`src/zoom/host-key.ts`: meeting id parsed from the Join Link → `GET /meetings/{id}` → `host_id`
-→ `GET /users/{host_id}` → `host_key`, cached per run; S2S apps can't call `/users/me`). Only
-announced events cost Zoom calls; a Zoom failure fails the run; a non-Zoom Join Link just has no
-host-code line. The host key goes only to the event-admin mirror — **never log it**. ⚠️ The cron
+is the event's `location` (video `conferenceData` is the fallback; a `private.joinLink` property
+is ignored), descriptions are **Markdown** rendered with `slackify-markdown`, and the host key is
+the event's `extendedProperties.private.hostCode` (the calendar is private; the Zoom API stopped
+returning `host_key` in 2022, so it cannot be looked up at send time). `reconcileStartingSoon`
+fails the run when a Zoom Join Link (`parseZoomMeetingId` in `src/zoom/join-link.ts` matches) has
+no host key; a non-Zoom Join Link just has no host-code line. The host key goes only to the
+event-admin mirror — **never log it**. ⚠️ The cron
 strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
 wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons
 fire in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * MON` weekly). ⚠️ Cloudflare
