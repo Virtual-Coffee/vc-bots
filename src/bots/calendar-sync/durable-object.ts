@@ -21,10 +21,12 @@ import { reminderRange } from "../reminders/source";
  * Two jobs:
  * - **Watch lifecycle** (`ensureWatch` / `stopWatch` / `watchStatus`): register a Calendar
  *   `events/watch` push channel, renew it ~1 day before its 7-day expiry via the DO alarm.
- * - **Notification handling** (`processNotification`): on each push, diff the live weekly window
- *   against the last-known snapshot to detect cancellations / reschedules, post standout notices
- *   to the three event channels, reconcile the scheduled "Starting Soon" queue, then persist the
- *   new snapshot.
+ * - **Notification handling** (`notify` → `processNotification`): on each push, diff the live
+ *   weekly window against the last-known snapshot to detect cancellations / reschedules, persist
+ *   the new snapshot, then post standout notices to the three event channels and reconcile the
+ *   scheduled "Starting Soon" queue. The snapshot is committed *before* delivery so a failed Slack
+ *   call loses (and alerts on) a notice rather than re-posting it to every channel on the next
+ *   push. `notify` drops pushes whose channel id isn't the stored one (stale/replaced channels).
  *
  * ⚠️ The watch token (`GOOGLE_WATCH_TOKEN`), address (`GOOGLE_WATCH_ADDRESS`), and Google access
  * tokens are credentials — never log them. The channel id is a random uuid, safe to log.
@@ -34,6 +36,8 @@ import { reminderRange } from "../reminders/source";
 const WATCH_TTL_SECONDS = 604800;
 /** Renew (and fire the alarm) this far before expiry so the channel never lapses mid-window. */
 const RENEW_BUFFER_MS = 24 * 60 * 60 * 1000;
+/** When a renewal fails, try again this much later (well inside the 24h buffer). */
+const RENEW_RETRY_MS = 60 * 60 * 1000;
 const CALENDAR_BASE = "https://www.googleapis.com/calendar/v3/calendars";
 const CHANNELS_STOP_URL = "https://www.googleapis.com/calendar/v3/channels/stop";
 
@@ -105,11 +109,8 @@ export class CalendarSync extends DurableObject<Env> {
       return { active: true, channelId: existing.id, expiresAt: existing.expiration_ms };
     }
 
-    // (Re)create. Stop the old channel best-effort first so Google isn't left double-notifying.
-    if (existing) {
-      await this.stopChannel(existing.id, existing.resource_id);
-    }
-
+    // (Re)create. The replacement is created and persisted BEFORE the old channel is stopped, so
+    // a failure here leaves the old (still-registered) channel and its row intact.
     const token = await getGoogleAccessToken(this.env);
     const calendarId = encodeURIComponent(this.env.GOOGLE_CALENDAR_ID);
     const channelId = crypto.randomUUID();
@@ -149,6 +150,12 @@ export class CalendarSync extends DurableObject<Env> {
 
     await this.ctx.storage.setAlarm(expirationMs - RENEW_BUFFER_MS);
 
+    // Now retire the old channel best-effort. A stop that fails is harmless: `notify` ignores
+    // pushes from any channel id other than the one just stored.
+    if (existing) {
+      await this.stopChannel(existing.id, existing.resource_id);
+    }
+
     // First-time setup: establish a snapshot baseline so the next notification has something to
     // diff against (otherwise every event would look "new").
     if (this.snapshotEmpty()) {
@@ -159,12 +166,19 @@ export class CalendarSync extends DurableObject<Env> {
     return { active: true, channelId, expiresAt: expirationMs };
   }
 
-  /** Stop the active push channel (if any), drop the row, and disarm the renewal alarm. */
+  /**
+   * Stop the active push channel (if any), drop the row, and disarm the renewal alarm. If Google
+   * refuses the stop, the row and alarm are kept and this throws — the watch is still live, and
+   * reporting "stopped" would leave a channel pushing at us with no record of it.
+   */
   async stopWatch(): Promise<{ stopped: boolean }> {
     const existing = this.getChannel();
     if (!existing) return { stopped: false };
 
-    await this.stopChannel(existing.id, existing.resource_id);
+    const result = await this.stopChannel(existing.id, existing.resource_id);
+    if (result === "failed") {
+      throw new Error("Google refused to stop the calendar watch channel; the watch is still registered");
+    }
     this.sql.exec("DELETE FROM channel");
     await this.ctx.storage.deleteAlarm();
     log.info("calendar_sync.watch_stopped", { channelId: existing.id });
@@ -191,11 +205,28 @@ export class CalendarSync extends DurableObject<Env> {
   }
 
   /**
+   * Entry point for the `/google/notify` route. The route already checked the channel token;
+   * this checks the channel *id* against the stored row so a stale channel (one a failed stop
+   * left live at Google, or the one just replaced by `ensureWatch`) can't drive a sync.
+   */
+  async notify(channelId: string, nowMs: number = Date.now()): Promise<void> {
+    const existing = this.getChannel();
+    if (!existing || existing.id !== channelId) {
+      log.warn("calendar_sync.notify_unknown_channel", { channelId });
+      return;
+    }
+    await this.processNotification(nowMs);
+  }
+
+  /**
    * Core push-notification handler. Diffs the live weekly window against the last snapshot:
-   * detects cancellations (left window + the event is gone/cancelled), reschedules
-   * (out-of-window moves and in-window time changes), posts standout notices to the three event
-   * channels, reconciles the scheduled "Starting Soon" queue for the daily window, then persists
-   * the new snapshot. New events get no notice — the scheduling reconcile handles them.
+   * detects cancellations (left window + the event is gone/cancelled) and reschedules
+   * (out-of-window moves and in-window time changes), persists the new snapshot, then posts
+   * standout notices to the three event channels and reconciles the scheduled "Starting Soon"
+   * queue for the daily window. New events get no notice — the scheduling reconcile handles them.
+   *
+   * Delivery failures don't stop the run: each post and the reconcile are isolated, and one
+   * aggregate error is thrown at the end so the caller can alert #bot-log.
    */
   async processNotification(nowMs: number = Date.now()): Promise<void> {
     const weekly = reminderRange("weekly", nowMs);
@@ -257,7 +288,12 @@ export class CalendarSync extends DurableObject<Env> {
       }
     }
 
+    // Commit the new baseline before delivering anything: a delivery failure below then loses a
+    // notice (alerted via the thrown error) instead of re-posting it everywhere on the next push.
+    this.writeSnapshot(current);
+
     const client = createSlackClient(this.env);
+    const failures: string[] = [];
 
     // Announce each notice to all three event channels.
     const channels = [
@@ -267,12 +303,17 @@ export class CalendarSync extends DurableObject<Env> {
     ];
     for (const notice of notices) {
       for (const channel of channels) {
-        await client.chat.postMessage({
-          channel,
-          ...notice,
-          unfurl_links: false,
-          unfurl_media: false,
-        });
+        try {
+          await client.chat.postMessage({
+            channel,
+            ...notice,
+            unfurl_links: false,
+            unfurl_media: false,
+          });
+        } catch (error) {
+          log.error("calendar_sync.notice_failed", { channel, error: String(error) });
+          failures.push(`notice → ${channel}: ${String(error)}`);
+        }
       }
     }
 
@@ -280,25 +321,40 @@ export class CalendarSync extends DurableObject<Env> {
     // Fetch the daily window directly (rather than filtering `current`) so this matches sendDaily
     // exactly — the source bounds the events, avoiding a brittle string compare between UTC `…Z`
     // startsAt and the Eastern-offset range bounds.
-    const dailyEvents = await source.fetchEvents(daily);
-    await reconcileStartingSoon(client, this.env, dailyEvents, nowMs, daily);
-
-    this.writeSnapshot(current);
+    try {
+      const dailyEvents = await source.fetchEvents(daily);
+      await reconcileStartingSoon(client, this.env, dailyEvents, nowMs, daily);
+    } catch (error) {
+      log.error("calendar_sync.reconcile_failed", { error: String(error) });
+      failures.push(`reconcile: ${String(error)}`);
+    }
 
     log.info("calendar_sync.processed", {
       cancellations,
       reschedules,
       currentCount: current.length,
+      failures: failures.length,
     });
+
+    if (failures.length > 0) {
+      throw new Error(
+        `calendar sync: ${failures.length} delivery failure(s): ${failures.join("; ")}`,
+      );
+    }
   }
 
-  /** Renewal alarm: re-create/renew the watch. Self-swallowing after alerting #bot-log. */
+  /**
+   * Renewal alarm: re-create/renew the watch. Self-swallowing after alerting #bot-log, but it
+   * re-arms itself for a retry so one failed renewal doesn't silently end automatic renewal
+   * (`stopWatch` deletes the alarm, which is what ends the retries).
+   */
   override async alarm(): Promise<void> {
     try {
       await this.ensureWatch();
     } catch (error) {
       log.error("calendar_sync.alarm_failed", { error: String(error) });
       await notifyBotLog(this.env, "calendar_sync.alarm_failed", { error: String(error) });
+      await this.ctx.storage.setAlarm(Date.now() + RENEW_RETRY_MS);
     }
   }
 
@@ -362,9 +418,16 @@ export class CalendarSync extends DurableObject<Env> {
     return res.json<{ status?: string; start?: { dateTime?: string; date?: string } }>();
   }
 
-  /** Best-effort stop of a push channel — failures are logged (warn) and ignored. */
-  private async stopChannel(id: string, resourceId: string | null): Promise<void> {
-    if (!resourceId) return;
+  /**
+   * Stop a push channel. `"gone"` means Google no longer knows it (404/410 — already expired or
+   * stopped), which callers treat like success. Failures are logged (warn) and reported, never
+   * thrown — callers decide whether they matter.
+   */
+  private async stopChannel(
+    id: string,
+    resourceId: string | null,
+  ): Promise<"stopped" | "gone" | "failed"> {
+    if (!resourceId) return "gone";
     try {
       const token = await getGoogleAccessToken(this.env);
       const res = await fetch(CHANNELS_STOP_URL, {
@@ -375,11 +438,13 @@ export class CalendarSync extends DurableObject<Env> {
         },
         body: JSON.stringify({ id, resourceId }),
       });
-      if (!res.ok) {
-        log.warn("calendar_sync.stop_channel_failed", { channelId: id, status: res.status });
-      }
+      if (res.ok) return "stopped";
+      if (res.status === 404 || res.status === 410) return "gone";
+      log.warn("calendar_sync.stop_channel_failed", { channelId: id, status: res.status });
+      return "failed";
     } catch (error) {
       log.warn("calendar_sync.stop_channel_failed", { channelId: id, error: String(error) });
+      return "failed";
     }
   }
 }

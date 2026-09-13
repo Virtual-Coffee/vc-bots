@@ -1,4 +1,9 @@
-import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
+import {
+  createExecutionContext,
+  env,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { resetGoogleTokenCacheForTests } from "../src/google/auth";
@@ -90,6 +95,26 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const CHANNEL_ID = "4ba78bf0-6a47-11e2-bcfd-0800200c9a66";
+
+/**
+ * Make the singleton CalendarSync DO recognise `CHANNEL_ID` as its live channel — the DO drops
+ * pushes from any other id, so the "kicks the DO" path needs a stored row to match.
+ */
+async function seedChannelRow(): Promise<void> {
+  const stub = env.CALENDAR_SYNC.getByName("default");
+  await runInDurableObject(stub, (_instance, state) => {
+    state.storage.sql.exec("DELETE FROM channel");
+    state.storage.sql.exec(
+      "INSERT INTO channel (id, resource_id, expiration_ms, token) VALUES (?, ?, ?, ?)",
+      CHANNEL_ID,
+      "res-1",
+      Date.now() + 86_400_000,
+      "tok",
+    );
+  });
+}
+
 // Mirrors the X-Goog-* headers Google sends on a watch notification. The channel token defaults
 // to "tok"; pass an override via `extra` to simulate a spoofed/stale notification.
 function gcalRequest(state: string, extra: Record<string, string> = {}): Request {
@@ -97,7 +122,7 @@ function gcalRequest(state: string, extra: Record<string, string> = {}): Request
     method: "POST",
     body: "",
     headers: {
-      "X-Goog-Channel-ID": "4ba78bf0-6a47-11e2-bcfd-0800200c9a66",
+      "X-Goog-Channel-ID": CHANNEL_ID,
       "X-Goog-Channel-Token": "tok",
       "X-Goog-Resource-ID": "ret08u3rv24htgh289g",
       "X-Goog-Resource-URI": "https://www.googleapis.com/calendar/v3/calendars/cal@x/events",
@@ -168,10 +193,22 @@ describe("POST /google/notify", () => {
   });
 
   it("kicks the DO on a valid change with EVENT_SOURCE=google (200, Google fetched)", async () => {
+    await seedChannelRow();
     const res = await send(gcalRequest("exists"), googleEnv());
 
     expect(res.status).toBe(200);
     // After draining ctx.waitUntil, processNotification has minted a token + listed events.
     expect(googleHit()).toBe(true);
+  });
+
+  it("drops a change whose channel id isn't the DO's stored channel (200, no Google fetch)", async () => {
+    await seedChannelRow();
+    const res = await send(
+      gcalRequest("exists", { "X-Goog-Channel-ID": "00000000-0000-0000-0000-000000000000" }),
+      googleEnv(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(googleHit()).toBe(false);
   });
 });

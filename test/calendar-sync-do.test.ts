@@ -38,6 +38,12 @@ let eventsList: object;
 let singleEvents: Map<string, { body: object; status?: number }>;
 /** Body returned by POST /events/watch. */
 let watchResponse: object;
+/** HTTP status for POST /events/watch (default 200). */
+let watchStatus: number;
+/** HTTP status for POST /channels/stop (default 200). */
+let stopStatus: number;
+/** Slack channel ids whose chat.postMessage answers `ok: false` (simulated delivery failure). */
+let failPostsTo: Set<string>;
 
 function normalizeUrl(input: unknown): string {
   return typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
@@ -63,11 +69,11 @@ function makeFetchSpy() {
     if (hostname === "www.googleapis.com") {
       // Stop a push channel.
       if (pathname === "/calendar/v3/channels/stop") {
-        return Response.json({});
+        return Response.json({}, { status: stopStatus });
       }
       // Create a watch channel.
       if (pathname.endsWith("/events/watch")) {
-        return Response.json(watchResponse);
+        return Response.json(watchResponse, { status: watchStatus });
       }
       // Single-event GET: /calendar/v3/calendars/{id}/events/{eventId}
       const single = pathname.match(/\/events\/([^/]+)$/);
@@ -88,6 +94,10 @@ function makeFetchSpy() {
       if (pathname === "/api/chat.scheduledMessages.list") {
         return Response.json({ ok: true, scheduled_messages: [] });
       }
+      if (pathname === "/api/chat.postMessage") {
+        const channel = new URLSearchParams(body).get("channel") ?? "";
+        if (failPostsTo.has(channel)) return Response.json({ ok: false, error: "channel_not_found" });
+      }
       return Response.json({ ok: true, ts: "1", scheduled_message_id: "x" });
     }
 
@@ -104,6 +114,9 @@ beforeEach(() => {
     resourceId: "res-1",
     expiration: String(Date.now() + 7 * 86_400_000),
   };
+  watchStatus = 200;
+  stopStatus = 200;
+  failPostsTo = new Set();
   vi.stubGlobal("fetch", makeFetchSpy());
 });
 
@@ -142,6 +155,18 @@ function slackPosts(): RecordedCall[] {
 }
 function watchCalls(): RecordedCall[] {
   return recorded.filter((r) => r.url.includes("/events/watch"));
+}
+function stopCalls(): RecordedCall[] {
+  return recorded.filter((r) => r.url.includes("/channels/stop"));
+}
+function channelRows(stub: ReturnType<typeof syncStub>) {
+  return withSync(stub, (_i, state) => state.storage.sql.exec("SELECT * FROM channel").toArray());
+}
+/** Backdate the stored channel so ensureWatch sees it as near expiry (inside the renew buffer). */
+function backdateChannel(stub: ReturnType<typeof syncStub>) {
+  return withSync(stub, (_i, state) =>
+    state.storage.sql.exec("UPDATE channel SET expiration_ms = ?", Date.now() + 60_000),
+  );
 }
 
 /** A timed Google Calendar Events: list item; `location` is the Join Link. */
@@ -199,6 +224,46 @@ describe("CalendarSync — ensureWatch", () => {
     );
     expect(live.active).toBe(true);
   });
+
+  it("renews a near-expiry channel: creates the replacement first, then stops the old one", async () => {
+    const stub = syncStub();
+    await withSync(stub, (instance) => instance.ensureWatch());
+    const [old] = await channelRows(stub);
+    await backdateChannel(stub);
+    recorded = [];
+    watchResponse = { resourceId: "res-2", expiration: String(Date.now() + 7 * 86_400_000) };
+
+    const status = await withSync(stub, (instance) => instance.ensureWatch());
+
+    expect(status.channelId).not.toBe(old?.id);
+    // Order: the watch POST is recorded before the stop of the old channel.
+    const watchIdx = recorded.findIndex((r) => r.url.includes("/events/watch"));
+    const stopIdx = recorded.findIndex((r) => r.url.includes("/channels/stop"));
+    expect(watchIdx).toBeGreaterThanOrEqual(0);
+    expect(stopIdx).toBeGreaterThan(watchIdx);
+    expect(JSON.parse(recorded[stopIdx]!.body)).toEqual({ id: old?.id, resourceId: "res-1" });
+    const rows = await channelRows(stub);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.resource_id).toBe("res-2");
+  });
+
+  it("keeps the old channel (and never stops it) when creating the replacement fails", async () => {
+    const stub = syncStub();
+    await withSync(stub, (instance) => instance.ensureWatch());
+    const [old] = await channelRows(stub);
+    await backdateChannel(stub);
+    recorded = [];
+    watchStatus = 500;
+
+    await expect(withSync(stub, (instance) => instance.ensureWatch())).rejects.toThrow(
+      /watch failed: 500/,
+    );
+
+    expect(stopCalls()).toHaveLength(0);
+    const rows = await channelRows(stub);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe(old?.id);
+  });
 });
 
 describe("CalendarSync — alarm renewal", () => {
@@ -215,6 +280,22 @@ describe("CalendarSync — alarm renewal", () => {
       instance.watchStatus(),
     );
     expect(live.active).toBe(true);
+  });
+
+  it("re-arms itself for a retry when the renewal fails (doesn't silently end renewal)", async () => {
+    const stub = syncStub();
+    await withSync(stub, (instance) => instance.ensureWatch());
+    await backdateChannel(stub);
+    watchStatus = 500;
+
+    const ran = await runDurableObjectAlarm(stub);
+    expect(ran).toBe(true);
+
+    const alarm = await withSync(stub, (_i, state) => state.storage.getAlarm());
+    expect(alarm).not.toBeNull();
+    expect(alarm!).toBeGreaterThan(Date.now());
+    // The old row survived the failed renewal.
+    expect(await channelRows(stub)).toHaveLength(1);
   });
 });
 
@@ -234,6 +315,65 @@ describe("CalendarSync — stopWatch", () => {
     );
     expect(live.active).toBe(false);
     expect(live.channelId).toBeNull();
+  });
+
+  it("keeps the row and alarm, and throws, when Google refuses the stop", async () => {
+    const stub = syncStub();
+    await withSync(stub, (instance) => instance.ensureWatch());
+    stopStatus = 500;
+
+    await expect(withSync(stub, (instance) => instance.stopWatch())).rejects.toThrow(
+      /still registered/,
+    );
+
+    expect(await channelRows(stub)).toHaveLength(1);
+    const live = await withSync(stub, (instance) => instance.watchStatus());
+    expect(live.active).toBe(true);
+    const alarm = await withSync(stub, (_i, state) => state.storage.getAlarm());
+    expect(alarm).not.toBeNull();
+  });
+
+  it("treats a channel Google no longer knows (404) as stopped", async () => {
+    const stub = syncStub();
+    await withSync(stub, (instance) => instance.ensureWatch());
+    stopStatus = 404;
+
+    const stopped = await withSync(stub, (instance) => instance.stopWatch());
+    expect(stopped).toEqual({ stopped: true });
+    expect(await channelRows(stub)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// notify — channel-id gate in front of processNotification
+// ---------------------------------------------------------------------------
+
+describe("CalendarSync — notify", () => {
+  it("drops a push whose channel id isn't the stored one (no calendar fetch, no Slack)", async () => {
+    const stub = syncStub();
+    await withSync(stub, (instance) => instance.ensureWatch());
+    recorded = [];
+
+    await withSync(stub, (instance) => instance.notify("not-the-stored-id", NOW));
+
+    expect(recorded.filter((r) => r.url.endsWith("/events") || r.url.includes("/events?"))).toHaveLength(0);
+    expect(slackPosts()).toHaveLength(0);
+  });
+
+  it("drops a push when no channel is stored at all", async () => {
+    const stub = syncStub();
+    await withSync(stub, (instance) => instance.notify("anything", NOW));
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("processes a push whose channel id matches the stored one", async () => {
+    const stub = syncStub();
+    const status = await withSync(stub, (instance) => instance.ensureWatch());
+    recorded = [];
+
+    await withSync(stub, (instance) => instance.notify(status.channelId!, NOW));
+
+    expect(recorded.some((r) => r.url.includes("/events?"))).toBe(true);
   });
 });
 
@@ -346,5 +486,30 @@ describe("CalendarSync — processNotification", () => {
     expect(scheduled).toHaveLength(2);
     expect(new URLSearchParams(scheduled[0]!.body).get("blocks")).not.toContain("*Host Code:*");
     expect(new URLSearchParams(scheduled[1]!.body).get("blocks")).toContain("*Host Code:* 123456");
+  });
+
+  it("commits the snapshot before delivering: one failed channel doesn't block the others or repeat on the next push", async () => {
+    const stub = syncStub();
+    eventsList = { items: [timedEvent("evt-1", at(48))] };
+    await withSync(stub, (instance) => instance.seed(NOW));
+
+    // Cancelled; the events channel rejects the post.
+    eventsList = { items: [] };
+    singleEvents.set("evt-1", { body: { status: "cancelled" } });
+    failPostsTo = new Set([env.SLACK_EVENTS_CHANNEL_ID]);
+    recorded = [];
+
+    await expect(
+      withSync(stub, (instance) => instance.processNotification(NOW)),
+    ).rejects.toThrow(/1 delivery failure/);
+
+    // All three channels were attempted, and the reconcile still ran after the failure.
+    expect(slackPosts()).toHaveLength(3);
+    expect(recorded.some((r) => r.url.includes("/api/chat.scheduledMessages.list"))).toBe(true);
+
+    // The snapshot advanced, so the next push (same calendar) has nothing to announce.
+    recorded = [];
+    await withSync(stub, (instance) => instance.processNotification(NOW));
+    expect(slackPosts()).toHaveLength(0);
   });
 });

@@ -183,7 +183,8 @@ async function handleGoogleNotify(
   ctx.waitUntil(
     (async () => {
       try {
-        await stub.processNotification();
+        // The DO drops pushes whose channel id isn't its stored one (stale/replaced channels).
+        await stub.notify(channelId ?? "");
       } catch (error) {
         log.error("google.notify.failed", { channelId, error: String(error) });
         await notifyBotLog(env, "google.notify.failed", { channelId, error: String(error) });
