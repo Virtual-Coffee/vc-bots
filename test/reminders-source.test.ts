@@ -39,6 +39,12 @@ describe("getEventSource / isEventSourceName", () => {
     expect(isEventSourceName("cms")).toBe(false);
     expect(isEventSourceName("bogus")).toBe(false);
   });
+
+  it("rejects inherited object property names (own-property check, not `in`)", () => {
+    expect(isEventSourceName("toString")).toBe(false);
+    expect(isEventSourceName("constructor")).toBe(false);
+    expect(() => getEventSource(env as Env, "toString")).toThrow(/Unknown event source "toString"/);
+  });
 });
 
 describe("reminderRange", () => {

@@ -50,7 +50,8 @@ export type EventSourceName = keyof typeof SOURCES;
 export const EVENT_SOURCE_NAMES = Object.keys(SOURCES) as EventSourceName[];
 
 export function isEventSourceName(name: string): name is EventSourceName {
-  return name in SOURCES;
+  // Own-property check: `in` would accept inherited names like "toString".
+  return Object.prototype.hasOwnProperty.call(SOURCES, name);
 }
 
 export function getEventSource(env: Env, name?: string): EventSource {
