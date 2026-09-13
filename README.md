@@ -79,7 +79,7 @@ src/
     client.ts         Slack client factory (createSlackClient / createSlackApp)
     notify.ts         #bot-log error alerts (notifyBotLog)
     response.ts       ephemeral reply helpers over response_url
-  zoom/               Zoom S2S OAuth, webhook verification, invite links, host keys, payload types
+  zoom/               Zoom S2S OAuth, webhook verification, invite links, payload types
 test/                 vitest suites that run inside real workerd (Miniflare)
 ```
 
@@ -113,7 +113,9 @@ Config and secrets are split deliberately:
   `.dev.vars.example`): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`,
   `ZOOM_WEBHOOK_SECRET_TOKEN`, `ZOOM_S2S_CLIENT_ID`, `ZOOM_S2S_CLIENT_SECRET`,
   `ZOOM_S2S_ACCOUNT_ID` (the S2S app needs only `meeting:write:invite_links:admin`),
-  `GOOGLE_SERVICE_ACCOUNT_KEY` (Google Calendar service account).
+  `GOOGLE_SERVICE_ACCOUNT_KEY` (Google Calendar service account), `GOOGLE_WATCH_TOKEN` (any
+  random string ≤256 chars; Google echoes it back on every Calendar push notification and the
+  `/google/notify` route drops notifications that don't carry it).
 
 ### Provider setup
 
@@ -173,6 +175,7 @@ wrangler secret put ZOOM_S2S_CLIENT_ID
 wrangler secret put ZOOM_S2S_CLIENT_SECRET
 wrangler secret put ZOOM_S2S_ACCOUNT_ID
 wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY
+wrangler secret put GOOGLE_WATCH_TOKEN
 
 pnpm deploy
 ```
