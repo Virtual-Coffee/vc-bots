@@ -7,23 +7,8 @@ import type { EventRange, EventSource, ReminderEvent } from "../source";
 /**
  * Google Calendar event source: reads the shared "Virtual Coffee Events" calendar via the
  * service account (readonly scope: `https://www.googleapis.com/auth/calendar.readonly`).
- *
- * Extended-property key convention — the service account **manages** this calendar (it wrote
- * the properties via the patch in `scripts/gcal.ts`), so it can read its own
- * `extendedProperties.private` fields. `private` is now the canonical home for Zoom metadata,
- * keeping the host code out of view for anyone merely subscribed to the public calendar (shared
- * properties are visible to all readers). `shared` is still read as a fallback for events that
- * have not yet been migrated.
- *
- * `extendedProperties.private` keys (canonical):
- *   - `joinLink`       — override join URL (beats conferenceData and location).
- *   - `hostCode`       — Zoom host key shown only in the event-admin mirror.
- *   - `slackChannelId` — per-event Slack channel (unused for routing, kept for future).
- *
- * `extendedProperties.shared` keys (legacy fallback):
- *   - `joinLink`       — same semantics, used when private key absent.
- *   - `zoomHostCode`   — legacy name for the Zoom host key.
- *   - `slackChannelId` — same semantics.
+ * The Join Link is the event's `location`; nothing is read from `extendedProperties`
+ * (docs/adr/0001).
  */
 
 const CALENDAR_BASE = "https://www.googleapis.com/calendar/v3/calendars";
@@ -33,11 +18,10 @@ export interface GoogleCalendarEvent {
   id: string;
   status?: string;
   summary?: string;
-  description?: string; // Google serves HTML; htmlToMrkdwn handles it downstream
+  description?: string; // Markdown; rendered downstream with slackify-markdown
   location?: string;
   start?: { dateTime?: string; date?: string; timeZone?: string };
   end?: { dateTime?: string; date?: string; timeZone?: string };
-  extendedProperties?: { shared?: Record<string, string>; private?: Record<string, string> };
   conferenceData?: { entryPoints?: Array<{ entryPointType?: string; uri?: string }> };
 }
 
@@ -118,15 +102,11 @@ function toReminderEvent(e: GoogleCalendarEvent): ReminderEvent | null {
     endsAt = end.isValid ? (end.toUTC().toISO() ?? null) : null;
   }
 
-  const priv = e.extendedProperties?.private;
-  const shared = e.extendedProperties?.shared;
-
-  // joinLink: private key wins, then shared, then first video conferenceData entry, then location.
+  // Join Link: `location` is canonical; a video conferenceData entry is the fallback.
   const videoEntryPoint = e.conferenceData?.entryPoints?.find(
     (ep) => ep.entryPointType === "video" && ep.uri !== undefined,
   );
-  const joinLink =
-    priv?.["joinLink"] ?? shared?.["joinLink"] ?? videoEntryPoint?.uri ?? e.location ?? null;
+  const joinLink = e.location ?? videoEntryPoint?.uri ?? null;
 
   return {
     id: e.id,
@@ -135,8 +115,5 @@ function toReminderEvent(e: GoogleCalendarEvent): ReminderEvent | null {
     endsAt,
     description: e.description ?? null,
     joinLink,
-    // Note: the private map's key is `hostCode`; the legacy shared key is `zoomHostCode`.
-    zoomHostCode: priv?.["hostCode"] ?? shared?.["zoomHostCode"] ?? null,
-    slackChannelId: priv?.["slackChannelId"] ?? shared?.["slackChannelId"] ?? null,
   };
 }

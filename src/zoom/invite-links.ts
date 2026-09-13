@@ -12,8 +12,7 @@
  */
 
 import { log } from "../log";
-
-const ZOOM_API_BASE = "https://api.zoom.us/v2";
+import { ZOOM_API_BASE } from "./oauth";
 
 /** Link lifetime (seconds). Only needs to cover click→join; Zoom enforces `ttl` loosely. */
 const DEFAULT_TTL = 7200;

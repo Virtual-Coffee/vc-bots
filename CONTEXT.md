@@ -57,3 +57,25 @@ _Avoid_: registration link, join url
 
 **Join token**:
 The opaque token a member's Join button carries. It resolves to that member's invite link and expires with it.
+
+## Event announcements
+
+**Event**:
+One timed entry on the Google Calendar that is the system of record for VirtualCoffee events. The bots read it; they never write it.
+_Avoid_: CMS event, reminder event
+
+**Join Link**:
+The event's `location`: where members go to attend. A URL becomes the Join Event button; free text renders as a "Location:" line.
+_Avoid_: joinLink property, Zoom link, meeting link
+
+**Host key**:
+Zoom's per-user key that lets a moderator claim host in the meeting. Resolved from Zoom when the starting-soon pair is queued and shown only in the event-admin mirror; never logged.
+_Avoid_: host code field, zoomHostCode, hostCode property
+
+**Starting-soon pair**:
+The public "Starting Soon" message and its event-admin mirror, both queued for ten minutes before an event starts.
+_Avoid_: reminder pair, scheduled messages
+
+**Event-admin mirror**:
+The copy of a starting-soon message posted to the event-admin channel with moderator extras (the host key, where the public message went).
+_Avoid_: admin copy, admin message

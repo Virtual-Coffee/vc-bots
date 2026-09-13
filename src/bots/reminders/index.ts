@@ -4,6 +4,7 @@ import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
+import { createHostKeyResolver, parseZoomMeetingId } from "../../zoom/host-key";
 import {
   buildDailyMessage,
   buildStartingSoonAdminMessage,
@@ -68,8 +69,8 @@ const SENDERS: Record<ReminderName, Sender> = {
 
 /**
  * Run one reminder kind. `nowMs` is injectable for tests / the cron's scheduled time.
- * `sourceName` lets `/vc-bot-admin` preview a named source; omit to use `env.EVENT_SOURCE`
- * (or "cms" default). The cron handler never passes a source name.
+ * `sourceName` lets `/vc-bot-admin` run a named source; omit to use `env.EVENT_SOURCE`
+ * (or "google" default). The cron handler never passes a source name.
  */
 export async function sendReminder(
   name: ReminderName,
@@ -90,8 +91,8 @@ export async function runReminders(
   try {
     await sendReminder(name, env, controller.scheduledTime);
   } catch (error) {
-    // No user surface on the cron path — log, alert #bot-log, and swallow so a CMS/Slack
-    // hiccup doesn't surface as an unhandled rejection in `scheduled()`.
+    // No user surface on the cron path — log, alert #bot-log, and swallow so a Calendar/Zoom/
+    // Slack hiccup doesn't surface as an unhandled rejection in `scheduled()`.
     log.error("reminder.run_failed", { cron: controller.cron, error: String(error) });
     await notifyBotLog(env, "reminder.run_failed", { cron: controller.cron, error: String(error) });
   }
@@ -163,7 +164,9 @@ async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise
  * Reconcile the bot's scheduled "Starting Soon" messages for the given daily window against
  * `events`. Clears this bot's scheduled messages in the window first, then re-queues each
  * event's public + event-admin pair for start − 10 min (or posts immediately if the slot has
- * already passed). Returns the number of events handled.
+ * already passed). Returns the number of events handled. The event-admin mirror carries the
+ * Zoom host key, resolved from the Join Link per meeting (`src/zoom/host-key.ts`); a Zoom
+ * failure rejects the whole run (docs/adr/0001).
  *
  * Shared by:
  * - the **daily cron** (`sendDaily`) — runs at 12:00 UTC to seed the day's queue.
@@ -182,6 +185,7 @@ export async function reconcileStartingSoon(
   range: EventRange,
 ): Promise<number> {
   await clearScheduledInWindow(client, nowMs, range);
+  const resolveHostKey = createHostKeyResolver(env);
 
   const nowSeconds = Math.floor(nowMs / 1000);
   let handled = 0;
@@ -192,9 +196,13 @@ export async function reconcileStartingSoon(
       continue;
     }
 
+    // Only announced events cost Zoom calls; a non-Zoom Join Link simply has no host key line.
+    const meetingId = event.joinLink ? parseZoomMeetingId(event.joinLink) : null;
+    const hostKey = meetingId ? await resolveHostKey(meetingId) : null;
+
     const channel = env.SLACK_EVENTS_CHANNEL_ID;
     const message = buildStartingSoonMessage(event);
-    const adminMessage = buildStartingSoonAdminMessage(event, channel);
+    const adminMessage = buildStartingSoonAdminMessage(event, channel, hostKey);
     const postAt = startSeconds - STARTING_SOON_LEAD_SECONDS;
     const common = { unfurl_links: false, unfurl_media: false };
 

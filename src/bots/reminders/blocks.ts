@@ -1,7 +1,7 @@
 import type { AnyMessageBlock, MessageAttachment } from "slack-cloudflare-workers";
 import { DateTime } from "luxon";
 import { dateToken } from "../../slack/date";
-import { htmlToMrkdwn } from "./html-to-mrkdwn";
+import { slackifyMarkdown } from "slackify-markdown";
 import type { ReminderEvent } from "./source";
 
 /**
@@ -9,7 +9,7 @@ import type { ReminderEvent } from "./source";
  * Netlify webhooks bot.
  *
  * Times are rendered with Slack's `<!date^…>` token so each member sees them in their own
- * timezone. HTML descriptions are converted to Slack mrkdwn with the local htmlToMrkdwn.
+ * timezone. Markdown descriptions are converted to Slack mrkdwn with `slackify-markdown`.
  */
 
 export interface ReminderMessage {
@@ -32,14 +32,16 @@ export function buildStartingSoonMessage(event: ReminderEvent): ReminderMessage 
   return { text: `Starting soon: ${event.title}: ${fallbackDate(event)}`, blocks };
 }
 
-/** Event-admin mirror of the starting-soon message, with host info for moderators. */
+/** Event-admin mirror of the starting-soon message, with host info for moderators. `hostKey`
+ *  is the Zoom host key resolved at send time (`src/zoom/host-key.ts`); null = no Zoom meeting. */
 export function buildStartingSoonAdminMessage(
   event: ReminderEvent,
   targetChannelId: string,
+  hostKey: string | null,
 ): ReminderMessage {
   const blocks: AnyMessageBlock[] = [header("⏰ Starting Soon:"), titleSection(event, true)];
   if (event.joinLink) blocks.push(section(`*Location:* ${event.joinLink}`));
-  if (event.zoomHostCode) blocks.push(section(`*Host Code:* ${event.zoomHostCode}`));
+  if (hostKey) blocks.push(section(`*Host Code:* ${hostKey}`));
   blocks.push(section(`*Announcement posted to:* <#${targetChannelId}>`), { type: "divider" });
 
   return { text: `Starting soon: ${event.title}: ${fallbackDate(event)}`, blocks };
@@ -131,7 +133,7 @@ function titleSection(event: ReminderEvent, withButton: boolean): AnyMessageBloc
 
 /** Description as a context block; omitted when empty (Slack rejects empty context elements). */
 function descriptionContext(event: ReminderEvent): AnyMessageBlock | null {
-  const text = event.description ? htmlToMrkdwn(event.description) : "";
+  const text = event.description ? slackifyMarkdown(event.description).trim() : "";
   if (!text) return null;
   return context(text);
 }

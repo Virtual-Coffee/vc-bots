@@ -169,38 +169,31 @@ describe("pagination", () => {
 // ---------------------------------------------------------------------------
 
 describe("joinLink precedence", () => {
-  it("shared.joinLink wins over conferenceData and location", async () => {
+  const timed = {
+    start: { dateTime: "2026-06-12T19:00:00-04:00" },
+    end: { dateTime: "2026-06-12T20:00:00-04:00" },
+  };
+
+  it("location (the Join Link) wins over conferenceData", async () => {
     const e: GoogleCalendarEvent = {
-      id: "ev-shared",
-      summary: "Shared wins",
-      start: { dateTime: "2026-06-12T19:00:00-04:00" },
-      end: { dateTime: "2026-06-12T20:00:00-04:00" },
+      id: "ev-loc",
+      summary: "Location wins",
+      ...timed,
       location: "https://zoom.us/j/location",
       conferenceData: {
         entryPoints: [{ entryPointType: "video", uri: "https://zoom.us/j/conference" }],
       },
-      extendedProperties: {
-        shared: {
-          joinLink: "https://zoom.us/j/shared",
-          zoomHostCode: "987654",
-          slackChannelId: "C999",
-        },
-      },
     };
     pageQueue.push({ items: [e] });
     const events = await createGoogleCalendarSource(testEnv).fetchEvents(RANGE);
-    expect(events[0]!.joinLink).toBe("https://zoom.us/j/shared");
-    expect(events[0]!.zoomHostCode).toBe("987654");
-    expect(events[0]!.slackChannelId).toBe("C999");
+    expect(events[0]!.joinLink).toBe("https://zoom.us/j/location");
   });
 
-  it("conferenceData video entry point wins over location when no shared.joinLink", async () => {
+  it("falls back to the video conferenceData entry point when there is no location", async () => {
     const e: GoogleCalendarEvent = {
       id: "ev-conf",
-      summary: "Conference wins",
-      start: { dateTime: "2026-06-12T19:00:00-04:00" },
-      end: { dateTime: "2026-06-12T20:00:00-04:00" },
-      location: "https://zoom.us/j/location",
+      summary: "Conference fallback",
+      ...timed,
       conferenceData: {
         entryPoints: [
           { entryPointType: "phone", uri: "tel:+1555" },
@@ -213,29 +206,28 @@ describe("joinLink precedence", () => {
     expect(events[0]!.joinLink).toBe("https://zoom.us/j/conference");
   });
 
-  it("falls back to location when no shared.joinLink and no video conferenceData", async () => {
-    const e: GoogleCalendarEvent = {
-      id: "ev-loc",
-      summary: "Location fallback",
-      start: { dateTime: "2026-06-12T19:00:00-04:00" },
-      end: { dateTime: "2026-06-12T20:00:00-04:00" },
-      location: "https://zoom.us/j/9",
-    };
-    pageQueue.push({ items: [e] });
-    const events = await createGoogleCalendarSource(testEnv).fetchEvents(RANGE);
-    expect(events[0]!.joinLink).toBe("https://zoom.us/j/9");
-  });
-
-  it("returns null when no joinLink source is present", async () => {
-    const e: GoogleCalendarEvent = {
-      id: "ev-none",
-      summary: "No link",
-      start: { dateTime: "2026-06-12T19:00:00-04:00" },
-      end: { dateTime: "2026-06-12T20:00:00-04:00" },
-    };
+  it("returns null when neither location nor video conferenceData is present", async () => {
+    const e: GoogleCalendarEvent = { id: "ev-none", summary: "No link", ...timed };
     pageQueue.push({ items: [e] });
     const events = await createGoogleCalendarSource(testEnv).fetchEvents(RANGE);
     expect(events[0]!.joinLink).toBeNull();
+  });
+
+  it("ignores extendedProperties on the payload (docs/adr/0001)", async () => {
+    const e = {
+      id: "ev-ext",
+      summary: "Legacy properties",
+      ...timed,
+      location: "https://zoom.us/j/location",
+      extendedProperties: {
+        private: { joinLink: "https://zoom.us/j/PRIVATE", hostCode: "111222" },
+        shared: { joinLink: "https://zoom.us/j/SHARED", zoomHostCode: "999000" },
+      },
+    };
+    pageQueue.push({ items: [e] });
+    const events = await createGoogleCalendarSource(testEnv).fetchEvents(RANGE);
+    expect(events[0]!.joinLink).toBe("https://zoom.us/j/location");
+    expect(JSON.stringify(events[0])).not.toMatch(/111222|999000|PRIVATE|SHARED/);
   });
 });
 

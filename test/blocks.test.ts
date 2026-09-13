@@ -15,7 +15,7 @@ function evt(overrides: Partial<ReminderEvent> = {}): ReminderEvent {
     id: "1",
     title: "Lunch & Learn",
     startsAt: "2026-05-28T15:00:00.000Z",
-    description: "<p>Bring <strong>questions</strong>!</p>",
+    description: "Bring **questions**!",
     joinLink: "https://zoom.us/j/123",
     ...overrides,
   };
@@ -40,7 +40,7 @@ describe("buildStartingSoonMessage", () => {
       },
     });
     expect(json(blocks)).toMatch(/<!date\^\d+\^\{date_long_pretty\} \{time\}\|/); // integer token
-    expect(json(blocks)).toContain("*questions*"); // html → mrkdwn
+    expect(json(blocks)).toContain("*questions*"); // markdown → mrkdwn
     expect(json(blocks)).not.toContain("*Location:*");
     expect(blocks.at(-1)?.type).toBe("divider");
   });
@@ -55,21 +55,31 @@ describe("buildStartingSoonMessage", () => {
     const { blocks } = buildStartingSoonMessage(evt({ description: null }));
     expect(blocks.filter((b) => b.type === "context")).toHaveLength(0);
   });
+
+  it("renders Markdown links, emphasis, and lists as mrkdwn", () => {
+    const { blocks } = buildStartingSoonMessage(
+      evt({ description: "See [the agenda](https://x.io/agenda) — _bring_ `code`\n\n- one\n- two" }),
+    );
+    const text = json(blocks.filter((b) => b.type === "context"));
+    expect(text).toContain("<https://x.io/agenda|the agenda>");
+    expect(text).toContain("_bring_");
+    expect(text).toContain("`code`");
+    expect(text).toContain("• ");
+    expect(text).not.toContain("**");
+    expect(text).not.toContain("](");
+  });
 });
 
 describe("buildStartingSoonAdminMessage", () => {
   it("includes location, host code, and the target channel", () => {
-    const { blocks } = buildStartingSoonAdminMessage(evt({ zoomHostCode: "9876" }), "C123");
+    const { blocks } = buildStartingSoonAdminMessage(evt(), "C123", "9876");
     expect(json(blocks)).toContain("*Location:* https://zoom.us/j/123");
     expect(json(blocks)).toContain("*Host Code:* 9876");
     expect(json(blocks)).toContain("*Announcement posted to:* <#C123>");
   });
 
   it("omits the host code and location sections when absent", () => {
-    const { blocks } = buildStartingSoonAdminMessage(
-      evt({ joinLink: null, zoomHostCode: null }),
-      FALLBACK_CHANNEL,
-    );
+    const { blocks } = buildStartingSoonAdminMessage(evt({ joinLink: null }), FALLBACK_CHANNEL, null);
     expect(json(blocks)).not.toContain("*Host Code:*");
     expect(json(blocks)).not.toContain("*Location:*");
     expect(json(blocks)).toContain(`*Announcement posted to:* <#${FALLBACK_CHANNEL}>`);
@@ -77,7 +87,7 @@ describe("buildStartingSoonAdminMessage", () => {
 });
 
 describe("buildDailyMessage", () => {
-  const events = [evt(), evt({ id: "2", title: "Coffee Chat", slackChannelId: "C555" })];
+  const events = [evt(), evt({ id: "2", title: "Coffee Chat" })];
 
   it("renders the header, per-event sections without buttons, and join-link notices", () => {
     const { text, blocks } = buildDailyMessage(events);
@@ -98,10 +108,7 @@ describe("buildDailyMessage", () => {
 
 describe("buildWeeklyMessage", () => {
   it("renders one date-first section per event plus the footer contexts", () => {
-    const { text, blocks } = buildWeeklyMessage([
-      evt(),
-      evt({ id: "2", title: "Coffee Chat", slackChannelId: "C555" }),
-    ]);
+    const { text, blocks } = buildWeeklyMessage([evt(), evt({ id: "2", title: "Coffee Chat" })]);
     expect(text).toContain("This weeks events are:");
     expect(blocks[0]).toMatchObject({
       type: "header",

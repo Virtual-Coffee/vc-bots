@@ -20,7 +20,7 @@ export const ADMIN_COMMAND = "/vc-bot-admin";
 
 const USAGE = [
   "*`/vc-bot-admin`* — fire an auto message. Subcommands:",
-  "• `daily [source]` · `weekly [source]` — post that event announcement now (source: cms | google; default from config; daily also (re)schedules the starting-soon messages)",
+  "• `daily [source]` · `weekly [source]` — post that event announcement now (source: google; default from config; daily also (re)schedules the starting-soon messages)",
   "• `welcome` — DM you the welcome message (preview)",
   "• `home` — publish your App Home (preview)",
   "• `coworking open` · `coworking close` — announce the co-working room",

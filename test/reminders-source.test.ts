@@ -9,9 +9,9 @@ import type { Env } from "../src/env";
 const NOW = Date.parse("2026-05-28T12:00:00Z");
 
 describe("getEventSource / isEventSourceName", () => {
-  it("returns the cms source by default (no EVENT_SOURCE set)", () => {
-    const source = getEventSource({ ...env, EVENT_SOURCE: "cms" } as Env);
-    expect(source.name).toBe("cms");
+  it("returns the google source by default (no EVENT_SOURCE set)", () => {
+    const source = getEventSource({ ...env, EVENT_SOURCE: undefined } as unknown as Env);
+    expect(source.name).toBe("google");
   });
 
   it("returns the google source when EVENT_SOURCE is 'google'", () => {
@@ -20,24 +20,23 @@ describe("getEventSource / isEventSourceName", () => {
   });
 
   it("explicit name beats env var", () => {
-    const source = getEventSource({ ...env, EVENT_SOURCE: "cms" } as Env, "google");
+    const source = getEventSource({ ...env, EVENT_SOURCE: "bogus" } as Env, "google");
     expect(source.name).toBe("google");
   });
 
   it("throws on unknown source name and lists valid names in the message", () => {
     expect(() => getEventSource(env as Env, "bogus")).toThrow("bogus");
-    expect(() => getEventSource(env as Env, "bogus")).toThrow("cms");
     expect(() => getEventSource(env as Env, "bogus")).toThrow("google");
+    expect(() => getEventSource({ ...env, EVENT_SOURCE: "cms" } as Env)).toThrow("cms");
   });
 
-  it("EVENT_SOURCE_NAMES contains cms and google", () => {
-    expect(EVENT_SOURCE_NAMES).toContain("cms");
-    expect(EVENT_SOURCE_NAMES).toContain("google");
+  it("EVENT_SOURCE_NAMES is exactly google", () => {
+    expect(EVENT_SOURCE_NAMES).toEqual(["google"]);
   });
 
   it("isEventSourceName narrows correctly", () => {
-    expect(isEventSourceName("cms")).toBe(true);
     expect(isEventSourceName("google")).toBe(true);
+    expect(isEventSourceName("cms")).toBe(false);
     expect(isEventSourceName("bogus")).toBe(false);
   });
 });

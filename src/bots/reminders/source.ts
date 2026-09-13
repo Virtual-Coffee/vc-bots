@@ -1,16 +1,15 @@
 import { DateTime } from "luxon";
 import type { Env } from "../../env";
-import { createCmsSource } from "./sources/cms";
 import { createGoogleCalendarSource } from "./sources/google-calendar";
 
 /**
  * Source-agnostic event model for the reminders bot.
  *
  * Senders and Block Kit builders depend only on these types — never on a provider's field
- * names. The CMS (Craft + Solspace Calendar) is the first `EventSource`; the Google Calendar
- * source joins it for parallel testing before cutover. `getEventSource` resolves: explicit
- * name (from `/vc-bot-admin daily|weekly [source]`) wins; otherwise `env.EVENT_SOURCE`
- * (cutover = config flip); throws on unknown so a typo'd config var fails loudly (admin
+ * names. Google Calendar is the system of record and the only `EventSource` today (see
+ * docs/adr/0001). The registry stays as the `EVENT_SOURCE` / admin `[source]` seam.
+ * `getEventSource` resolves: explicit name (from `/vc-bot-admin daily|weekly [source]`) wins;
+ * otherwise `env.EVENT_SOURCE`; throws on unknown so a typo'd config var fails loudly (admin
  * pre-validates for a friendly message).
  */
 
@@ -21,17 +20,10 @@ export interface ReminderEvent {
   startsAt: string;
   /** Optional end time, same format. */
   endsAt?: string | null;
-  /** May contain HTML; rendered with htmlToMrkdwn. */
+  /** Markdown; rendered with slackify-markdown. */
   description?: string | null;
   /** URL or free-text location (a non-URL renders as a "Location:" line, not a button). */
   joinLink?: string | null;
-  /** Shown only in the event-admin mirror. */
-  zoomHostCode?: string | null;
-  /**
-   * Per-event channel from the CMS. Currently unused — all public starting-soon messages
-   * post to SLACK_EVENTS_CHANNEL_ID — but kept in the model in case routing returns.
-   */
-  slackChannelId?: string | null;
 }
 
 /** ISO range passed to the provider (computed in America/New_York). */
@@ -48,7 +40,6 @@ export interface EventSource {
 export type ReminderName = "daily" | "weekly";
 
 const SOURCES = {
-  cms: createCmsSource,
   google: createGoogleCalendarSource,
 } satisfies Record<string, (env: Env) => EventSource>;
 
@@ -60,7 +51,7 @@ export function isEventSourceName(name: string): name is EventSourceName {
 }
 
 export function getEventSource(env: Env, name?: string): EventSource {
-  const resolved = name ?? env.EVENT_SOURCE ?? "cms";
+  const resolved = name ?? env.EVENT_SOURCE ?? "google";
   if (!isEventSourceName(resolved)) {
     throw new Error(
       `Unknown event source "${resolved}" (valid: ${EVENT_SOURCE_NAMES.join(", ")})`,

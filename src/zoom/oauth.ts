@@ -12,6 +12,8 @@ import { log } from "../log";
  */
 
 const ZOOM_OAUTH_TOKEN_URL = "https://zoom.us/oauth/token";
+/** REST base every S2S-authenticated Zoom call (invite links, host keys) is made against. */
+export const ZOOM_API_BASE = "https://api.zoom.us/v2";
 
 export interface ZoomTokenResponse {
   access_token: string;

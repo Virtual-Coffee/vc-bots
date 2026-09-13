@@ -121,29 +121,34 @@ tokens that resolve to them carry a join credential — **never log them**.
 
 **Event announcements** (`src/bots/reminders/`) run from the cron `scheduled()` handler and
 post to three channels: daily/weekly summaries → `SLACK_ANNOUNCEMENTS_CHANNEL_ID`; per-event
-"Starting Soon" messages → `SLACK_EVENTS_CHANNEL_ID`, each mirrored (with extras like the Zoom
-host code) → `SLACK_EVENTADMIN_CHANNEL_ID`. The daily run schedules each starting-soon pair for
+"Starting Soon" messages → `SLACK_EVENTS_CHANNEL_ID`, each mirrored (with the Zoom host key)
+→ `SLACK_EVENTADMIN_CHANNEL_ID`. The daily run schedules each starting-soon pair for
 start − 10 min via Slack `chat.scheduleMessage`, first deleting the bot's scheduled messages in
 the window so re-runs reconcile instead of duplicating; on Mondays it skips its summary (the
 weekly covers it) but still schedules. Event windows are computed in `America/New_York`. Events
-come through the `EventSource` abstraction (`source.ts`); two sources are available: the CMS
-GraphQL adapter (`sources/cms.ts`) and the Google Calendar adapter (`sources/google-calendar.ts`).
-The active source is controlled by `EVENT_SOURCE` config var (default `"cms"`); switch to
-`"google"` to use the Calendar. Google events via service-account JWT-bearer auth (signed in
-`src/google/auth.ts`, credentials cached module-level). ⚠️ The cron strings in `CRON_TO_KIND`
-(`index.ts`) **must stay byte-identical to `triggers.crons` in wrangler.jsonc** — that string is
-the lookup key mapping a fired cron to a reminder kind. Crons fire in **UTC** and are **live**
-(`0 12 * * *` daily, `0 12 * * MON` weekly). ⚠️ Cloudflare parses cron weekdays
-**Quartz-style — `1` = Sunday … `7` = Saturday**, not the Unix `0` = Sunday; spell weekdays as
-`MON`/`SUN` so a numeric field can't silently shift the day (Luxon's `weekday === 1` in
-`sendDaily` is ISO Monday and unrelated). To disable, set `triggers.crons: []` — deploying an
-empty array deregisters crons already on Cloudflare, whereas deleting the key would leave them
-running. The same `sendReminder` is reused by the `/vc-bot-admin` slash command for manual
-runs/previews; it accepts an optional source arg (e.g. `daily google`, `weekly cms`) to run a
-named source; cron always uses `EVENT_SOURCE`. Failure paths that have no other surface (the cron
-run, the co-working DO/Zoom handlers, the join flow) alert the private `#bot-log` channel via
-`notifyBotLog` (`src/slack/notify.ts`, `SLACK_BOTLOG_CHANNEL_ID`) — a no-op when the channel id is
-empty, and self-swallowing so a failed alert never loops.
+come through the `EventSource` abstraction (`source.ts`); Google Calendar
+(`sources/google-calendar.ts`, service-account JWT-bearer auth signed in `src/google/auth.ts`)
+is the only registered source and the `EVENT_SOURCE` default. Per `docs/adr/0001`: the Join Link
+is the event's `location` (video `conferenceData` is the fallback; `extendedProperties` is never
+read), descriptions are **Markdown** rendered with `slackify-markdown`, and the host key is
+**not** an event field — `reconcileStartingSoon` resolves it from Zoom at send time
+(`src/zoom/host-key.ts`: meeting id parsed from the Join Link → `GET /meetings/{id}` → `host_id`
+→ `GET /users/{host_id}` → `host_key`, cached per run; S2S apps can't call `/users/me`). Only
+announced events cost Zoom calls; a Zoom failure fails the run; a non-Zoom Join Link just has no
+host-code line. The host key goes only to the event-admin mirror — **never log it**. ⚠️ The cron
+strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
+wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons
+fire in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * MON` weekly). ⚠️ Cloudflare
+parses cron weekdays **Quartz-style — `1` = Sunday … `7` = Saturday**, not the Unix `0` = Sunday;
+spell weekdays as `MON`/`SUN` so a numeric field can't silently shift the day (Luxon's
+`weekday === 1` in `sendDaily` is ISO Monday and unrelated). To disable, set
+`triggers.crons: []` — deploying an empty array deregisters crons already on Cloudflare, whereas
+deleting the key would leave them running. The same `sendReminder` is reused by the
+`/vc-bot-admin` slash command for manual runs; it accepts an optional source arg (e.g.
+`daily google`) naming a registered source; cron always uses `EVENT_SOURCE`. Failure paths that
+have no other surface (the cron run, the co-working DO/Zoom handlers, the join flow) alert the
+private `#bot-log` channel via `notifyBotLog` (`src/slack/notify.ts`, `SLACK_BOTLOG_CHANNEL_ID`)
+— a no-op when the channel id is empty, and self-swallowing so a failed alert never loops.
 
 **Slack client.** Always `createSlackClient(env)` for outbound calls with no inbound Slack
 request (the CoworkingRoom DO, the cron reminders); inside `SlackApp` handlers it's the same
@@ -166,8 +171,9 @@ client either way. All Slack imports (client, Block Kit types, payload types) co
   sets it in its own constructor since it runs in a separate isolate.
 - **TS is strict** with `noUncheckedIndexedAccess` and `verbatimModuleSyntax` — use
   `import type` for type-only imports.
-- `slackify-html` is **edge-incompatible** (throws on workerd); a local `html-to-mrkdwn`
-  converter replaces it. Don't re-add it.
+- `slackify-html` is **edge-incompatible** (throws on workerd). Don't re-add it. Event
+  descriptions are Markdown, rendered with `slackify-markdown` (pure ESM, runs on workerd);
+  there is no HTML path.
 
 ## Agent skills
 

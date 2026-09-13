@@ -18,10 +18,10 @@ export interface Env {
   SLACK_BOT_TOKEN: string;
   SLACK_SIGNING_SECRET: string;
   ZOOM_WEBHOOK_SECRET_TOKEN: string;
+  /** Zoom Server-to-Server OAuth app — mints co-working invite links and resolves event host keys. */
   ZOOM_S2S_CLIENT_ID: string;
   ZOOM_S2S_CLIENT_SECRET: string;
   ZOOM_S2S_ACCOUNT_ID: string;
-  CMS_TOKEN: string;
   /** Full Google service-account JSON (one line). Carries a private key — never log it. */
   GOOGLE_SERVICE_ACCOUNT_KEY: string;
   /** Verification token echoed back in the X-Goog-Channel-Token header of every Calendar push notification. Never log it. */
@@ -43,7 +43,7 @@ export interface Env {
   SLACK_EVENTS_CHANNEL_ID: string;
   /** Announcements channel — carries the daily/weekly event summaries. */
   SLACK_ANNOUNCEMENTS_CHANNEL_ID: string;
-  /** #vc-events-admin — gets a mirror of each starting-soon message with extra info (e.g. the Zoom host code). */
+  /** #vc-events-admin — gets a mirror of each starting-soon message with extra info (the Zoom host key, fetched from Zoom at send time). */
   SLACK_EVENTADMIN_CHANNEL_ID: string;
   /**
    * Private #bot-log channel for important error alerts (cron + co-working DO/Zoom failures).
@@ -51,11 +51,9 @@ export interface Env {
    * `src/slack/notify.ts`.
    */
   SLACK_BOTLOG_CHANNEL_ID: string;
-  /** CMS GraphQL endpoint for event announcements (Craft + Solspace Calendar). */
-  CMS_GRAPHQL_URL: string;
   /** Google Calendar id for event announcements (the …@group.calendar.google.com address). */
   GOOGLE_CALENDAR_ID: string;
-  /** Default event source for reminders: "cms" | "google". Cutover = flip this var. */
+  /** Default event source for reminders ("google" is the only one registered; see `reminders/source.ts`). */
   EVENT_SOURCE: string;
   /** Comma-separated Slack user IDs mentioned as community maintainers in the welcome message. */
   WELCOME_MAINTAINER_IDS: string;
