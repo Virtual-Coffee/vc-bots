@@ -14,4 +14,10 @@ describe("parseZoomMeetingId", () => {
     expect(parseZoomMeetingId("https://zoom.us/w/personal-1")).toBeNull();
     expect(parseZoomMeetingId("https://zoom.us/j/12")).toBeNull();
   });
+
+  it("rejects lookalike hosts — only zoom.us and its subdomains count", () => {
+    expect(parseZoomMeetingId("https://notzoom.us/j/123456789")).toBeNull();
+    expect(parseZoomMeetingId("https://zoom.us.evil.com/j/123456789")).toBeNull();
+    expect(parseZoomMeetingId("https://evil.com/?u=https://zoom.us/j/123456789")).toBeNull();
+  });
 });
