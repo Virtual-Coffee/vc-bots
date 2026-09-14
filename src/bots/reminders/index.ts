@@ -4,6 +4,7 @@ import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
+import { parseZoomMeetingId } from "../../zoom/join-link";
 import {
   buildDailyMessage,
   buildStartingSoonAdminMessage,
@@ -14,6 +15,7 @@ import type { EventRange, EventSource, ReminderEvent, ReminderName } from "./sou
 import { getEventSource, reminderRange } from "./source";
 
 export type { ReminderName } from "./source";
+export { EVENT_SOURCE_NAMES, isEventSourceName } from "./source";
 
 /**
  * Event announcements. `sendReminder` does the actual work and is shared by the cron
@@ -54,6 +56,8 @@ export interface SendResult {
   scheduled?: number;
   /** Why no summary was posted. */
   reason?: "monday" | "no-events";
+  /** Name of the event source used. */
+  source: string;
 }
 
 type Sender = (source: EventSource, env: Env, nowMs: number) => Promise<SendResult>;
@@ -65,15 +69,16 @@ const SENDERS: Record<ReminderName, Sender> = {
 
 /**
  * Run one reminder kind. `nowMs` is injectable for tests / the cron's scheduled time.
- * (When the Google Calendar source lands, an optional source name threads through here so
- * `/vc-bot-admin` can preview either source.)
+ * `sourceName` lets `/vc-bot-admin` run a named source; omit to use `env.EVENT_SOURCE`
+ * (or "google" default). The cron handler never passes a source name.
  */
 export async function sendReminder(
   name: ReminderName,
   env: Env,
   nowMs: number = Date.now(),
+  sourceName?: string,
 ): Promise<SendResult> {
-  return SENDERS[name](getEventSource(env), env, nowMs);
+  return SENDERS[name](getEventSource(env, sourceName), env, nowMs);
 }
 
 export async function runReminders(
@@ -86,10 +91,23 @@ export async function runReminders(
   try {
     await sendReminder(name, env, controller.scheduledTime);
   } catch (error) {
-    // No user surface on the cron path — log, alert #bot-log, and swallow so a CMS/Slack
-    // hiccup doesn't surface as an unhandled rejection in `scheduled()`.
+    // No user surface on the cron path — log, alert #bot-log, and swallow so a Calendar/Zoom/
+    // Slack hiccup doesn't surface as an unhandled rejection in `scheduled()`.
     log.error("reminder.run_failed", { cron: controller.cron, error: String(error) });
     await notifyBotLog(env, "reminder.run_failed", { cron: controller.cron, error: String(error) });
+  }
+
+  // Bootstrap/heal the Calendar watch on the daily run when Google is the active source. Guarded
+  // separately so a watch hiccup never masks the reminder result above.
+  if (name === "daily" && env.EVENT_SOURCE === "google") {
+    try {
+      const stub = env.CALENDAR_SYNC.getByName("default");
+      await stub.ensureWatch();
+      await stub.seed();
+    } catch (error) {
+      log.error("calendar_sync.bootstrap_failed", { error: String(error) });
+      await notifyBotLog(env, "calendar_sync.bootstrap_failed", { error: String(error) });
+    }
   }
 }
 
@@ -98,16 +116,16 @@ async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<
   const events = await source.fetchEvents(range);
   const client = createSlackClient(env);
 
-  const scheduled = await scheduleStartingSoon(client, env, events, nowMs, range);
+  const scheduled = await reconcileStartingSoon(client, env, events, nowMs, range);
 
   // Mondays get the weekly summary instead; the starting-soon scheduling above still ran.
   if (DateTime.fromMillis(nowMs, { zone: "America/New_York" }).weekday === 1) {
     log.info("reminder.daily_monday_skip", { count: events.length, scheduled });
-    return { posted: false, count: events.length, scheduled, reason: "monday" };
+    return { posted: false, count: events.length, scheduled, reason: "monday", source: source.name };
   }
   if (events.length === 0) {
     log.info("reminder.skipped", { kind: "daily" });
-    return { posted: false, count: 0, scheduled, reason: "no-events" };
+    return { posted: false, count: 0, scheduled, reason: "no-events", source: source.name };
   }
 
   const { text, blocks } = buildDailyMessage(events);
@@ -119,7 +137,7 @@ async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<
     unfurl_media: false,
   });
   log.info("reminder.sent", { kind: "daily", count: events.length, scheduled });
-  return { posted: true, count: events.length, scheduled };
+  return { posted: true, count: events.length, scheduled, source: source.name };
 }
 
 async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise<SendResult> {
@@ -127,7 +145,7 @@ async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise
   const events = await source.fetchEvents(range);
   if (events.length === 0) {
     log.info("reminder.skipped", { kind: "weekly" });
-    return { posted: false, count: 0, reason: "no-events" };
+    return { posted: false, count: 0, reason: "no-events", source: source.name };
   }
 
   const { text, blocks } = buildWeeklyMessage(events);
@@ -139,28 +157,51 @@ async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise
     unfurl_media: false,
   });
   log.info("reminder.sent", { kind: "weekly", count: events.length });
-  return { posted: true, count: events.length };
+  return { posted: true, count: events.length, source: source.name };
 }
 
 /**
- * Schedule each event's starting-soon pair (public announcement + event-admin mirror) for
- * start − 10 min. Clears this bot's scheduled messages in the window first, so re-runs
- * (manual `/vc-bot-admin daily`) reconcile instead of duplicating. Events starting too soon
- * to schedule are posted immediately; already-started events are skipped.
+ * Reconcile the bot's scheduled "Starting Soon" messages for the given daily window against
+ * `events`. Clears this bot's scheduled messages in the window first, then re-queues each
+ * event's public + event-admin pair for start − 10 min (or posts immediately if the slot has
+ * already passed). Returns the number of events handled. The event-admin mirror carries the
+ * event's host key; a Zoom Join Link without one rejects the whole run (docs/adr/0001).
+ *
+ * Shared by:
+ * - the **daily cron** (`sendDaily`) — runs at 12:00 UTC to seed the day's queue.
+ * - the **CalendarSync DO** — calls this after a Google Calendar change so the scheduled queue
+ *   matches the live calendar (drops cancelled events, re-queues moved ones at their new
+ *   start − 10 min).
+ *
+ * Callers can compute the daily window via `reminderRange("daily", nowMs)` (exported from
+ * `./source`).
  */
-async function scheduleStartingSoon(
+export async function reconcileStartingSoon(
   client: SlackAPIClient,
   env: Env,
   events: ReminderEvent[],
   nowMs: number,
   range: EventRange,
 ): Promise<number> {
+  const nowSeconds = Math.floor(nowMs / 1000);
+  const startSecondsOf = (event: ReminderEvent): number =>
+    Math.floor(DateTime.fromISO(event.startsAt, { zone: "utc" }).toSeconds());
+
+  // Validate every upcoming event BEFORE the first Slack mutation, so a bad event rejects the
+  // run with the existing schedule intact rather than after it has been cleared. A Zoom event
+  // must carry its host key; a non-Zoom Join Link simply has no host key line.
+  for (const event of events) {
+    if (startSecondsOf(event) <= nowSeconds) continue;
+    if (parseZoomMeetingId(event.joinLink ?? "") && !event.hostKey) {
+      throw new Error(`No host code on Zoom event "${event.title}" (${event.id})`);
+    }
+  }
+
   await clearScheduledInWindow(client, nowMs, range);
 
-  const nowSeconds = Math.floor(nowMs / 1000);
   let handled = 0;
   for (const event of events) {
-    const startSeconds = Math.floor(DateTime.fromISO(event.startsAt, { zone: "utc" }).toSeconds());
+    const startSeconds = startSecondsOf(event);
     if (startSeconds <= nowSeconds) {
       log.info("reminder.event_already_started", { id: event.id, startsAt: event.startsAt });
       continue;

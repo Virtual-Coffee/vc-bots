@@ -1,0 +1,58 @@
+# 0001 — Event model: Join Link is `location`, host key is a private calendar property
+
+**Status:** Accepted (2026-09-13)
+
+## Context
+
+virtualcoffee.io ADR 0014 (`docs/adr/0014-google-calendar-is-the-events-system-of-record.md`
+in that repo) made Google Calendar the system of record for events: the Join Link is the event's
+`location`, nothing lives in `extendedProperties`, and the Zoom host code is not an Event field —
+the calendar was public, and `private` extended properties are per-calendar-copy rather than
+per-app, so storing the host code there exposed it to any API reader.
+
+The bots' Google source (`feat/gcal`) had grown its own convention on top of
+`extendedProperties` (`joinLink`, `hostCode`, `slackChannelId`, plus legacy `shared` keys) and
+still carried the CMS GraphQL source it was meant to replace.
+
+The first cut of this ADR followed 0014 all the way and had the bot ask Zoom for the host key at
+send time (meeting id from the Join Link → `GET /meetings/{id}` → `host_id` →
+`GET /users/{host_id}` → `host_key`). That chain is dead on arrival: Zoom **removed `host_key`
+from every API response in 2022** "for security reasons", and a live probe with
+`user:read:list_users:admin` + `include_fields=host_key` returns no key for any user. Zoom's own
+answer is "keep your own datastore" — see
+<https://devforum.zoom.us/t/get-a-users-host-key-via-api/79004>.
+
+## Decision
+
+- **Join Link = `location`.** The adapter reads `location` first and falls back to a video
+  `conferenceData` entry point; a `private.joinLink` property is ignored.
+- **The events calendar is private.** Its ACL is five human owners, the service account (owner),
+  and `domain:virtualcoffee.io` as reader — no `default`/public entry (the public ICS feed 404s).
+  The website reads through the same service account, so it is unaffected. Workspace-domain
+  readers can see private properties; accepted.
+- **Host key = `extendedProperties.private.hostCode`** on the (recurring) event. The Google
+  source maps it to `ReminderEvent.hostKey` (trimmed; empty → null). It is edited through the
+  Calendar API (the website admin page, once it lands), not the Google UI.
+- **A Zoom event without a host key fails the run.** `reconcileStartingSoon` throws when the
+  Join Link parses as a Zoom meeting (`src/zoom/join-link.ts`) and `hostKey` is empty; the error
+  names the event and reaches `#bot-log` via `reminder.run_failed`. There is no "post without the
+  host key" mode. A non-Zoom Join Link simply has no host-code line.
+- **The host key appears only in the event-admin mirror** and is never logged.
+- **Descriptions are Markdown**, rendered with `slackify-markdown` (pure ESM on unified/remark,
+  runs on workerd). The local `html-to-mrkdwn` converter is gone; there is no HTML tolerance.
+- **The CMS source is removed** with the cutover. The `EventSource` registry stays as the
+  `EVENT_SOURCE` / admin `[source]` seam, with `google` as its only entry.
+
+## Consequences
+
+- `ReminderEvent` loses `zoomHostCode` and `slackChannelId`; it gains `hostKey`.
+- The Zoom S2S app needs only `meeting:write:invite_links:admin` (plus the webhook
+  subscriptions); the `meeting:read:meeting:admin`, `user:read:user:admin`, and
+  `user:read:list_users:admin` scopes added for the Zoom lookup can be removed.
+- `CMS_TOKEN`, `CMS_GRAPHQL_URL`, `graphql`, and `graphql-request` are gone.
+- **Conflicts with virtualcoffee.io ADR 0014** ("nothing on the calendar is private, by design";
+  "the host code is not an Event field"). A review comment on virtualcoffee.io PR #1579 flags it;
+  that ADR and the PR's "public calendar" wording need reconciling on that side.
+- Calendar migration (manual): set `location` on the Morning/Afternoon Crowd series, clear the
+  old `joinLink` property, keep `hostCode` on every Zoom series, and convert existing
+  descriptions to Markdown.

@@ -5,7 +5,7 @@ import { createSlackClient } from "../slack/client";
 import { respondEphemeral } from "../slack/response";
 import { adminPanelBlocks, PANEL_TEXT } from "./admin-panel";
 import { homeView } from "./app-home";
-import { type ReminderName, type SendResult, sendReminder } from "./reminders";
+import { EVENT_SOURCE_NAMES, type ReminderName, type SendResult, isEventSourceName, sendReminder } from "./reminders";
 import { welcomeBlocks } from "./welcome";
 
 /**
@@ -20,7 +20,7 @@ export const ADMIN_COMMAND = "/vc-bot-admin";
 
 const USAGE = [
   "*`/vc-bot-admin`* — fire an auto message. Subcommands:",
-  "• `daily` · `weekly` — post that event announcement now (daily also (re)schedules the starting-soon messages)",
+  "• `daily [source]` · `weekly [source]` — post that event announcement now (source: google; default from config; daily also (re)schedules the starting-soon messages)",
   "• `welcome` — DM you the welcome message (preview)",
   "• `home` — publish your App Home (preview)",
   "• `coworking open` · `coworking close` — announce the co-working room",
@@ -83,12 +83,12 @@ export function reminderReply(sub: string, result: SendResult): string {
       ? ""
       : ` Scheduled ${result.scheduled} starting-soon message${result.scheduled === 1 ? "" : "s"}.`;
   if (result.posted) {
-    return `:white_check_mark: Posted the *${sub}* reminder (${events}).${scheduled}`;
+    return `:white_check_mark: Posted the *${sub}* reminder (${events}, source: *${result.source}*).${scheduled}`;
   }
   if (result.reason === "monday") {
-    return `:information_source: Skipped the *daily* summary — the weekly reminder covers Mondays.${scheduled}`;
+    return `:information_source: Skipped the *daily* summary — the weekly reminder covers Mondays (source: *${result.source}*).${scheduled}`;
   }
-  return `:information_source: No upcoming events for the *${sub}* window — nothing posted.${scheduled}`;
+  return `:information_source: No upcoming events for the *${sub}* window — nothing posted (source: *${result.source}*).${scheduled}`;
 }
 
 async function runAdminCommand(
@@ -108,7 +108,15 @@ async function runAdminCommand(
   switch (sub) {
     case "daily":
     case "weekly": {
-      const result = await sendReminder(sub as ReminderName, env);
+      if (arg !== undefined && !isEventSourceName(arg)) {
+        const list = EVENT_SOURCE_NAMES.map((n) => `\`${n}\``).join(", ");
+        await respondEphemeral(
+          cmd.response_url,
+          `:warning: Unknown event source \`${arg}\`. Valid sources: ${list}`,
+        );
+        return;
+      }
+      const result = await sendReminder(sub as ReminderName, env, Date.now(), arg);
       await respondEphemeral(cmd.response_url, reminderReply(sub, result));
       return;
     }

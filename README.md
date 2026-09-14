@@ -10,7 +10,7 @@ co-working room, the new-member welcome, the App Home tab, and event announcemen
 | **Co-working room** | Zoom webhooks + a Slack Join button | Posts a fresh "open room" message in the co-working channel each time a session starts (so the channel gets notified): who's in the room, a ☕ Join button that hands each member a personal Zoom invite link, and a stats summary when the meeting ends — which also carries the button that starts the next session. |
 | **Welcome** | Slack `team_join` event | DMs new members a welcome message. |
 | **App Home** | Slack `app_home_opened` event | Publishes the bot's App Home tab. |
-| **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee CMS (GraphQL), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel. Crons are live (daily + weekly); `/vc-bot-admin` can also fire a run manually. |
+| **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee Google Calendar (service-account auth; the Join Link is the event's `location`, descriptions are Markdown), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel with the Zoom host key (read from the event's private `hostCode` calendar property). Crons are live (daily + weekly); `/vc-bot-admin` can also fire a run manually. |
 
 There's also a `/vc-bot-admin` slash command for manual previews and admin actions
 (e.g. `daily` / `weekly` to fire an announcement run now, or `coworking open`).
@@ -69,7 +69,7 @@ src/
   bots/
     coworking/        the room: Durable Object (session state), RoomMessage (the channel message
                       + its Slack port), Zoom event helpers, join flow + ephemeral
-    reminders/        cron dispatch, event model + CMS source, Block Kit builders, html-to-mrkdwn
+    reminders/        cron dispatch, event model + Google Calendar source, Block Kit builders
     welcome.ts        new-member welcome DM
     app-home.ts       App Home tab
     admin.ts          /vc-bot-admin slash command
@@ -104,14 +104,18 @@ Config and secrets are split deliberately:
   (maintainers @-mentioned in the welcome message and App Home), the three announcement
   channels — `SLACK_EVENTS_CHANNEL_ID` (starting-soon messages),
   `SLACK_ANNOUNCEMENTS_CHANNEL_ID` (daily/weekly summaries), `SLACK_EVENTADMIN_CHANNEL_ID`
-  (admin mirror with e.g. the Zoom host code) — `SLACK_BOTLOG_CHANNEL_ID` (private `#bot-log`
+  (admin mirror with the Zoom host key) — `SLACK_BOTLOG_CHANNEL_ID` (private `#bot-log`
   channel for error alerts; empty disables alerting and the bot must be invited before it can
-  post), `CMS_GRAPHQL_URL`, and `LOG_LEVEL`. After changing bindings or vars, rerun
-  `pnpm cf-types` and keep `src/env.ts` in sync by hand.
+  post), `EVENT_SOURCE` (active event source; `"google"` is the only one registered),
+  `GOOGLE_CALENDAR_ID`, and `LOG_LEVEL`. After changing bindings or vars, rerun `pnpm cf-types`
+  and keep `src/env.ts` in sync by hand.
 - **Secrets** go via `wrangler secret put <NAME>` in production and `.dev.vars` locally (see
   `.dev.vars.example`): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`,
   `ZOOM_WEBHOOK_SECRET_TOKEN`, `ZOOM_S2S_CLIENT_ID`, `ZOOM_S2S_CLIENT_SECRET`,
-  `ZOOM_S2S_ACCOUNT_ID`, `CMS_TOKEN`.
+  `ZOOM_S2S_ACCOUNT_ID` (the S2S app needs only `meeting:write:invite_links:admin`),
+  `GOOGLE_SERVICE_ACCOUNT_KEY` (Google Calendar service account), `GOOGLE_WATCH_TOKEN` (any
+  random string ≤256 chars; Google echoes it back on every Calendar push notification and the
+  `/google/notify` route drops notifications that don't carry it).
 
 ### Provider setup
 
@@ -120,10 +124,15 @@ Config and secrets are split deliberately:
   command at `/slack/commands`.
 - **Zoom app**: webhook subscriptions for `meeting.started`, `meeting.ended`,
   `meeting.participant_joined`, and `meeting.participant_left` pointed at `/zoom/webhook`,
-  plus a Server-to-Server OAuth app for the invite-link API. The subscription is
-  account-wide, so events arrive for every meeting under the account — the router ignores
-  any meeting that isn't `ZOOM_MEETING_ID`. The co-working meeting must **not** require
-  registration — invite links depend on it.
+  plus a Server-to-Server OAuth app for the invite-link API (`meeting:write:invite_links:admin`).
+  The subscription is account-wide, so events arrive for every meeting under the account — the
+  router ignores any meeting that isn't `ZOOM_MEETING_ID`. The co-working meeting must **not**
+  require registration — invite links depend on it.
+- **Google Calendar**: the events calendar is **private** (owners, the service account, and
+  workspace-domain readers only). The Join Link is each event's `location`; the Zoom host key is
+  the event's `extendedProperties.private.hostCode`, which the Google UI can't edit — set it
+  through the Calendar API (the website admin page, once it lands). A Zoom-link event without a
+  `hostCode` fails the reminder run (see `docs/adr/0001`).
 - **Cron triggers** fire in **UTC**. The cron strings in `wrangler.jsonc` `triggers.crons`
   must stay byte-identical to `CRON_TO_KIND` in `src/bots/reminders/index.ts` — the fired
   cron string is the lookup key for the reminder kind. Two crons drive everything: `0 12 * * *`
@@ -165,7 +174,8 @@ wrangler secret put ZOOM_WEBHOOK_SECRET_TOKEN
 wrangler secret put ZOOM_S2S_CLIENT_ID
 wrangler secret put ZOOM_S2S_CLIENT_SECRET
 wrangler secret put ZOOM_S2S_ACCOUNT_ID
-wrangler secret put CMS_TOKEN
+wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY
+wrangler secret put GOOGLE_WATCH_TOKEN
 
 pnpm deploy
 ```

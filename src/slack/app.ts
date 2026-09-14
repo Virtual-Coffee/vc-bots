@@ -6,12 +6,18 @@ import {
   handlePanelCoworkingClick,
   handlePanelHomeClick,
   handlePanelReminderClick,
+  handlePanelWatchStartClick,
+  handlePanelWatchStatusClick,
+  handlePanelWatchStopClick,
   handlePanelWelcomeClick,
   handleReminderSubmit,
   handleWelcomeSubmit,
   PANEL_COWORKING_ACTION_ID,
   PANEL_HOME_ACTION_ID,
   PANEL_REMINDER_ACTION_ID,
+  PANEL_WATCH_START_ACTION_ID,
+  PANEL_WATCH_STATUS_ACTION_ID,
+  PANEL_WATCH_STOP_ACTION_ID,
   PANEL_WELCOME_ACTION_ID,
   REMINDER_MODAL_CALLBACK_ID,
   WELCOME_MODAL_CALLBACK_ID,
@@ -94,6 +100,17 @@ export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
       handlePanelCoworkingClick(payload, env),
     )
     .action(PANEL_HOME_ACTION_ID, ack, async ({ payload }) => handlePanelHomeClick(payload, env))
+    // Calendar Watch panel buttons. Same per-user ephemeral pattern: each re-checks admin and
+    // replaces the panel with the watch result via the click's response_url. No modals needed.
+    .action(PANEL_WATCH_STATUS_ACTION_ID, ack, async ({ payload }) =>
+      handlePanelWatchStatusClick(payload, env),
+    )
+    .action(PANEL_WATCH_START_ACTION_ID, ack, async ({ payload }) =>
+      handlePanelWatchStartClick(payload, env),
+    )
+    .action(PANEL_WATCH_STOP_ACTION_ID, ack, async ({ payload }) =>
+      handlePanelWatchStopClick(payload, env),
+    )
     // Modal submits. The empty ack closes the modal; the real work runs in the lazy handler,
     // which reaches the panel ephemeral via the response_url carried in private_metadata.
     .viewSubmission(REMINDER_MODAL_CALLBACK_ID, async () => {}, async ({ payload }) =>

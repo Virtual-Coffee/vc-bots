@@ -1,14 +1,16 @@
 import { DateTime } from "luxon";
 import type { Env } from "../../env";
-import { createCmsSource } from "./sources/cms";
+import { createGoogleCalendarSource } from "./sources/google-calendar";
 
 /**
  * Source-agnostic event model for the reminders bot.
  *
  * Senders and Block Kit builders depend only on these types — never on a provider's field
- * names. The CMS (Craft + Solspace Calendar) is the first `EventSource`; a Google Calendar
- * source will join it (~late June 2026) and the two must be able to run in parallel for
- * testing before cutover.
+ * names. Google Calendar is the system of record and the only `EventSource` today (see
+ * docs/adr/0001). The registry stays as the `EVENT_SOURCE` / admin `[source]` seam.
+ * `getEventSource` resolves: explicit name (from `/vc-bot-admin daily|weekly [source]`) wins;
+ * otherwise `env.EVENT_SOURCE`; throws on unknown so a typo'd config var fails loudly (admin
+ * pre-validates for a friendly message).
  */
 
 export interface ReminderEvent {
@@ -18,17 +20,13 @@ export interface ReminderEvent {
   startsAt: string;
   /** Optional end time, same format. */
   endsAt?: string | null;
-  /** May contain HTML; rendered with htmlToMrkdwn. */
+  /** Markdown; rendered with slackify-markdown. */
   description?: string | null;
   /** URL or free-text location (a non-URL renders as a "Location:" line, not a button). */
   joinLink?: string | null;
-  /** Shown only in the event-admin mirror. */
-  zoomHostCode?: string | null;
-  /**
-   * Per-event channel from the CMS. Currently unused — all public starting-soon messages
-   * post to SLACK_EVENTS_CHANNEL_ID — but kept in the model in case routing returns.
-   */
-  slackChannelId?: string | null;
+  /** Zoom host key from `extendedProperties.private.hostCode`; shown only in the event-admin
+   *  mirror; never log it. */
+  hostKey?: string | null;
 }
 
 /** ISO range passed to the provider (computed in America/New_York). */
@@ -44,13 +42,26 @@ export interface EventSource {
 
 export type ReminderName = "daily" | "weekly";
 
-/**
- * The active source. When the Google Calendar source lands this becomes a registry
- * (e.g. `getEventSource(env, name?)`) so `/vc-bot-admin` can preview a named source and
- * both can run in parallel for testing without touching prod channels.
- */
-export function getEventSource(env: Env): EventSource {
-  return createCmsSource(env);
+const SOURCES = {
+  google: createGoogleCalendarSource,
+} satisfies Record<string, (env: Env) => EventSource>;
+
+export type EventSourceName = keyof typeof SOURCES;
+export const EVENT_SOURCE_NAMES = Object.keys(SOURCES) as EventSourceName[];
+
+export function isEventSourceName(name: string): name is EventSourceName {
+  // Own-property check: `in` would accept inherited names like "toString".
+  return Object.prototype.hasOwnProperty.call(SOURCES, name);
+}
+
+export function getEventSource(env: Env, name?: string): EventSource {
+  const resolved = name ?? env.EVENT_SOURCE ?? "google";
+  if (!isEventSourceName(resolved)) {
+    throw new Error(
+      `Unknown event source "${resolved}" (valid: ${EVENT_SOURCE_NAMES.join(", ")})`,
+    );
+  }
+  return SOURCES[resolved](env);
 }
 
 const EASTERN = "America/New_York";
@@ -63,9 +74,12 @@ export function reminderRange(kind: ReminderName, nowMs: number): EventRange {
     // tomorrow's run time is announced (and scheduled) by today's run.
     return { rangeStart: toIso(now), rangeEnd: toIso(now.plus({ days: 1 })) };
   }
-  // Weekly quirk kept from the old bot: set({hour: 0}) zeroes only the hour, keeping the
-  // run's minutes/seconds. Harmless — the window just starts shortly after midnight.
-  return { rangeStart: toIso(now.set({ hour: 0 })), rangeEnd: toIso(now.plus({ weeks: 1 })) };
+  // The announced week: Monday 00:00 → next Monday 00:00 (Mon–Sun), in Eastern. Anchored to the
+  // start of the ISO week (Luxon `startOf("week")` is Monday-start), NOT to the run time, so the
+  // window is the same set the Monday weekly summary covers no matter which day this is called —
+  // the CalendarSync change-notices reuse this so they match exactly what members were told.
+  const weekStart = now.startOf("week");
+  return { rangeStart: toIso(weekStart), rangeEnd: toIso(weekStart.plus({ weeks: 1 })) };
 }
 
 function toIso(dt: DateTime): string {

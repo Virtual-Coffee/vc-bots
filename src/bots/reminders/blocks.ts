@@ -1,7 +1,7 @@
-import type { AnyMessageBlock } from "slack-cloudflare-workers";
+import type { AnyMessageBlock, MessageAttachment } from "slack-cloudflare-workers";
 import { DateTime } from "luxon";
 import { dateToken } from "../../slack/date";
-import { htmlToMrkdwn } from "./html-to-mrkdwn";
+import { slackifyMarkdown } from "slackify-markdown";
 import type { ReminderEvent } from "./source";
 
 /**
@@ -9,12 +9,13 @@ import type { ReminderEvent } from "./source";
  * Netlify webhooks bot.
  *
  * Times are rendered with Slack's `<!date^…>` token so each member sees them in their own
- * timezone. HTML descriptions are converted to Slack mrkdwn with the local htmlToMrkdwn.
+ * timezone. Markdown descriptions are converted to Slack mrkdwn with `slackify-markdown`.
  */
 
 export interface ReminderMessage {
   text: string;
   blocks: AnyMessageBlock[];
+  attachments?: MessageAttachment[];
 }
 
 /** Per-event "⏰ Starting Soon" announcement, scheduled to post ~10 min before the event. */
@@ -38,7 +39,7 @@ export function buildStartingSoonAdminMessage(
 ): ReminderMessage {
   const blocks: AnyMessageBlock[] = [header("⏰ Starting Soon:"), titleSection(event, true)];
   if (event.joinLink) blocks.push(section(`*Location:* ${event.joinLink}`));
-  if (event.zoomHostCode) blocks.push(section(`*Host Code:* ${event.zoomHostCode}`));
+  if (event.hostKey) blocks.push(section(`*Host Code:* ${event.hostKey}`));
   blocks.push(section(`*Announcement posted to:* <#${targetChannelId}>`), { type: "divider" });
 
   return { text: `Starting soon: ${event.title}: ${fallbackDate(event)}`, blocks };
@@ -130,7 +131,7 @@ function titleSection(event: ReminderEvent, withButton: boolean): AnyMessageBloc
 
 /** Description as a context block; omitted when empty (Slack rejects empty context elements). */
 function descriptionContext(event: ReminderEvent): AnyMessageBlock | null {
-  const text = event.description ? htmlToMrkdwn(event.description) : "";
+  const text = event.description ? slackifyMarkdown(event.description).trim() : "";
   if (!text) return null;
   return context(text);
 }
@@ -145,4 +146,45 @@ function section(text: string): AnyMessageBlock {
 
 function context(text: string): AnyMessageBlock {
   return { type: "context", elements: [{ type: "mrkdwn", text }] };
+}
+
+/** Standout notice that an event in the announced window was cancelled. */
+export function buildCancellationMessage(event: ReminderEvent): ReminderMessage {
+  return {
+    text: `Cancelled: ${event.title} — ${fallbackDate(event)}`,
+    blocks: [],
+    attachments: [
+      {
+        color: "#d9376e",
+        blocks: [
+          section("*:warning: Event Cancelled*"),
+          section(`*${event.title}*\n${eventDateToken(event)}`),
+          section("This event has been cancelled."),
+        ],
+      },
+    ],
+  };
+}
+
+/** Standout notice that an event was rescheduled from oldStartsAt to its new start. */
+export function buildRescheduleMessage(
+  event: ReminderEvent,
+  oldStartsAt: string,
+): ReminderMessage {
+  const oldDt = DateTime.fromISO(oldStartsAt, { zone: "utc" });
+  return {
+    text: `Rescheduled: ${event.title} — now ${fallbackDate(event)}`,
+    blocks: [],
+    attachments: [
+      {
+        color: "#d9376e",
+        blocks: [
+          section("*:calendar: Event Rescheduled*"),
+          section(`*${event.title}*`),
+          section(`*Was:* ${dateToken(oldDt, EVENT_DATE_FORMAT, EVENT_FALLBACK_FORMAT)}`),
+          section(`*Now:* ${eventDateToken(event)}`),
+        ],
+      },
+    ],
+  };
 }

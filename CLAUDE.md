@@ -121,13 +121,21 @@ tokens that resolve to them carry a join credential — **never log them**.
 
 **Event announcements** (`src/bots/reminders/`) run from the cron `scheduled()` handler and
 post to three channels: daily/weekly summaries → `SLACK_ANNOUNCEMENTS_CHANNEL_ID`; per-event
-"Starting Soon" messages → `SLACK_EVENTS_CHANNEL_ID`, each mirrored (with extras like the Zoom
-host code) → `SLACK_EVENTADMIN_CHANNEL_ID`. The daily run schedules each starting-soon pair for
+"Starting Soon" messages → `SLACK_EVENTS_CHANNEL_ID`, each mirrored (with the Zoom host key)
+→ `SLACK_EVENTADMIN_CHANNEL_ID`. The daily run schedules each starting-soon pair for
 start − 10 min via Slack `chat.scheduleMessage`, first deleting the bot's scheduled messages in
 the window so re-runs reconcile instead of duplicating; on Mondays it skips its summary (the
 weekly covers it) but still schedules. Event windows are computed in `America/New_York`. Events
-come through the `EventSource` abstraction (`source.ts`); the CMS GraphQL adapter
-(`sources/cms.ts`) is the only source today — a Google Calendar source is planned. ⚠️ The cron
+come through the `EventSource` abstraction (`source.ts`); Google Calendar
+(`sources/google-calendar.ts`, service-account JWT-bearer auth signed in `src/google/auth.ts`)
+is the only registered source and the `EVENT_SOURCE` default. Per `docs/adr/0001`: the Join Link
+is the event's `location` (video `conferenceData` is the fallback; a `private.joinLink` property
+is ignored), descriptions are **Markdown** rendered with `slackify-markdown`, and the host key is
+the event's `extendedProperties.private.hostCode` (the calendar is private; the Zoom API stopped
+returning `host_key` in 2022, so it cannot be looked up at send time). `reconcileStartingSoon`
+fails the run when a Zoom Join Link (`parseZoomMeetingId` in `src/zoom/join-link.ts` matches) has
+no host key; a non-Zoom Join Link just has no host-code line. The host key goes only to the
+event-admin mirror — **never log it**. ⚠️ The cron
 strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
 wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons
 fire in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * MON` weekly). ⚠️ Cloudflare
@@ -136,10 +144,11 @@ spell weekdays as `MON`/`SUN` so a numeric field can't silently shift the day (L
 `weekday === 1` in `sendDaily` is ISO Monday and unrelated). To disable, set
 `triggers.crons: []` — deploying an empty array deregisters crons already on Cloudflare, whereas
 deleting the key would leave them running. The same `sendReminder` is reused by the
-`/vc-bot-admin` slash command for manual runs/previews. Failure paths that have no other surface
-(the cron run, the co-working DO/Zoom handlers, the join flow) alert the private `#bot-log`
-channel via `notifyBotLog` (`src/slack/notify.ts`, `SLACK_BOTLOG_CHANNEL_ID`) — a no-op when the
-channel id is empty, and self-swallowing so a failed alert never loops.
+`/vc-bot-admin` slash command for manual runs; it accepts an optional source arg (e.g.
+`daily google`) naming a registered source; cron always uses `EVENT_SOURCE`. Failure paths that
+have no other surface (the cron run, the co-working DO/Zoom handlers, the join flow) alert the
+private `#bot-log` channel via `notifyBotLog` (`src/slack/notify.ts`, `SLACK_BOTLOG_CHANNEL_ID`)
+— a no-op when the channel id is empty, and self-swallowing so a failed alert never loops.
 
 **Slack client.** Always `createSlackClient(env)` for outbound calls with no inbound Slack
 request (the CoworkingRoom DO, the cron reminders); inside `SlackApp` handlers it's the same
@@ -154,14 +163,17 @@ client either way. All Slack imports (client, Block Kit types, payload types) co
   `wrangler.jsonc` `vars` and is typed in `src/env.ts` (`Env`). Secrets (`SLACK_BOT_TOKEN`,
   `*_SECRET`, etc.) go via `wrangler secret put` in prod and `.dev.vars` locally (see
   `.dev.vars.example`). `src/env.ts` is the hand-maintained `Env` the app imports; keep it in
-  sync with `wrangler.jsonc` and rerun `pnpm cf-types`.
+  sync with `wrangler.jsonc` and rerun `pnpm cf-types`. ⚠️ Google service-account JSON
+  (`GOOGLE_SERVICE_ACCOUNT_KEY`), signed JWT assertions, and access tokens are credentials —
+  never log them.
 - **Logging.** Use the leveled `log` from `src/log.ts` (`log.info("event.name", { key: val })`),
   not bare `console.*`. Threshold is set per request/DO via `setLogLevel(env.LOG_LEVEL)`; the DO
   sets it in its own constructor since it runs in a separate isolate.
 - **TS is strict** with `noUncheckedIndexedAccess` and `verbatimModuleSyntax` — use
   `import type` for type-only imports.
-- `slackify-html` is **edge-incompatible** (throws on workerd); a local `html-to-mrkdwn`
-  converter replaces it. Don't re-add it.
+- `slackify-html` is **edge-incompatible** (throws on workerd). Don't re-add it. Event
+  descriptions are Markdown, rendered with `slackify-markdown` (pure ESM, runs on workerd);
+  there is no HTML path.
 
 ## Agent skills
 

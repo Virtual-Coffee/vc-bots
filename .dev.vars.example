@@ -8,13 +8,19 @@ SLACK_SIGNING_SECRET=...
 # Zoom webhooks
 ZOOM_WEBHOOK_SECRET_TOKEN=...
 
-# Zoom Server-to-Server OAuth (invite-link API)
+# Zoom Server-to-Server OAuth (co-working invite links; needs the
+# meeting:write:invite_links:admin granular scope)
 ZOOM_S2S_CLIENT_ID=...
 ZOOM_S2S_CLIENT_SECRET=...
 ZOOM_S2S_ACCOUNT_ID=...
 
-# CMS (event reminders, GraphQL)
-CMS_TOKEN=...
+# Google Calendar (event reminders). The entire downloaded service-account JSON on one line.
+# Prod: `wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY` and paste the JSON when prompted.
+GOOGLE_SERVICE_ACCOUNT_KEY={"type":"service_account",...}
+
+# Google Calendar push-notification channel verification token (any random string, <=256 chars).
+# Set the same value in prod via `wrangler secret put GOOGLE_WATCH_TOKEN`.
+GOOGLE_WATCH_TOKEN=
 
 # Optional: override the wrangler.jsonc LOG_LEVEL ("info") for local dev.
 # LOG_LEVEL=debug
