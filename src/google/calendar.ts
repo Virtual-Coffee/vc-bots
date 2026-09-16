@@ -13,10 +13,11 @@ import { fetchGoogleAccessToken } from "./auth";
  * (`test/helpers/calendar-fake.ts`).
  *
  * Reads the private "Virtual Coffee Events" calendar via the service account (scope
- * `https://www.googleapis.com/auth/calendar`, see `src/google/auth.ts`). Join Link = `location`,
- * host key = `extendedProperties.private.hostCode` (docs/adr/0001). A Zoom Join Link without a
- * host key makes the event **invalid**: it is dropped from `listEvents` with a `#bot-log` alert
- * and reported by `getEvent`, so the bad calendar entry never reaches a sender (docs/adr/0002).
+ * `https://www.googleapis.com/auth/calendar.events.readonly`, see `src/google/auth.ts`). Join
+ * Link = `location`, host key = `extendedProperties.private.hostCode` (docs/adr/0001). A Zoom
+ * Join Link without a host key makes the event **invalid**: it is dropped from `listEvents` with
+ * a `#bot-log` alert and reported by `getEvent`, so the bad calendar entry never reaches a
+ * sender (docs/adr/0002).
  *
  * Each adapter instance caches its access token (~1h lifetime, no refresh token) and re-fetches
  * it shortly before expiry. There's no cross-request locking, so overlapping runs may each mint

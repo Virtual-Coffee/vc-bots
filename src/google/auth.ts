@@ -16,7 +16,7 @@ import type { Env } from "../env";
  */
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const SCOPE = "https://www.googleapis.com/auth/calendar";
+const SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
 
 interface ServiceAccountKey {
   client_email: string;
