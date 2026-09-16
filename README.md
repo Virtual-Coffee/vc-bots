@@ -23,13 +23,15 @@ Everything runs on Cloudflare's edge runtime (`workerd`) — **no `node:*` modul
 only (`fetch`, `crypto.subtle`, etc.).
 
 **Request flow.** `src/index.ts` is the Worker entrypoint (`fetch` + `scheduled`). `fetch`
-delegates to `src/router.ts`, a plain `method + path` switch over six routes: `POST
+delegates to `src/router.ts`, a plain `method + path` switch over seven routes: `POST
 /zoom/webhook`, `POST /slack/events`, `POST /slack/interactivity`, `POST /slack/commands`,
-`GET /join/<token>` (the co-working join redirect — the token itself is the credential, so
-there's no signature to check), and `GET /health`. Every provider route:
+`POST /google/notify` (Google Calendar push notifications), `GET /join/<token>` (the co-working
+join redirect — the token itself is the credential, so there's no signature to check), and
+`GET /health`. Every provider route:
 
 1. **Verifies the provider signature against the raw body first**, before parsing JSON
-   (timing-safe HMAC via `crypto.subtle` in `src/crypto.ts`).
+   (timing-safe HMAC via `crypto.subtle` in `src/crypto.ts`) — except `/google/notify`, which
+   instead authenticates by the per-channel `X-Goog-Channel-Token` header (the body is empty).
 2. **ACKs fast, works later.** Slack and Zoom impose a ~3s response window, so routes return
    `200` immediately and run the real work via `ctx.waitUntil(...)`, replying through Slack's
    `response_url` when needed.
