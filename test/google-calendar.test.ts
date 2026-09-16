@@ -257,6 +257,25 @@ describe("listEvents — JoinInfo kinds (docs/adr/0002)", () => {
     });
   });
 
+  it("place: a scheme-less location isn't classified as a url", async () => {
+    expect(await joinOf({ id: "ev-http-room", ...timed, location: "http-room" })).toEqual({
+      kind: "place",
+      text: "http-room",
+    });
+  });
+
+  it("url: an uppercase http(s) scheme still counts, and the raw string is preserved", async () => {
+    expect(
+      await joinOf({ id: "ev-https-upper", ...timed, location: "HTTPS://example.com/x" }),
+    ).toEqual({ kind: "url", url: "HTTPS://example.com/x" });
+  });
+
+  it("place: a non-http(s) scheme Zoom-lookalike link is neither zoom nor url, and needs no hostCode", async () => {
+    expect(
+      await joinOf({ id: "ev-ftp-zoom", ...timed, location: "ftp://zoom.us/j/123456789" }),
+    ).toEqual({ kind: "place", text: "ftp://zoom.us/j/123456789" });
+  });
+
   it("none: empty location and no conferenceData", async () => {
     expect(await joinOf({ id: "ev-none", ...timed, location: "" })).toEqual({ kind: "none" });
   });

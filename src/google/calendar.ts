@@ -3,7 +3,7 @@ import type { Env } from "../env";
 import type { EventRange, JoinInfo, ReminderEvent } from "../events";
 import { log } from "../log";
 import { notifyBotLog } from "../slack/notify";
-import { parseZoomMeetingId } from "../zoom/join-link";
+import { parseHttpUrl, parseZoomMeetingId } from "../zoom/join-link";
 import { fetchGoogleAccessToken } from "./auth";
 
 /**
@@ -310,7 +310,8 @@ function mapTimedEvent(
  * Join Link → `JoinInfo`. `location` is canonical (blank/whitespace counts as absent); a video
  * conferenceData entry is the fallback. A Zoom url must come with the private `hostCode`
  * property (empty/whitespace counts as absent) — without it the event is invalid (`null`). The
- * host code is ignored for every other kind.
+ * host code is ignored for every other kind. Anything else that parses as an http(s) url is
+ * `"url"`; everything else (including non-http(s) schemes like `ftp:`) is free-text `"place"`.
  */
 function deriveJoinInfo(e: GoogleCalendarEvent): JoinInfo | null {
   const videoEntryPoint = e.conferenceData?.entryPoints?.find(
@@ -326,6 +327,6 @@ function deriveJoinInfo(e: GoogleCalendarEvent): JoinInfo | null {
     if (hostKey === null) return null;
     return { kind: "zoom", url: link, meetingId, hostKey };
   }
-  if (link.startsWith("http")) return { kind: "url", url: link };
+  if (parseHttpUrl(link) !== null) return { kind: "url", url: link };
   return { kind: "place", text: link };
 }

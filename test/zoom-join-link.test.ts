@@ -13,6 +13,7 @@ describe("parseZoomMeetingId", () => {
     expect(parseZoomMeetingId("The VC Lounge")).toBeNull();
     expect(parseZoomMeetingId("https://zoom.us/w/personal-1")).toBeNull();
     expect(parseZoomMeetingId("https://zoom.us/j/12")).toBeNull();
+    expect(parseZoomMeetingId("ftp://zoom.us/j/123456789")).toBeNull();
   });
 
   it("rejects lookalike hosts — only zoom.us and its subdomains count", () => {
