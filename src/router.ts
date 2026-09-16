@@ -1,3 +1,4 @@
+import { activeSourceName } from "./bots/reminders";
 import type { Env } from "./env";
 import { log } from "./log";
 import { createSlackApp } from "./slack/app";
@@ -116,7 +117,7 @@ async function handleGoogleNotify(
   }
 
   // A stale watch may still fire after a cutover back to CMS — ignore unless Google is active.
-  if (env.EVENT_SOURCE !== "google") {
+  if (activeSourceName(env) !== "google") {
     log.info("google.notify.ignored_source");
     return new Response(null, { status: 200 });
   }

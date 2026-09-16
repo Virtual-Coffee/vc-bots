@@ -39,8 +39,13 @@ export function isEventSourceName(name: string): name is EventSourceName {
   return Object.prototype.hasOwnProperty.call(SOURCES, name);
 }
 
+/** The configured default source name (`EVENT_SOURCE`, "google" when unset) — the one seam for it. */
+export function activeSourceName(env: Env): string {
+  return env.EVENT_SOURCE ?? "google";
+}
+
 export function getEventSource(env: Env, name?: string): EventSource {
-  const resolved = name ?? env.EVENT_SOURCE ?? "google";
+  const resolved = name ?? activeSourceName(env);
   if (!isEventSourceName(resolved)) {
     throw new Error(
       `Unknown event source "${resolved}" (valid: ${EVENT_SOURCE_NAMES.join(", ")})`,

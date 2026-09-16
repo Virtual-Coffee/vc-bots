@@ -5,11 +5,11 @@ import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
 import { buildDailyMessage, buildWeeklyMessage } from "./blocks";
 import type { EventSource, ReminderName } from "./source";
-import { getEventSource, reminderRange } from "./source";
+import { activeSourceName, getEventSource, reminderRange } from "./source";
 import { reconcileStartingSoon } from "./starting-soon";
 
 export type { ReminderName } from "./source";
-export { EASTERN, EVENT_SOURCE_NAMES, isEventSourceName } from "./source";
+export { activeSourceName, EASTERN, EVENT_SOURCE_NAMES, isEventSourceName } from "./source";
 
 /**
  * Event announcements. `sendReminder` does the actual work and is shared by the cron
@@ -91,7 +91,7 @@ export async function runReminders(
   // announced week rolled over (Monday) — it must NOT reseed daily: a snapshot overwrite would
   // swallow a change whose push is still queued behind it, so the cancellation/reschedule would
   // never be announced. Guarded separately so a watch hiccup never masks the reminder result.
-  if (name === "daily" && env.EVENT_SOURCE === "google") {
+  if (name === "daily" && activeSourceName(env) === "google") {
     try {
       await env.CALENDAR_SYNC.getByName("default").ensureWatch();
     } catch (error) {
