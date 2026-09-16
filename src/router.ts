@@ -103,16 +103,16 @@ async function handleGoogleNotify(
   // Never log the channel token or the full header bag — x-goog-channel-token is a credential.
   log.info("google.notify", { state, channelId, resourceId, messageNumber });
 
-  // Initial handshake when a watch channel is created — no change to process.
-  if (state === "sync") {
-    return new Response(null, { status: 200 });
-  }
-
   // Authenticate via the per-channel token. Drop silently (200) on mismatch so spoofed/stale
   // notifications don't trigger a Google retry-storm. Never log the provided/expected value.
   const provided = req.headers.get("x-goog-channel-token");
   if (provided !== env.GOOGLE_WATCH_TOKEN) {
     log.warn("google.notify.bad_token", { channelId });
+    return new Response(null, { status: 200 });
+  }
+
+  // Initial handshake when a watch channel is created — no change to process.
+  if (state === "sync") {
     return new Response(null, { status: 200 });
   }
 

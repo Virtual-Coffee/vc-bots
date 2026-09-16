@@ -121,6 +121,21 @@ describe("POST /google/notify", () => {
     expect(untouched()).toBe(true);
   });
 
+  it("200s a sync notification with a wrong channel token (no sync) and warns", async () => {
+    setLogLevel("info");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await send(
+      gcalRequest("sync", { "X-Goog-Channel-Token": "wrong" }),
+      googleEnv(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(untouched()).toBe(true);
+    const line = warn.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(line).toContain("google.notify.bad_token");
+  });
+
   it("404s a non-POST method (route is POST-only)", async () => {
     const ctx = createExecutionContext();
     const res = await route(
