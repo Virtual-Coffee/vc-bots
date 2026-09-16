@@ -88,6 +88,13 @@ function postedText(): string {
 function channelRows(stub: ReturnType<typeof syncStub>) {
   return withSync(stub, (_i, state) => state.storage.sql.exec("SELECT * FROM channel").toArray());
 }
+/** Wipe the snapshot (rows + the week tag) as if it had never been seeded. */
+function clearSnapshot(stub: ReturnType<typeof syncStub>) {
+  return withSync(stub, async (_i, state) => {
+    state.storage.sql.exec("DELETE FROM event_snapshot");
+    await state.storage.delete("snapshot_range_start");
+  });
+}
 /** Backdate the stored channel so ensureWatch sees it as near expiry (inside the renew buffer). */
 function backdateChannel(stub: ReturnType<typeof syncStub>) {
   return withSync(stub, (_i, state) =>
@@ -155,7 +162,37 @@ describe("CalendarSync — ensureWatch", () => {
     const again = await withSync(stub, (instance) => instance.ensureWatch());
 
     expect(again.channelId).toBe(first.channelId);
+    // A current baseline is never reseeded either: a listEvents here would overwrite the
+    // snapshot and swallow a change whose push is still queued behind this run.
     expect(fake.calls).toHaveLength(0);
+  });
+
+  it("heals a missing baseline behind a healthy channel (seed only, no new watch)", async () => {
+    const stub = syncStub();
+    await withSync(stub, (instance) => instance.ensureWatch());
+    // As if the first seed had failed after the channel row was persisted.
+    await clearSnapshot(stub);
+    fake.calls.length = 0;
+
+    await withSync(stub, (instance) => instance.ensureWatch());
+
+    expect(fake.callsTo("listEvents")).toHaveLength(1);
+    expect(fake.callsTo("watch")).toHaveLength(0);
+  });
+
+  it("reseeds behind a healthy channel once the announced week rolls over", async () => {
+    const stub = syncStub();
+    await withSync(stub, (instance) => instance.ensureWatch(NOW));
+    fake.calls.length = 0;
+
+    // Same week: nothing to do.
+    await withSync(stub, (instance) => instance.ensureWatch(NOW + 24 * 60 * 60 * 1000));
+    expect(fake.calls).toHaveLength(0);
+
+    // Next week: the baseline is for the previous announced week, so it's rebuilt.
+    await withSync(stub, (instance) => instance.ensureWatch(NOW + 7 * 24 * 60 * 60 * 1000));
+    expect(fake.callsTo("listEvents")).toHaveLength(1);
+    expect(fake.callsTo("watch")).toHaveLength(0);
   });
 
   it("renews a near-expiry channel: creates the replacement first, then stops the old one", async () => {

@@ -86,13 +86,14 @@ export async function runReminders(
     await notifyBotLog(env, "reminder.run_failed", { cron: controller.cron, error: String(error) });
   }
 
-  // Bootstrap/heal the Calendar watch on the daily run when Google is the active source. Guarded
-  // separately so a watch hiccup never masks the reminder result above.
+  // Bootstrap/heal the Calendar watch and its snapshot baseline on the daily run when Google is
+  // the active source. `ensureWatch` seeds only when the baseline is missing (first run) or the
+  // announced week rolled over (Monday) — it must NOT reseed daily: a snapshot overwrite would
+  // swallow a change whose push is still queued behind it, so the cancellation/reschedule would
+  // never be announced. Guarded separately so a watch hiccup never masks the reminder result.
   if (name === "daily" && env.EVENT_SOURCE === "google") {
     try {
-      const stub = env.CALENDAR_SYNC.getByName("default");
-      await stub.ensureWatch();
-      await stub.seed();
+      await env.CALENDAR_SYNC.getByName("default").ensureWatch();
     } catch (error) {
       log.error("calendar_sync.bootstrap_failed", { error: String(error) });
       await notifyBotLog(env, "calendar_sync.bootstrap_failed", { error: String(error) });

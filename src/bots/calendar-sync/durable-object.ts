@@ -13,12 +13,15 @@ import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
 /**
  * Calendar sync — a single singleton Durable Object (addressed elsewhere via
  * `env.CALENDAR_SYNC.getByName("default")`). It serializes Google Calendar push notifications and
- * the daily cron seed through one instance, so a notification's snapshot diff never races the
- * cron's snapshot refresh (same race-free rationale as CoworkingRoom).
+ * the daily cron's `ensureWatch` through one instance, so a notification's snapshot diff never
+ * races a baseline seed (same race-free rationale as CoworkingRoom).
  *
  * Two jobs:
  * - **Watch lifecycle** (`ensureWatch` / `stopWatch` / `watchStatus`): register a Calendar
  *   `events/watch` push channel, renew it ~1 day before its 7-day expiry via the DO alarm.
+ *   `ensureWatch` also owns the snapshot baseline: it seeds only when the snapshot is missing or
+ *   the announced week rolled over (Monday), never on every run — an overwrite would swallow a
+ *   change whose push notification is still queued behind it, so the diff would find nothing.
  * - **Notification handling** (`notify` → `processNotification`): on each push, diff the live
  *   weekly window against the last-known snapshot to detect cancellations / reschedules, persist
  *   the new snapshot, then post standout notices to the three event channels and reconcile the
@@ -38,6 +41,11 @@ import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
 const RENEW_BUFFER_MS = 24 * 60 * 60 * 1000;
 /** When a renewal fails, try again this much later (well inside the 24h buffer). */
 const RENEW_RETRY_MS = 60 * 60 * 1000;
+/**
+ * KV key (next to the SQL tables) holding the `rangeStart` of the announced week the snapshot was
+ * last written for — how `ensureWatch` tells a current baseline from a missing/rolled-over one.
+ */
+const SNAPSHOT_RANGE_START_KEY = "snapshot_range_start";
 
 /** Public watch state returned to the admin panel + tests. Never carries the token. */
 export type WatchStatus = {
@@ -97,17 +105,18 @@ export class CalendarSync extends DurableObject<Env> {
    * alarm. Healthy channels are left in place — just re-arm the alarm. Returns the current status
    * (no token).
    */
-  async ensureWatch(): Promise<WatchStatus> {
+  async ensureWatch(nowMs: number = Date.now()): Promise<WatchStatus> {
     const existing = this.getChannel();
-    const now = Date.now();
 
     if (
       existing &&
-      this.channelIsLive(existing, now) &&
-      existing.expiration_ms - RENEW_BUFFER_MS > now
+      this.channelIsLive(existing, nowMs) &&
+      existing.expiration_ms - RENEW_BUFFER_MS > nowMs
     ) {
-      // Still healthy — just keep the renewal alarm armed.
+      // Still healthy — keep the renewal alarm armed, and heal the baseline if the first seed
+      // failed after this row was persisted or the announced week has rolled over since.
       await this.ctx.storage.setAlarm(existing.expiration_ms - RENEW_BUFFER_MS);
+      if (!(await this.snapshotIsCurrent(nowMs))) await this.seed(nowMs);
       log.info("calendar_sync.watch_healthy", {
         channelId: existing.id,
         expiresAt: existing.expiration_ms,
@@ -142,11 +151,10 @@ export class CalendarSync extends DurableObject<Env> {
       await this.calendar.stopChannel(existing.id, existing.resource_id);
     }
 
-    // First-time setup: establish a snapshot baseline so the next notification has something to
-    // diff against (otherwise every event would look "new").
-    if (this.snapshotEmpty()) {
-      await this.seed();
-    }
+    // Establish the snapshot baseline when it's missing (first-time setup) or stale (the announced
+    // week rolled over) so the next notification has something to diff against — otherwise every
+    // event would look "new". A current baseline is left alone: see the class doc.
+    if (!(await this.snapshotIsCurrent(nowMs))) await this.seed(nowMs);
 
     log.info("calendar_sync.watch_created", { channelId, expiresAt: expirationMs });
     return { active: true, channelId, expiresAt: expirationMs };
@@ -185,12 +193,13 @@ export class CalendarSync extends DurableObject<Env> {
 
   /**
    * Overwrite the snapshot to match the current weekly window — no notices, no reconcile. The
-   * baseline the daily cron refreshes so mid-week notifications have something to diff against.
+   * baseline mid-week notifications diff against; `ensureWatch` calls it only when the snapshot is
+   * missing or belongs to a previous week (it is never a routine refresh — see the class doc).
    */
   async seed(nowMs: number = Date.now()): Promise<void> {
     const range = reminderRange("weekly", nowMs);
     const events = await this.calendar.listEvents(range);
-    this.writeSnapshot(events);
+    await this.writeSnapshot(events, range.rangeStart);
     log.info("calendar_sync.seeded", { count: events.length });
   }
 
@@ -250,7 +259,7 @@ export class CalendarSync extends DurableObject<Env> {
 
     // Commit the new baseline before delivering anything: a delivery failure below then loses a
     // notice (alerted via the thrown error) instead of re-posting it everywhere on the next push.
-    this.writeSnapshot(current);
+    await this.writeSnapshot(current, weekly.rangeStart);
 
     const client = createSlackClient(this.env);
     const failures: string[] = [];
@@ -354,15 +363,17 @@ export class CalendarSync extends DurableObject<Env> {
     );
   }
 
-  private snapshotEmpty(): boolean {
-    const row = this.sql
-      .exec<{ n: number }>("SELECT COUNT(*) AS n FROM event_snapshot")
-      .toArray()[0];
-    return (row?.n ?? 0) === 0;
+  /**
+   * Is the stored snapshot the baseline for the week `nowMs` falls in? False when no snapshot has
+   * been written yet or the last one was written for a previous announced week.
+   */
+  private async snapshotIsCurrent(nowMs: number): Promise<boolean> {
+    const stored = await this.ctx.storage.get<string>(SNAPSHOT_RANGE_START_KEY);
+    return stored === reminderRange("weekly", nowMs).rangeStart;
   }
 
-  /** Replace the whole snapshot with the given events. */
-  private writeSnapshot(events: ReminderEvent[]): void {
+  /** Replace the whole snapshot with the given events, tagged with the week it was taken for. */
+  private async writeSnapshot(events: ReminderEvent[], rangeStart: string): Promise<void> {
     this.sql.exec("DELETE FROM event_snapshot");
     for (const e of events) {
       this.sql.exec(
@@ -372,5 +383,6 @@ export class CalendarSync extends DurableObject<Env> {
         e.title,
       );
     }
+    await this.ctx.storage.put(SNAPSHOT_RANGE_START_KEY, rangeStart);
   }
 }
