@@ -1,39 +1,21 @@
 import { DateTime } from "luxon";
 import type { Env } from "../../env";
+import type { EventRange, ReminderEvent } from "../../events";
 import { createGoogleCalendarSource } from "./sources/google-calendar";
 
 /**
- * Source-agnostic event model for the reminders bot.
+ * Event-source registry for the reminders bot.
  *
- * Senders and Block Kit builders depend only on these types — never on a provider's field
- * names. Google Calendar is the system of record and the only `EventSource` today (see
- * docs/adr/0001). The registry stays as the `EVENT_SOURCE` / admin `[source]` seam.
+ * Senders and Block Kit builders depend only on the source-agnostic model in `src/events.ts`
+ * (re-exported here) — never on a provider's field names. Google Calendar is the system of
+ * record and the only `EventSource` today (see docs/adr/0001). The registry stays as the
+ * `EVENT_SOURCE` / admin `[source]` seam.
  * `getEventSource` resolves: explicit name (from `/vc-bot-admin daily|weekly [source]`) wins;
  * otherwise `env.EVENT_SOURCE`; throws on unknown so a typo'd config var fails loudly (admin
  * pre-validates for a friendly message).
  */
 
-export interface ReminderEvent {
-  id: string;
-  title: string;
-  /** ISO-8601 UTC instant (adapters do the parsing/zone work). */
-  startsAt: string;
-  /** Optional end time, same format. */
-  endsAt?: string | null;
-  /** Markdown; rendered with slackify-markdown. */
-  description?: string | null;
-  /** URL or free-text location (a non-URL renders as a "Location:" line, not a button). */
-  joinLink?: string | null;
-  /** Zoom host key from `extendedProperties.private.hostCode`; shown only in the event-admin
-   *  mirror; never log it. */
-  hostKey?: string | null;
-}
-
-/** ISO range passed to the provider (computed in America/New_York). */
-export interface EventRange {
-  rangeStart: string;
-  rangeEnd: string;
-}
+export type { EventRange, ReminderEvent } from "../../events";
 
 export interface EventSource {
   name: string;
