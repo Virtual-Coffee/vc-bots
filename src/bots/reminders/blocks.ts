@@ -85,8 +85,8 @@ export function titleSection(event: ReminderEvent, withButton: boolean): AnyMess
     type: "mrkdwn" as const,
     text: `*${event.title}*\n${eventDateToken(event)}`,
   };
-  const link = event.joinLink;
-  if (withButton && link && link.startsWith("http")) {
+  const { join } = event;
+  if (withButton && (join.kind === "zoom" || join.kind === "url")) {
     return {
       type: "section",
       text,
@@ -94,7 +94,7 @@ export function titleSection(event: ReminderEvent, withButton: boolean): AnyMess
         type: "button",
         text: { type: "plain_text", text: "Join Event", emoji: true },
         value: `join_event_${event.id}`,
-        url: link,
+        url: join.url,
         action_id: JOIN_EVENT_ACTION_ID,
       },
     };

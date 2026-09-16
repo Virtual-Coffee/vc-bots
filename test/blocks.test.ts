@@ -8,8 +8,7 @@ function evt(overrides: Partial<ReminderEvent> = {}): ReminderEvent {
     title: "Lunch & Learn",
     startsAt: "2026-05-28T15:00:00.000Z",
     description: "Bring **questions**!",
-    joinLink: "https://zoom.us/j/123",
-    hostKey: "9876",
+    join: { kind: "zoom", url: "https://zoom.us/j/123", meetingId: "123", hostKey: "9876" },
     ...overrides,
   };
 }

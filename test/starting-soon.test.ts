@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendReminder } from "../src/bots/reminders";
 import { JOIN_EVENT_ACTION_ID } from "../src/bots/reminders/blocks";
 import type { ReminderEvent } from "../src/bots/reminders/source";
-import { buildStartingSoonAdminMessage, buildStartingSoonMessage } from "../src/bots/reminders/starting-soon";
+import {
+  buildStartingSoonAdminMessage,
+  buildStartingSoonMessage,
+} from "../src/bots/reminders/starting-soon";
+import type { JoinInfo } from "../src/events";
 import type { GoogleCalendarEvent } from "../src/google/calendar";
 import { parseZoomMeetingId } from "../src/zoom/join-link";
 import { type FetchRecorder, HOST_CODE, installFetchRecorder } from "./helpers/fetch-recorder";
@@ -16,8 +20,7 @@ function reminderEvent(overrides: Partial<ReminderEvent> = {}): ReminderEvent {
     title: "Lunch & Learn",
     startsAt: "2026-05-28T15:00:00.000Z",
     description: "Bring **questions**!",
-    joinLink: "https://zoom.us/j/123",
-    hostKey: "9876",
+    join: { kind: "zoom", url: "https://zoom.us/j/123", meetingId: "123", hostKey: "9876" },
     ...overrides,
   };
 }
@@ -158,26 +161,30 @@ describe("sendReminder — daily, host key in the event-admin mirror", () => {
     expect(scheduled[1]?.get("blocks")).not.toContain("*Host Code:*");
   });
 
-  it("fails the run, naming the event, when a Zoom event has no hostCode", async () => {
-    googleEvents = [evt("1", "2026-05-28T18:00:00", ZOOM_LOCATION, null)];
-    await expect(sendReminder("daily", env, NOW)).rejects.toThrow(
-      'No host code on Zoom event "Event 1" (1)',
-    );
-    expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
-  });
-
-  it("validates every event before touching the schedule: a later bad event leaves it intact", async () => {
+  it("a Zoom event without a hostCode is rejected upstream: no pair for it, siblings proceed", async () => {
     staleScheduled = [{ id: "QSTALE", channel_id: "COLD", post_at: NOW / 1000 + 3600 }];
     googleEvents = [
       evt("1", "2026-05-28T18:00:00", ZOOM_LOCATION),
       evt("2", "2026-05-28T20:00:00", ZOOM_LOCATION, null),
     ];
-    await expect(sendReminder("daily", env, NOW)).rejects.toThrow(
-      'No host code on Zoom event "Event 2" (2)',
-    );
-    // Nothing was cleared and nothing was scheduled — the run rejected before any mutation.
-    expect(forms("/api/chat.deleteScheduledMessage")).toHaveLength(0);
-    expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
+    const result = await sendReminder("daily", env, NOW);
+    // The adapter dropped event 2 before the run saw it (docs/adr/0002).
+    expect(result).toEqual({ posted: true, count: 1, scheduled: 1, source: "google" });
+
+    expect(forms("/api/chat.deleteScheduledMessage")).toHaveLength(1);
+    const scheduled = forms("/api/chat.scheduleMessage");
+    expect(scheduled).toHaveLength(2);
+    expect(scheduled[1]?.get("blocks")).toContain("Event 1");
+    expect(scheduled[1]?.get("blocks")).not.toContain("Event 2");
+
+    // The summary plus one #bot-log alert naming the rejected event.
+    const posts = forms("/api/chat.postMessage");
+    expect(posts).toHaveLength(2);
+    const alert = posts.find((f) => f.get("channel") === env.SLACK_BOTLOG_CHANNEL_ID);
+    expect(alert?.get("text")).toContain("calendar.event_rejected");
+    expect(alert?.get("text")).toContain("Event 2");
+    expect(posts.find((f) => f.get("channel") === env.SLACK_ANNOUNCEMENTS_CHANNEL_ID)?.get("text"))
+      .not.toContain("Event 2");
   });
 });
 
@@ -201,10 +208,28 @@ describe("buildStartingSoonMessage", () => {
     expect(blocks.at(-1)?.type).toBe("divider");
   });
 
-  it("renders a non-http join link as a Location section instead of a button", () => {
-    const { blocks } = buildStartingSoonMessage(reminderEvent({ joinLink: "The VC Lounge" }));
+  it("renders a free-text place as a Location section instead of a button", () => {
+    const { blocks } = buildStartingSoonMessage(
+      reminderEvent({ join: { kind: "place", text: "The VC Lounge" } }),
+    );
     expect(json(blocks)).not.toContain('"button"');
     expect(json(blocks)).toContain("*Location:* The VC Lounge");
+  });
+
+  it("renders a non-Zoom url as a Join Event button with no Location section", () => {
+    const { blocks } = buildStartingSoonMessage(
+      reminderEvent({ join: { kind: "url", url: "https://meet.google.com/abc" } }),
+    );
+    expect(blocks[1]).toMatchObject({
+      accessory: { type: "button", url: "https://meet.google.com/abc" },
+    });
+    expect(json(blocks)).not.toContain("*Location:*");
+  });
+
+  it("renders neither a button nor a Location section when there is no Join Link", () => {
+    const { blocks } = buildStartingSoonMessage(reminderEvent({ join: { kind: "none" } }));
+    expect(json(blocks)).not.toContain('"button"');
+    expect(json(blocks)).not.toContain("*Location:*");
   });
 
   it("omits the description context when there is no description", () => {
@@ -236,9 +261,27 @@ describe("buildStartingSoonAdminMessage", () => {
     expect(json(blocks)).toContain("*Announcement posted to:* <#C123>");
   });
 
-  it("omits the host code and location sections when absent", () => {
+  it("shows a non-Zoom url as the location, with a button and no host code", () => {
+    const join: JoinInfo = { kind: "url", url: "https://meet.google.com/abc" };
+    const { blocks } = buildStartingSoonAdminMessage(reminderEvent({ join }), "C123");
+    expect(blocks[1]).toMatchObject({ accessory: { type: "button", url: join.url } });
+    expect(json(blocks)).toContain("*Location:* https://meet.google.com/abc");
+    expect(json(blocks)).not.toContain("*Host Code:*");
+  });
+
+  it("shows a free-text place as the location, with no button and no host code", () => {
     const { blocks } = buildStartingSoonAdminMessage(
-      reminderEvent({ joinLink: null, hostKey: null }),
+      reminderEvent({ join: { kind: "place", text: "The VC Lounge" } }),
+      "C123",
+    );
+    expect(json(blocks)).not.toContain('"button"');
+    expect(json(blocks)).toContain("*Location:* The VC Lounge");
+    expect(json(blocks)).not.toContain("*Host Code:*");
+  });
+
+  it("omits the host code and location sections when there is no Join Link", () => {
+    const { blocks } = buildStartingSoonAdminMessage(
+      reminderEvent({ join: { kind: "none" } }),
       FALLBACK_CHANNEL,
     );
     expect(json(blocks)).not.toContain("*Host Code:*");

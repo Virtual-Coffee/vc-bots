@@ -2,7 +2,7 @@ import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test"
 import { DateTime } from "luxon";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CalendarSync } from "../src/bots/calendar-sync/durable-object";
-import type { ReminderEvent } from "../src/events";
+import type { JoinInfo, ReminderEvent } from "../src/events";
 import { createCalendarFake, type FakeCalendar, installCalendarFake } from "./helpers/calendar-fake";
 import { type FetchRecorder, installFetchRecorder } from "./helpers/fetch-recorder";
 
@@ -95,21 +95,19 @@ function backdateChannel(stub: ReturnType<typeof syncStub>) {
   );
 }
 
-/** A timed event at `startsAt` (Eastern-offset ISO); `joinLink` is the Join Link. */
+/** A timed event at `startsAt` (Eastern-offset ISO); `join` is its Join Link (default: none). */
 function timedEvent(
   id: string,
   startsAt: string,
   title = "Event",
-  joinLink: string | null = null,
-  hostKey: string | null = null,
+  join: JoinInfo = { kind: "none" },
 ): ReminderEvent {
   return {
     id,
     title,
     startsAt,
     endsAt: DateTime.fromISO(startsAt).plus({ hours: 1 }).toISO(),
-    joinLink,
-    hostKey,
+    join,
   };
 }
 
@@ -391,6 +389,22 @@ describe("CalendarSync — processNotification", () => {
     expect(slackPosts()).toHaveLength(0);
   });
 
+  it("posts nothing when a departed event turned invalid (a Zoom link that lost its host key)", async () => {
+    const stub = syncStub();
+
+    fake.setEvents([timedEvent("evt-1", at(48))]);
+    await withSync(stub, (instance) => instance.seed(NOW));
+
+    // The adapter now rejects it: it's no longer in the listing, and the lookup says why.
+    fake.setEvents([]);
+    fake.lookups.set("evt-1", { kind: "invalid", reason: "zoom-no-host-key" });
+
+    await withSync(stub, (instance) => instance.processNotification(NOW));
+
+    expect(fake.callsTo("getEvent")).toHaveLength(1);
+    expect(slackPosts()).toHaveLength(0);
+  });
+
   it("does NOT notify when the changed event's announced start is already in the past", async () => {
     const stub = syncStub();
 
@@ -422,7 +436,12 @@ describe("CalendarSync — processNotification", () => {
     const stub = syncStub();
 
     // Later today (in the daily window), with a Zoom Join Link and its host key.
-    const zoom = timedEvent("evt-1", at(6), "Event", "https://us02web.zoom.us/j/81323022832?pwd=x", "123456");
+    const zoom = timedEvent("evt-1", at(6), "Event", {
+      kind: "zoom",
+      url: "https://us02web.zoom.us/j/81323022832?pwd=x",
+      meetingId: "81323022832",
+      hostKey: "123456",
+    });
     fake.setEvents([zoom]);
     await withSync(stub, (instance) => instance.seed(NOW));
 

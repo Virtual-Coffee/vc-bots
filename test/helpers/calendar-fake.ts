@@ -27,7 +27,8 @@ export interface FakeCalendar extends CalendarPort {
   callsTo(method: CalendarMethod): CalendarCall[];
   /** Replace the whole calendar. */
   setEvents(events: ReminderEvent[]): void;
-  /** Per-id `getEvent` answers that win over the map (e.g. `{ kind: "all-day" }`). */
+  /** Per-id `getEvent` answers that win over the map (e.g. `{ kind: "all-day" }` or
+   *  `{ kind: "invalid", reason: "zoom-no-host-key" }`). */
   readonly lookups: Map<string, CalendarEventLookup>;
   /** What the next `watch` returns; missing fields get defaults (fresh uuid, `res-1`, now + 7d). */
   watchResponse: Partial<CalendarWatch>;

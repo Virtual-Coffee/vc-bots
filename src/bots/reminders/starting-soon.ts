@@ -1,8 +1,11 @@
 import { DateTime } from "luxon";
-import type { AnyMessageBlock, ChatScheduledMessagesListRequest, SlackAPIClient } from "slack-cloudflare-workers";
+import type {
+  AnyMessageBlock,
+  ChatScheduledMessagesListRequest,
+  SlackAPIClient,
+} from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { log } from "../../log";
-import { parseZoomMeetingId } from "../../zoom/join-link";
 import { descriptionContext, fallbackDate, header, section, titleSection } from "./blocks";
 import type { ReminderMessage } from "./blocks";
 import type { EventRange, ReminderEvent } from "./source";
@@ -22,9 +25,8 @@ const MIN_SCHEDULE_AHEAD_SECONDS = 60;
 /** Per-event "⏰ Starting Soon" announcement, scheduled to post ~10 min before the event. */
 export function buildStartingSoonMessage(event: ReminderEvent): ReminderMessage {
   const blocks: AnyMessageBlock[] = [header("⏰ Starting Soon:"), titleSection(event, true)];
-  const link = event.joinLink;
-  if (link && !link.startsWith("http")) {
-    blocks.push(section(`*Location:* ${link}`));
+  if (event.join.kind === "place") {
+    blocks.push(section(`*Location:* ${event.join.text}`));
   }
   const description = descriptionContext(event);
   if (description) blocks.push(description);
@@ -39,8 +41,13 @@ export function buildStartingSoonAdminMessage(
   targetChannelId: string,
 ): ReminderMessage {
   const blocks: AnyMessageBlock[] = [header("⏰ Starting Soon:"), titleSection(event, true)];
-  if (event.joinLink) blocks.push(section(`*Location:* ${event.joinLink}`));
-  if (event.hostKey) blocks.push(section(`*Host Code:* ${event.hostKey}`));
+  const { join } = event;
+  if (join.kind === "zoom" || join.kind === "url") {
+    blocks.push(section(`*Location:* ${join.url}`));
+  } else if (join.kind === "place") {
+    blocks.push(section(`*Location:* ${join.text}`));
+  }
+  if (join.kind === "zoom") blocks.push(section(`*Host Code:* ${join.hostKey}`));
   blocks.push(section(`*Announcement posted to:* <#${targetChannelId}>`), { type: "divider" });
 
   return { text: `Starting soon: ${event.title}: ${fallbackDate(event)}`, blocks };
@@ -51,7 +58,8 @@ export function buildStartingSoonAdminMessage(
  * `events`. Clears this bot's scheduled messages in the window first, then re-queues each
  * event's public + event-admin pair for start − 10 min (or posts immediately if the slot has
  * already passed). Returns the number of events handled. The event-admin mirror carries the
- * event's host key; a Zoom Join Link without one rejects the whole run (docs/adr/0001).
+ * event's host key; a Zoom event without one never reaches here — the Google adapter rejects it
+ * at derivation (docs/adr/0002).
  *
  * Shared by:
  * - the **daily cron** (`sendDaily`) — runs at 12:00 UTC to seed the day's queue.
@@ -72,16 +80,6 @@ export async function reconcileStartingSoon(
   const nowSeconds = Math.floor(nowMs / 1000);
   const startSecondsOf = (event: ReminderEvent): number =>
     Math.floor(DateTime.fromISO(event.startsAt, { zone: "utc" }).toSeconds());
-
-  // Validate every upcoming event BEFORE the first Slack mutation, so a bad event rejects the
-  // run with the existing schedule intact rather than after it has been cleared. A Zoom event
-  // must carry its host key; a non-Zoom Join Link simply has no host key line.
-  for (const event of events) {
-    if (startSecondsOf(event) <= nowSeconds) continue;
-    if (parseZoomMeetingId(event.joinLink ?? "") && !event.hostKey) {
-      throw new Error(`No host code on Zoom event "${event.title}" (${event.id})`);
-    }
-  }
 
   await clearScheduledInWindow(client, nowMs, range);
 

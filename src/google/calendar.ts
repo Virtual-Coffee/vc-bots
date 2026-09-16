@@ -1,7 +1,9 @@
 import { DateTime } from "luxon";
 import type { Env } from "../env";
-import type { EventRange, ReminderEvent } from "../events";
+import type { EventRange, JoinInfo, ReminderEvent } from "../events";
 import { log } from "../log";
+import { notifyBotLog } from "../slack/notify";
+import { parseZoomMeetingId } from "../zoom/join-link";
 import { fetchGoogleAccessToken } from "./auth";
 
 /**
@@ -12,7 +14,9 @@ import { fetchGoogleAccessToken } from "./auth";
  *
  * Reads the private "Virtual Coffee Events" calendar via the service account (scope
  * `https://www.googleapis.com/auth/calendar`, see `src/google/auth.ts`). Join Link = `location`,
- * host key = `extendedProperties.private.hostCode` (docs/adr/0001).
+ * host key = `extendedProperties.private.hostCode` (docs/adr/0001). A Zoom Join Link without a
+ * host key makes the event **invalid**: it is dropped from `listEvents` with a `#bot-log` alert
+ * and reported by `getEvent`, so the bad calendar entry never reaches a sender (docs/adr/0002).
  *
  * Each adapter instance caches its access token (~1h lifetime, no refresh token) and re-fetches
  * it shortly before expiry. There's no cross-request locking, so overlapping runs may each mint
@@ -30,11 +34,15 @@ const WATCH_TTL_SECONDS = 604800;
 const EXPIRY_SKEW_MS = 60_000;
 
 export interface CalendarPort {
-  /** Timed, non-cancelled events in `[rangeStart, rangeEnd)`; throws on a non-OK response. */
+  /**
+   * Timed, non-cancelled, valid events in `[rangeStart, rangeEnd)`; throws on a non-OK response.
+   * Invalid events (a Zoom Join Link with no host key) are dropped and alerted to `#bot-log`.
+   */
   listEvents(range: EventRange): Promise<ReminderEvent[]>;
   /**
-   * Look up a single event by id. 404/410 (gone) counts as cancelled; other non-OK responses
-   * throw so a transient API failure surfaces rather than masquerading as a deletion.
+   * Look up a single event by id. 404/410 (gone) counts as cancelled; an invalid mapping is
+   * reported as `invalid`; other non-OK responses throw so a transient API failure surfaces
+   * rather than masquerading as a deletion.
    */
   getEvent(id: string): Promise<CalendarEventLookup>;
   /** Register a push channel posting to `address`; throws on failure. */
@@ -52,7 +60,19 @@ export type CalendarEventLookup =
   /** Cancelled or gone — either way no longer happening. */
   | { kind: "cancelled" }
   /** Live but `start.date` only — no timed slot to announce. */
-  | { kind: "all-day" };
+  | { kind: "all-day" }
+  /** Live and timed, but unannounceable (docs/adr/0002). */
+  | { kind: "invalid"; reason: InvalidEventReason };
+
+/** Why a timed, live event can't be announced. */
+export type InvalidEventReason = "zoom-no-host-key";
+
+/** Total result of mapping a wire event: an event, a benign skip, or an invalid entry. */
+export type MappedEvent =
+  | { kind: "event"; event: ReminderEvent }
+  /** Nothing to announce: cancelled, all-day, or an unparseable `start.dateTime`. */
+  | { kind: "skipped"; reason: "cancelled" | "all-day" | "bad-start" }
+  | { kind: "invalid"; reason: InvalidEventReason };
 
 export interface CalendarWatch {
   channelId: string;
@@ -143,7 +163,25 @@ export function createGoogleCalendarPort(env: Env): CalendarPort {
       } while (pageToken !== undefined);
 
       log.debug("google.fetched", { count: items.length });
-      return items.flatMap((e) => toReminderEvent(e) ?? []);
+      const events: ReminderEvent[] = [];
+      for (const e of items) {
+        const mapped = toReminderEvent(e);
+        if (mapped.kind === "event") {
+          events.push(mapped.event);
+        } else if (mapped.kind === "invalid") {
+          // Skip-and-alert rather than fail the run: one bad calendar entry must not black-hole
+          // every other event. Repeats on every listing until the calendar is fixed.
+          const title = e.summary ?? "(untitled event)";
+          log.warn("calendar.event_rejected", { id: e.id, title, reason: mapped.reason });
+          await notifyBotLog(env, "calendar.event_rejected", {
+            id: e.id,
+            title,
+            reason: mapped.reason,
+            detail: "Zoom event has no hostCode on the calendar; skipped until it is set",
+          });
+        }
+      }
+      return events;
     },
 
     async getEvent(id) {
@@ -158,10 +196,14 @@ export function createGoogleCalendarPort(env: Env): CalendarPort {
       if (e.status === "cancelled") return { kind: "cancelled" };
       const startDateTime = e.start?.dateTime;
       if (startDateTime === undefined) return { kind: "all-day" };
+      const mapped = toReminderEvent(e);
+      if (mapped.kind === "event") return { kind: "live", event: mapped.event };
+      if (mapped.kind === "invalid") return { kind: "invalid", reason: mapped.reason };
       // An unparseable start.dateTime is still a live timed event here: fall back to the raw
       // string (what the sync did before the port) rather than dropping it as `listEvents` does.
-      const event = toReminderEvent(e) ?? mapTimedEvent(e, startDateTime);
-      return { kind: "live", event };
+      const fallback = mapTimedEvent(e, startDateTime);
+      if (fallback.kind === "invalid") return fallback;
+      return { kind: "live", event: fallback.event };
     },
 
     async watch(address) {
@@ -209,12 +251,13 @@ export function createGoogleCalendarPort(env: Env): CalendarPort {
 }
 
 /**
- * Map a wire event to a `ReminderEvent`, or null when it has no timed slot to announce:
- * cancelled, all-day (`start.date` only), or an unparseable `start.dateTime`.
+ * Map a wire event to a `ReminderEvent`. Total: a `skipped` result means there is no timed slot to
+ * announce (cancelled, all-day — `start.date` only — or an unparseable `start.dateTime`); an
+ * `invalid` one means the entry is timed and live but can't be announced (docs/adr/0002).
  */
-export function toReminderEvent(e: GoogleCalendarEvent): ReminderEvent | null {
+export function toReminderEvent(e: GoogleCalendarEvent): MappedEvent {
   if (e.status === "cancelled") {
-    return null;
+    return { kind: "skipped", reason: "cancelled" };
   }
 
   const startDateTime = e.start?.dateTime;
@@ -222,20 +265,23 @@ export function toReminderEvent(e: GoogleCalendarEvent): ReminderEvent | null {
     // All-day events have only start.date. Skip them: starting-soon messages are scheduled at
     // start − 10 min; mapping an all-day event to midnight would cause misfires.
     log.warn("google.event_all_day_skipped", { id: e.id, date: e.start?.date });
-    return null;
+    return { kind: "skipped", reason: "all-day" };
   }
 
   const start = DateTime.fromISO(startDateTime, { setZone: true });
   if (!start.isValid) {
     log.warn("google.event_invalid_start", { id: e.id, start: startDateTime });
-    return null;
+    return { kind: "skipped", reason: "bad-start" };
   }
 
   return mapTimedEvent(e, start.toUTC().toISO() ?? startDateTime);
 }
 
 /** The field mapping for a timed event whose `startsAt` has already been resolved. */
-function mapTimedEvent(e: GoogleCalendarEvent, startsAt: string): ReminderEvent {
+function mapTimedEvent(
+  e: GoogleCalendarEvent,
+  startsAt: string,
+): Extract<MappedEvent, { kind: "event" | "invalid" }> {
   let endsAt: string | null = null;
   const endDateTime = e.end?.dateTime;
   if (endDateTime !== undefined) {
@@ -243,24 +289,42 @@ function mapTimedEvent(e: GoogleCalendarEvent, startsAt: string): ReminderEvent 
     endsAt = end.isValid ? (end.toUTC().toISO() ?? null) : null;
   }
 
-  // Join Link: `location` is canonical (blank/whitespace counts as absent); a video
-  // conferenceData entry is the fallback.
+  const join = deriveJoinInfo(e);
+  if (join === null) return { kind: "invalid", reason: "zoom-no-host-key" };
+
+  return {
+    kind: "event",
+    event: {
+      id: e.id,
+      title: e.summary ?? "(untitled event)",
+      startsAt,
+      endsAt,
+      description: e.description ?? null,
+      join,
+    },
+  };
+}
+
+/**
+ * Join Link → `JoinInfo`. `location` is canonical (blank/whitespace counts as absent); a video
+ * conferenceData entry is the fallback. A Zoom url must come with the private `hostCode`
+ * property (empty/whitespace counts as absent) — without it the event is invalid (`null`). The
+ * host code is ignored for every other kind.
+ */
+function deriveJoinInfo(e: GoogleCalendarEvent): JoinInfo | null {
   const videoEntryPoint = e.conferenceData?.entryPoints?.find(
     (ep) => ep.entryPointType === "video" && ep.uri !== undefined,
   );
   const location = e.location?.trim() || null;
-  const joinLink = location ?? videoEntryPoint?.uri ?? null;
+  const link = location ?? videoEntryPoint?.uri ?? null;
+  if (link === null) return { kind: "none" };
 
-  // Host key: the private `hostCode` property; empty/whitespace counts as absent.
-  const hostKey = e.extendedProperties?.private?.hostCode?.trim() || null;
-
-  return {
-    id: e.id,
-    title: e.summary ?? "(untitled event)",
-    startsAt,
-    endsAt,
-    description: e.description ?? null,
-    joinLink,
-    hostKey,
-  };
+  const meetingId = parseZoomMeetingId(link);
+  if (meetingId !== null) {
+    const hostKey = e.extendedProperties?.private?.hostCode?.trim() || null;
+    if (hostKey === null) return null;
+    return { kind: "zoom", url: link, meetingId, hostKey };
+  }
+  if (link.startsWith("http")) return { kind: "url", url: link };
+  return { kind: "place", text: link };
 }

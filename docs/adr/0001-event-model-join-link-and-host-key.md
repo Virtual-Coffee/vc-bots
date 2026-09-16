@@ -37,6 +37,8 @@ answer is "keep your own datastore" — see
   Join Link parses as a Zoom meeting (`src/zoom/join-link.ts`) and `hostKey` is empty; the error
   names the event and reaches `#bot-log` via `reminder.run_failed`. There is no "post without the
   host key" mode. A non-Zoom Join Link simply has no host-code line.
+  Amended by [0002](0002-join-info-union-and-invalid-events.md): the host-key rule is enforced
+  at derivation, not in `reconcileStartingSoon`.
 - **The host key appears only in the event-admin mirror** and is never logged.
 - **Descriptions are Markdown**, rendered with `slackify-markdown` (pure ESM on unified/remark,
   runs on workerd). The local `html-to-mrkdwn` converter is gone; there is no HTML tolerance.

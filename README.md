@@ -136,7 +136,7 @@ Config and secrets are split deliberately:
   workspace-domain readers only). The Join Link is each event's `location`; the Zoom host key is
   the event's `extendedProperties.private.hostCode`, which the Google UI can't edit — set it
   through the Calendar API (the website admin page, once it lands). A Zoom-link event without a
-  `hostCode` fails the reminder run (see `docs/adr/0001`).
+  `hostCode` is skipped with a `#bot-log` alert; other events proceed (see `docs/adr/0002`).
 - **Cron triggers** fire in **UTC**. The cron strings in `wrangler.jsonc` `triggers.crons`
   must stay byte-identical to `CRON_TO_KIND` in `src/bots/reminders/index.ts` — the fired
   cron string is the lookup key for the reminder kind. Two crons drive everything: `0 12 * * *`

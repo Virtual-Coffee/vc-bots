@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
+import type { JoinInfo } from "../src/events";
 import {
   type CalendarPort,
   createGoogleCalendarPort,
@@ -128,62 +129,72 @@ describe("listEvents — request shape", () => {
   });
 });
 
-describe("listEvents — joinLink precedence", () => {
-  async function joinLinkOf(e: object): Promise<string | null | undefined> {
+describe("listEvents — Join Link precedence", () => {
+  async function joinOf(e: object): Promise<JoinInfo> {
     googleEvents = [e as GoogleCalendarEvent];
     const events = await port().listEvents(RANGE);
-    return events[0]!.joinLink;
+    return events[0]!.join;
   }
 
   it("location (the Join Link) wins over conferenceData", async () => {
     expect(
-      await joinLinkOf({
+      await joinOf({
         id: "ev-loc",
         ...timed,
-        location: "https://zoom.us/j/location",
+        location: "https://meet.example/location",
         conferenceData: {
-          entryPoints: [{ entryPointType: "video", uri: "https://zoom.us/j/conference" }],
+          entryPoints: [{ entryPointType: "video", uri: "https://meet.example/conference" }],
         },
       }),
-    ).toBe("https://zoom.us/j/location");
+    ).toEqual({ kind: "url", url: "https://meet.example/location" });
   });
 
   it("falls back to the video conferenceData entry point when there is no location", async () => {
     expect(
-      await joinLinkOf({
+      await joinOf({
         id: "ev-conf",
         ...timed,
         conferenceData: {
           entryPoints: [
             { entryPointType: "phone", uri: "tel:+1555" },
-            { entryPointType: "video", uri: "https://zoom.us/j/conference" },
+            { entryPointType: "video", uri: "https://meet.example/conference" },
           ],
         },
       }),
-    ).toBe("https://zoom.us/j/conference");
+    ).toEqual({ kind: "url", url: "https://meet.example/conference" });
   });
 
   it("treats a blank/whitespace location as absent and falls back to conferenceData", async () => {
     expect(
-      await joinLinkOf({
+      await joinOf({
         id: "ev-blank",
         ...timed,
         location: "   ",
         conferenceData: {
-          entryPoints: [{ entryPointType: "video", uri: "https://zoom.us/j/conference" }],
+          entryPoints: [{ entryPointType: "video", uri: "https://meet.example/conference" }],
         },
       }),
-    ).toBe("https://zoom.us/j/conference");
+    ).toEqual({ kind: "url", url: "https://meet.example/conference" });
   });
 
   it("trims surrounding whitespace off the location", async () => {
     expect(
-      await joinLinkOf({ id: "ev-trim", ...timed, location: "  https://zoom.us/j/81323022832 " }),
-    ).toBe("https://zoom.us/j/81323022832");
+      await joinOf({
+        id: "ev-trim",
+        ...timed,
+        location: "  https://zoom.us/j/81323022832 ",
+        extendedProperties: { private: { hostCode: "111222" } },
+      }),
+    ).toEqual({
+      kind: "zoom",
+      url: "https://zoom.us/j/81323022832",
+      meetingId: "81323022832",
+      hostKey: "111222",
+    });
   });
 
-  it("returns null when neither location nor video conferenceData is present", async () => {
-    expect(await joinLinkOf({ id: "ev-none", ...timed })).toBeNull();
+  it("is none when neither location nor video conferenceData is present", async () => {
+    expect(await joinOf({ id: "ev-none", ...timed })).toEqual({ kind: "none" });
   });
 
   it("ignores a private joinLink property: location still wins (docs/adr/0001)", async () => {
@@ -192,7 +203,7 @@ describe("listEvents — joinLink precedence", () => {
         id: "ev-ext",
         summary: "Legacy properties",
         ...timed,
-        location: "https://zoom.us/j/location",
+        location: "https://meet.example/location",
         extendedProperties: {
           private: { joinLink: "https://zoom.us/j/PRIVATE", hostCode: "111222" },
           shared: { joinLink: "https://zoom.us/j/SHARED", zoomHostCode: "999000" },
@@ -200,27 +211,103 @@ describe("listEvents — joinLink precedence", () => {
       } as GoogleCalendarEvent,
     ];
     const events = await port().listEvents(RANGE);
-    expect(events[0]!.joinLink).toBe("https://zoom.us/j/location");
+    expect(events[0]!.join).toEqual({ kind: "url", url: "https://meet.example/location" });
     expect(JSON.stringify(events[0])).not.toMatch(/999000|PRIVATE|SHARED/);
   });
 });
 
-describe("listEvents — mapping", () => {
-  it("reads extendedProperties.private.hostCode, trimmed; missing or blank → null", async () => {
-    googleEvents = [
-      {
-        id: "ev-host",
-        ...timed,
-        location: "https://zoom.us/j/81323022832",
-        extendedProperties: { private: { hostCode: " 111222 " } },
-      },
-      { id: "ev-nohost", ...timed },
-      { id: "ev-blank", ...timed, extendedProperties: { private: { hostCode: "   " } } },
-    ];
+describe("listEvents — JoinInfo kinds (docs/adr/0002)", () => {
+  const ZOOM = "https://us02web.zoom.us/j/81323022832?pwd=abc";
+
+  async function joinOf(e: object): Promise<JoinInfo> {
+    googleEvents = [e as GoogleCalendarEvent];
     const events = await port().listEvents(RANGE);
-    expect(events.map((e) => e.hostKey)).toEqual(["111222", null, null]);
+    return events[0]!.join;
+  }
+
+  it("zoom: a Zoom url with the private hostCode (trimmed) carries the meeting id + host key", async () => {
+    expect(
+      await joinOf({
+        id: "ev-zoom",
+        ...timed,
+        location: ZOOM,
+        extendedProperties: { private: { hostCode: " 111222 " } },
+      }),
+    ).toEqual({ kind: "zoom", url: ZOOM, meetingId: "81323022832", hostKey: "111222" });
   });
 
+  it("url: any other http(s) link, dropping a stray hostCode", async () => {
+    googleEvents = [
+      {
+        id: "ev-url",
+        ...timed,
+        location: "https://meet.google.com/abc-defg-hij",
+        extendedProperties: { private: { hostCode: "111222" } },
+      },
+    ];
+    const events = await port().listEvents(RANGE);
+    expect(events[0]!.join).toEqual({ kind: "url", url: "https://meet.google.com/abc-defg-hij" });
+    expect(JSON.stringify(events[0])).not.toContain("111222");
+  });
+
+  it("place: free-text location", async () => {
+    expect(await joinOf({ id: "ev-place", ...timed, location: "The VC Lounge" })).toEqual({
+      kind: "place",
+      text: "The VC Lounge",
+    });
+  });
+
+  it("none: empty location and no conferenceData", async () => {
+    expect(await joinOf({ id: "ev-none", ...timed, location: "" })).toEqual({ kind: "none" });
+  });
+
+  it("a conferenceData fallback goes through the same rule (a Zoom entry needs the hostCode)", async () => {
+    expect(
+      await joinOf({
+        id: "ev-conf-zoom",
+        ...timed,
+        conferenceData: { entryPoints: [{ entryPointType: "video", uri: ZOOM }] },
+        extendedProperties: { private: { hostCode: "111222" } },
+      }),
+    ).toEqual({ kind: "zoom", url: ZOOM, meetingId: "81323022832", hostKey: "111222" });
+  });
+
+  it.each([
+    ["missing", {}],
+    ["blank", { extendedProperties: { private: { hostCode: "   " } } }],
+  ])(
+    "a Zoom event with a %s hostCode is dropped and alerted to #bot-log; siblings still list",
+    async (_label, props) => {
+      googleEvents = [
+        { id: "ev-before", ...timed, location: "https://meet.example/x" },
+        { id: "ev-bad", summary: "Broken Zoom", ...timed, location: ZOOM, ...props },
+        { id: "ev-after", ...timed, location: "Somewhere" },
+      ];
+      const events = await port().listEvents(RANGE);
+      expect(events.map((e) => e.id)).toEqual(["ev-before", "ev-after"]);
+
+      const alerts = rec.callsTo("/api/chat.postMessage");
+      expect(alerts).toHaveLength(1);
+      const form = rec.form(alerts[0]!);
+      expect(form.get("channel")).toBe(env.SLACK_BOTLOG_CHANNEL_ID);
+      expect(form.get("text")).toContain("calendar.event_rejected");
+      expect(form.get("text")).toContain("Broken Zoom");
+      expect(form.get("text")).toContain("ev-bad");
+      expect(form.get("text")).toContain("hostCode");
+      expect(form.get("text")).not.toContain("81323022832"); // no join url in the alert
+    },
+  );
+
+  it("getEvent reports a Zoom event without a hostCode as invalid", async () => {
+    singleEvents.set("ev-bad", { id: "ev-bad", status: "confirmed", ...timed, location: ZOOM });
+    expect(await port().getEvent("ev-bad")).toEqual({
+      kind: "invalid",
+      reason: "zoom-no-host-key",
+    });
+  });
+});
+
+describe("listEvents — mapping", () => {
   it("converts an offset-bearing dateTime to UTC, maps the rest, and nulls a missing end", async () => {
     googleEvents = [
       {
@@ -237,8 +324,7 @@ describe("listEvents — mapping", () => {
       startsAt: "2026-06-12T23:00:00.000Z",
       endsAt: null,
       description: "**bold**",
-      joinLink: null,
-      hostKey: null,
+      join: { kind: "none" },
     });
   });
 

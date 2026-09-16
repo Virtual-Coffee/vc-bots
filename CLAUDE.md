@@ -137,10 +137,11 @@ The shared event model (`ReminderEvent`, `EventRange`) is `src/events.ts`. Per `
 is the event's `location` (video `conferenceData` is the fallback; a `private.joinLink` property
 is ignored), descriptions are **Markdown** rendered with `slackify-markdown`, and the host key is
 the event's `extendedProperties.private.hostCode` (the calendar is private; the Zoom API stopped
-returning `host_key` in 2022, so it cannot be looked up at send time). `reconcileStartingSoon`
-(`src/bots/reminders/starting-soon.ts`) fails the run when a Zoom Join Link
-(`parseZoomMeetingId` in `src/zoom/join-link.ts` matches) has no host key; a non-Zoom Join Link
-just has no host-code line. The host key goes only to the
+returning `host_key` in 2022, so it cannot be looked up at send time). `ReminderEvent.join` is
+a discriminated union (`JoinInfo` in `src/events.ts`: `zoom` | `url` | `place` | `none`) and
+only `zoom` carries `hostKey`; the Google adapter **rejects** a Zoom Join Link without a host
+key at derivation (dropped from `listEvents`, alerted to `#bot-log`, `getEvent` → `invalid`) so
+every other event proceeds (`docs/adr/0002`). The host key goes only to the
 event-admin mirror — **never log it**. ⚠️ The cron
 strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
 wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons

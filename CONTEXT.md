@@ -73,12 +73,16 @@ One timed entry on the Calendar. The bots read it; they never write it.
 _Avoid_: CMS event, reminder event
 
 **Join Link**:
-The event's `location`: where members go to attend. A URL becomes the Join Event button; free text renders as a "Location:" line.
+The event's `location`: where members go to attend. Derived into one of four kinds — a Zoom link (with its host key), another URL, a place (free text), or none. A URL becomes the Join Event button; a place renders as a "Location:" line.
 _Avoid_: joinLink property, Zoom link, meeting link
 
 **Host key**:
-Zoom's per-user key that lets a moderator claim host in the meeting. Stored as `extendedProperties.private.hostCode` on the event (the calendar is private); shown only in the event-admin mirror; never logged.
+Zoom's per-user key that lets a moderator claim host in the meeting. Stored as `extendedProperties.private.hostCode` on the event (the calendar is private); part of a Zoom Join Link and nothing else; shown only in the event-admin mirror; never logged.
 _Avoid_: host code field, zoomHostCode, hostCode property
+
+**Invalid event**:
+A timed, live event the bots refuse to announce — today, a Zoom Join Link without a host key. Rejected when the Join Link is derived, alerted to the bot-log, and left out; every other event proceeds.
+_Avoid_: bad event, broken event, failed event
 
 **Starting-soon pair**:
 The public "Starting Soon" message and its event-admin mirror, both queued for ten minutes before an event starts.

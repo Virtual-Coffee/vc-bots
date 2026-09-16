@@ -243,6 +243,7 @@ export class CalendarSync extends DurableObject<Env> {
             id,
             title: snap.title ?? "(event)",
             startsAt: snap.startsAt,
+            join: { kind: "none" },
           };
           notices.push(buildCancellationMessage(reconstructed));
           cancellations += 1;
@@ -253,6 +254,7 @@ export class CalendarSync extends DurableObject<Env> {
             id,
             title: snap.title ?? "(event)",
             startsAt: lookup.event.startsAt,
+            join: { kind: "none" },
           };
           notices.push(buildRescheduleMessage(moved, snap.startsAt));
           reschedules += 1;
@@ -260,6 +262,11 @@ export class CalendarSync extends DurableObject<Env> {
         }
         case "all-day":
           // A live all-day event (start.date only) that left the timed window: no actionable notice.
+          break;
+        case "invalid":
+          // Still live, but unannounceable (e.g. a Zoom link lost its host key): the adapter has
+          // already alerted #bot-log; it just leaves the snapshot without a notice.
+          log.info("calendar_sync.event_invalid", { id, reason: lookup.reason });
           break;
       }
     }
