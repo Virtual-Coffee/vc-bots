@@ -5,10 +5,11 @@
 ## Context
 
 virtualcoffee.io ADR 0014 (`docs/adr/0014-google-calendar-is-the-events-system-of-record.md`
-in that repo) made Google Calendar the system of record for events: the Join Link is the event's
-`location`, nothing lives in `extendedProperties`, and the Zoom host code is not an Event field —
-the calendar was public, and `private` extended properties are per-calendar-copy rather than
-per-app, so storing the host code there exposed it to any API reader.
+in that repo) made Google Calendar the system of record for events. As it first read: the Join
+Link is the event's `location`, nothing lives in `extendedProperties`, and the Zoom host code is
+not an Event field — the calendar was public, and `private` extended properties are
+per-calendar-copy rather than per-app, so storing the host code there exposed it to any API
+reader.
 
 The bots' Google source (`feat/gcal`) had grown its own convention on top of
 `extendedProperties` (`joinLink`, `hostCode`, `slackChannelId`, plus legacy `shared` keys) and
@@ -52,9 +53,11 @@ answer is "keep your own datastore" — see
   subscriptions); the `meeting:read:meeting:admin`, `user:read:user:admin`, and
   `user:read:list_users:admin` scopes added for the Zoom lookup can be removed.
 - `CMS_TOKEN`, `CMS_GRAPHQL_URL`, `graphql`, and `graphql-request` are gone.
-- **Conflicts with virtualcoffee.io ADR 0014** ("nothing on the calendar is private, by design";
-  "the host code is not an Event field"). A review comment on virtualcoffee.io PR #1579 flags it;
-  that ADR and the PR's "public calendar" wording need reconciling on that side.
+- virtualcoffee.io ADR 0014 has been reconciled with this decision (on PR #1579): the Host Code is
+  `extendedProperties.private.hostCode`, an Event field kept where the bots read it; the calendar
+  is workspace-readable, not public; the site's `/admin/events` is the only writer of `hostCode`
+  (Google's UI cannot set extended properties) and requires one whenever the Join Link is a Zoom
+  URL. The `joinLink` and `slackChannelId` private properties are retired on that side too.
 - Calendar migration (manual): set `location` on the Morning/Afternoon Crowd series, clear the
   old `joinLink` property, keep `hostCode` on every Zoom series, and convert existing
   descriptions to Markdown.
