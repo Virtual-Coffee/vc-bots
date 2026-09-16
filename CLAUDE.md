@@ -99,7 +99,12 @@ written before the join that reads it). The DO must be re-exported from `src/ind
 runtime to bind it. Schema (`session` / `member_link` / `participant` / `invite_link`) is created
 idempotently in `migrate()` under `blockConcurrencyWhile`. A stale-session `alarm()` force-closes sessions that
 never received `meeting.ended`. The DO owns only the session state machine and the join tokens;
-everything about the channel message is delegated to `RoomMessage`.
+everything about the channel message is delegated to `RoomMessage`. Its two outward edges are
+swappable private fields: `inviteLinks: InviteLinkPort` (`createZoomInviteLinkPort` in
+`src/zoom/invite-links.ts` — S2S token + `createInviteLink`) and `roomMessage: RoomMessage`; the
+DO suite installs `test/helpers/invite-link-fake.ts` and `installRoomChannelFake`
+(`test/helpers/room-channel-fake.ts`) on every `runInDurableObject` entry, so it never touches
+`fetch` — adapter wire tests live in `test/zoom-invite-links.test.ts`.
 
 **The room message** (`RoomMessage`, `src/bots/coworking/room-message.ts`) is the single
 self-managed channel message per session (no native Slack Call widget), and the module owns its

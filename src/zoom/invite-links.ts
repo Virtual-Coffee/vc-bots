@@ -11,8 +11,9 @@
  * @see https://developers.zoom.us/docs/api/meetings/ (Create a meeting's invite links)
  */
 
+import type { Env } from "../env";
 import { log } from "../log";
-import { ZOOM_API_BASE } from "./oauth";
+import { ZOOM_API_BASE, type TokenCacheStorage, getCachedZoomToken } from "./oauth";
 
 /** Link lifetime (seconds). Only needs to cover click→join; Zoom enforces `ttl` loosely. */
 const DEFAULT_TTL = 7200;
@@ -51,4 +52,24 @@ export async function createInviteLink(
   // Never log the join_url — it carries a join token.
   log.debug("zoom.invite_link.created", { meeting: meetingId, name });
   return { joinUrl: new URL(joinUrl).toString() };
+}
+
+// --- Port ---
+
+/**
+ * What the co-working room needs from Zoom: a personal join link for a display name. The DO
+ * takes this as a swappable field so tests can hand it a fake instead of stubbing `fetch`.
+ */
+export interface InviteLinkPort {
+  mint(displayName: string): Promise<{ joinUrl: string }>;
+}
+
+/** The real port: S2S token (cached in `storage`) + `createInviteLink` for `ZOOM_MEETING_ID`. */
+export function createZoomInviteLinkPort(env: Env, storage: TokenCacheStorage): InviteLinkPort {
+  return {
+    async mint(displayName) {
+      const accessToken = await getCachedZoomToken(env, storage);
+      return createInviteLink(accessToken, env.ZOOM_MEETING_ID, displayName);
+    },
+  };
 }

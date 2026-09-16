@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
-import { getCachedZoomToken } from "../../zoom/oauth";
-import { createInviteLink } from "../../zoom/invite-links";
+import type { InviteLinkPort } from "../../zoom/invite-links";
+import { createZoomInviteLinkPort } from "../../zoom/invite-links";
 import type { ZoomMeetingEvent } from "../../zoom/types";
 import {
   type PresenceUser,
@@ -19,9 +19,10 @@ import { eventTimeMs, instanceUuid, participantIdentity } from "./zoom-events";
  *
  * The DO owns the session state machine (the `session` / `participant` / `member_link` /
  * `invite_link` tables, the stale-session alarm, and the join tokens) and mints per-user Zoom
- * invite links. Everything about the room message — the cards, the copy, the standing-invite
- * hand-off between sessions and announcements — is delegated to `RoomMessage`; the DO only
- * remembers each session's message ts and tells RoomMessage what happened.
+ * invite links through `InviteLinkPort`. Everything about the room message — the cards, the copy,
+ * the standing-invite hand-off between sessions and announcements — is delegated to
+ * `RoomMessage`; the DO only remembers each session's message ts and tells RoomMessage what
+ * happened. Both are swappable fields so the DO suite runs against in-memory fakes.
  */
 
 /** Force-end a session this long after it started if `meeting.ended` was never received. */
@@ -65,12 +66,15 @@ type ParticipantRow = {
 
 export class CoworkingRoom extends DurableObject<Env> {
   private readonly sql: SqlStorage;
-  private readonly roomMessage: RoomMessage;
+  // Not readonly: tests swap in fakes (`installInviteLinkFake` / `installRoomChannelFake`).
+  private inviteLinks: InviteLinkPort;
+  private roomMessage: RoomMessage;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     setLogLevel(env.LOG_LEVEL); // the DO runs in its own isolate
     this.sql = ctx.storage.sql;
+    this.inviteLinks = createZoomInviteLinkPort(env, ctx.storage);
     this.roomMessage = new RoomMessage(createSlackRoomChannelPort(env), ctx.storage, env);
     ctx.blockConcurrencyWhile(async () => this.migrate());
   }
@@ -139,14 +143,8 @@ export class CoworkingRoom extends DurableObject<Env> {
     slackUserId: string;
     displayName: string;
   }): Promise<{ token: string }> {
-    log.debug("coworking.join.token", { user: input.slackUserId });
-    const accessToken = await getCachedZoomToken(this.env, this.ctx.storage);
     log.debug("coworking.join.invite_link", { user: input.slackUserId });
-    const { joinUrl } = await createInviteLink(
-      accessToken,
-      this.env.ZOOM_MEETING_ID,
-      input.displayName,
-    );
+    const { joinUrl } = await this.inviteLinks.mint(input.displayName);
 
     log.debug("coworking.join.store", { user: input.slackUserId });
     this.sql.exec(

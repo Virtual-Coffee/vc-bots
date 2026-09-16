@@ -1,5 +1,11 @@
 import type { AnyMessageBlock } from "slack-cloudflare-workers";
-import type { RoomChannelPort, RoomMessageStorage } from "../../src/bots/coworking/room-message";
+import type { CoworkingRoom } from "../../src/bots/coworking/durable-object";
+import {
+  RoomMessage,
+  type RoomChannelPort,
+  type RoomMessageStorage,
+} from "../../src/bots/coworking/room-message";
+import type { Env } from "../../src/env";
 
 /**
  * An in-memory `RoomChannelPort`: records every post / update / delete with its text and blocks,
@@ -80,4 +86,18 @@ export function createMemoryStorage(): RoomMessageStorage & { map: Map<string, u
     delete: async (key: string) => map.delete(key),
   };
   return storage as unknown as RoomMessageStorage & { map: Map<string, unknown> };
+}
+
+/**
+ * Point the DO's `RoomMessage` at `port` (a fresh RoomMessage over the DO's own storage, so the
+ * pointer keys behave exactly as in production). Use inside `runInDurableObject`, where the live
+ * instance is in hand; the field — and the DO's `ctx` / `env` — are private, hence the cast.
+ */
+export function installRoomChannelFake(instance: CoworkingRoom, port: RoomChannelPort): void {
+  const live = instance as unknown as {
+    ctx: DurableObjectState;
+    env: Env;
+    roomMessage: RoomMessage;
+  };
+  live.roomMessage = new RoomMessage(port, live.ctx.storage, live.env);
 }
