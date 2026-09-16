@@ -64,9 +64,10 @@ such guardrail, so **don't adopt it**. `respondEphemeral` pins `replace_original
 **Admin actions (`src/bots/admin/`).** One `AdminAction` union (`actions.ts`) backs both admin
 surfaces: `runAdminAction(env, userId, action)` applies the workspace-admin gate, runs the
 operation inside the single try/catch, and returns an `AdminResult` (`denied` / `failed` / the
-outcome); `adminReplyText(result)` is the reply line. `slash.ts` (`/vc-bot-admin <verb>`) and
-`panel.ts` (the no-args button panel + its modals) are adapters: parse their payload into an
-action, run it, deliver the result. Neither adapter gates or catches on its own — the only
+outcome); `adminReplyText(result)` is the reply line. `slash.ts` (`/vc-bot-admin` with
+`daily|weekly [source]`, `welcome [@user]`, `home`, `coworking open|close`,
+`watch status|start|stop`) and `panel.ts` (the no-args button panel + its modals) are
+adapters: parse their payload into an action, run it, deliver the result. Neither adapter gates or catches on its own — the only
 direct `guardAdmin` calls are for work that runs no action (the slash usage/panel replies, the
 panel buttons that open a modal). Put a new admin operation in `actions.ts`, then wire the
 surfaces.

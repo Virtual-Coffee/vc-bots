@@ -13,7 +13,9 @@ co-working room, the new-member welcome, the App Home tab, and event announcemen
 | **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee Google Calendar (service-account auth; the Join Link is the event's `location`, descriptions are Markdown), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel with the Zoom host key (read from the event's private `hostCode` calendar property). Crons are live (daily + weekly); `/vc-bot-admin` can also fire a run manually. |
 
 There's also a `/vc-bot-admin` slash command for manual previews and admin actions
-(e.g. `daily` / `weekly` to fire an announcement run now, or `coworking open`).
+(`daily` / `weekly [source]` to fire an announcement run now, `welcome [@user]`, `home`,
+`coworking open|close`, `watch status|start|stop` for the Calendar push channel); run it with
+no arguments for a button panel of the same actions.
 
 ## Architecture at a glance
 

@@ -21,10 +21,17 @@ export const ADMIN_COMMAND = "/vc-bot-admin";
 const USAGE = [
   "*`/vc-bot-admin`* — fire an auto message. Subcommands:",
   "• `daily [source]` · `weekly [source]` — post that event announcement now (source: google; default from config; daily also (re)schedules the starting-soon messages)",
-  "• `welcome` — DM you the welcome message (preview)",
+  "• `welcome [@user]` — DM the welcome message to you (preview) or to the mentioned member",
   "• `home` — publish your App Home (preview)",
   "• `coworking open` · `coworking close` — announce the co-working room",
+  "• `watch status` · `watch start` · `watch stop` — the Google Calendar watch channel",
 ].join("\n");
+
+/**
+ * A welcome target as Slack hands it to a slash command: a mention (`<@U123|name>` /
+ * `<@U123>`) or a bare user id. Captures the id.
+ */
+const USER_ARG = /^(?:<@([UW][A-Z0-9]+)(?:\|[^>]*)?>|([UW][A-Z0-9]+))$/;
 
 /**
  * The slash-command fields this handler reads — a structural subset of the framework's
@@ -86,8 +93,16 @@ function parseAdminCommand(text: string, userId: string): ParsedCommand {
       };
     }
 
-    case "welcome":
-      return { kind: "action", action: { kind: "welcome", target: userId } };
+    case "welcome": {
+      if (arg === undefined) return { kind: "action", action: { kind: "welcome", target: userId } };
+      // The rest of the line, not just `arg`: an escaped mention's display name may hold spaces.
+      const match = USER_ARG.exec(text.trim().slice(sub.length).trim());
+      const target = match?.[1] ?? match?.[2];
+      if (!target) {
+        return { kind: "reply", text: `Usage: \`welcome\` or \`welcome @user\`.\n\n${USAGE}` };
+      }
+      return { kind: "action", action: { kind: "welcome", target } };
+    }
 
     case "home":
     case "app-home":
@@ -98,6 +113,16 @@ function parseAdminCommand(text: string, userId: string): ParsedCommand {
         return { kind: "action", action: { kind: "coworking", op: arg } };
       }
       return { kind: "reply", text: `Usage: \`coworking open\` or \`coworking close\`.\n\n${USAGE}` };
+    }
+
+    case "watch": {
+      if (arg === "status" || arg === "start" || arg === "stop") {
+        return { kind: "action", action: { kind: "watch", op: arg } };
+      }
+      return {
+        kind: "reply",
+        text: `Usage: \`watch status\`, \`watch start\` or \`watch stop\`.\n\n${USAGE}`,
+      };
     }
 
     default:

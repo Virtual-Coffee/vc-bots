@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAdminCommand, type AdminCommandPayload } from "../src/bots/admin/slash";
 import type { GoogleCalendarEvent } from "../src/google/calendar";
@@ -87,6 +87,25 @@ describe("handleAdminCommand — previews", () => {
     expect(replyText()).toBe(":white_check_mark: Sent you the welcome message.");
   });
 
+  it.each([
+    ["<@U2|joe.k>", "escaped mention with a handle"],
+    ["<@U2|Joe Karow>", "escaped mention with a display name"],
+    ["<@U2>", "bare mention"],
+    ["U2", "bare user id"],
+  ])("welcome %s (%s) DMs that member and confirms", async (target) => {
+    await handleAdminCommand(cmd(`welcome ${target}`), env);
+    const post = callsTo("/api/chat.postMessage")[0];
+    expect(new URLSearchParams(post!.body).get("channel")).toBe("U2");
+    expect(replyText()).toBe(":white_check_mark: Sent the welcome message to <@U2>.");
+  });
+
+  it("welcome with a target that is not a member replies with usage and DMs nobody", async () => {
+    await handleAdminCommand(cmd("welcome everyone"), env);
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
+    expect(replyText()).toContain("Usage: `welcome`");
+    expect(replyText()).toContain("/vc-bot-admin");
+  });
+
   it("home publishes the App Home view", async () => {
     await handleAdminCommand(cmd("home"), env);
     expect(callsTo("/api/views.publish")).toHaveLength(1);
@@ -111,9 +130,42 @@ describe("handleAdminCommand — coworking announce", () => {
     expect(replyText()).toContain("/vc-bot-admin");
   });
 
-  it("usage mentions [source] for daily/weekly", async () => {
+  it("usage mentions [source] for daily/weekly, [@user] for welcome, and the watch ops", async () => {
     await handleAdminCommand(cmd("nonsense"), env);
     expect(replyText()).toContain("[source]");
+    expect(replyText()).toContain("welcome [@user]");
+    expect(replyText()).toContain("watch status");
+  });
+});
+
+describe("handleAdminCommand — calendar watch", () => {
+  beforeEach(async () => {
+    const stub = env.CALENDAR_SYNC.getByName("default");
+    await runInDurableObject(stub, async (_i, state) => {
+      await state.storage.deleteAlarm();
+      state.storage.sql.exec("DELETE FROM channel; DELETE FROM event_snapshot;");
+    });
+  });
+
+  it("watch status reports the inactive channel", async () => {
+    await handleAdminCommand(cmd("watch status"), env);
+    expect(replyText()).toBe(":mute: Calendar watch is *not active*.");
+  });
+
+  it("watch start registers a channel and reports it active", async () => {
+    await handleAdminCommand(cmd("watch start"), env);
+    expect(callsTo("/events/watch")).toHaveLength(1);
+    expect(replyText()).toContain("Calendar watch is *active*");
+  });
+
+  it("watch stop with nothing running says so", async () => {
+    await handleAdminCommand(cmd("watch stop"), env);
+    expect(replyText()).toBe(":information_source: No active calendar watch to stop.");
+  });
+
+  it("an unknown watch op replies with usage", async () => {
+    await handleAdminCommand(cmd("watch bounce"), env);
+    expect(replyText()).toContain("Usage: `watch status`");
   });
 });
 
