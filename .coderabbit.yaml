@@ -8,15 +8,19 @@ reviews:
   high_level_summary: true
   review_status: true
   poem: false
+  suggested_labels: false
+  suggested_reviewers: false
+  estimate_code_review_effort: false
 
   auto_review:
     enabled: true
     drafts: false
-    # Only the default branch (main) is targeted unless listed here.
-    base_branches: []
-    ignore_title_keywords:
-      - "WIP"
-      - "[skip review]"
+    # Any target branch, not just main — stacked PRs target their parent layer.
+    base_branches:
+      - ".*"
+    # Opt in per PR: only PRs carrying this label are reviewed automatically.
+    labels:
+      - "coderabbit-review"
 
   # Generated / vendored files that add noise, not signal.
   path_filters:
@@ -83,6 +87,13 @@ reviews:
       instructions: |
         Check that the decision, context, and consequences are stated and that code comments
         pointing here are one-line pointers, not restatements.
+
+  pre_merge_checks:
+    docstrings:
+      mode: off # comments are one-line pointers to ADRs/CONTEXT.md, not doc prose
+  finishing_touches:
+    docstrings:
+      enabled: false
 
   tools:
     gitleaks:
