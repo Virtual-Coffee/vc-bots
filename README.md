@@ -86,6 +86,7 @@ src/
     response.ts       ephemeral reply helpers over response_url
   google/             service-account auth + the Google Calendar adapter (CalendarPort)
   zoom/               Zoom S2S OAuth, webhook verification, invite links, payload types
+    webhook.ts        POST /zoom/webhook: verify → url_validation → meeting filter → the DO
 test/                 vitest suites that run inside real workerd (Miniflare)
 ```
 

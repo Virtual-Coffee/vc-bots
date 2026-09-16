@@ -2,16 +2,14 @@ import type { Env } from "./env";
 import { log } from "./log";
 import { createSlackApp } from "./slack/app";
 import { notifyBotLog } from "./slack/notify";
-import type { ZoomInboundEvent } from "./zoom/types";
-import { isZoomMeetingEvent } from "./zoom/types";
-import { buildZoomUrlValidationResponse, verifyZoomRequest } from "./zoom/verify";
+import { handleZoomWebhook } from "./zoom/webhook";
 
 /**
  * HTTP front door. A plain method+path switch — no router dependency for ~4 routes.
  *
  * Every bot route verifies its provider signature against the raw body, before parsing:
- * the Zoom route does it inline as its FIRST step; the Slack routes delegate to the
- * `SlackApp` (`src/slack/app.ts`), which does the same internally.
+ * the Zoom route (`src/zoom/webhook.ts`) does it as its FIRST step; the Slack routes delegate
+ * to the `SlackApp` (`src/slack/app.ts`), which does the same internally.
  */
 export async function route(
   req: Request,
@@ -37,7 +35,7 @@ export async function route(
 
   switch (`${method} ${path}`) {
     case "POST /zoom/webhook":
-      return handleZoomWebhook(req, env, ctx);
+      return handleZoomWebhook(req, env);
 
     case "POST /google/notify":
       return handleGoogleNotify(req, env, ctx);
@@ -82,62 +80,6 @@ async function handleJoinRedirect(token: string, env: Env): Promise<Response> {
     status: 302,
     headers: { Location: resolved.joinUrl, "Cache-Control": "no-store" },
   });
-}
-
-// --- Zoom webhooks → co-working room ---
-
-async function handleZoomWebhook(
-  req: Request,
-  env: Env,
-  _ctx: ExecutionContext,
-): Promise<Response> {
-  const rawBody = await req.text();
-  if (!(await verifyZoomRequest(req, rawBody, env.ZOOM_WEBHOOK_SECRET_TOKEN))) {
-    log.warn("verify.failed", { path: "/zoom/webhook" });
-    return new Response("invalid signature", { status: 401 });
-  }
-
-  const body = safeJson<ZoomInboundEvent>(rawBody);
-  if (!body) return new Response("bad request", { status: 400 });
-
-  // Endpoint URL validation handshake.
-  if (body.event === "endpoint.url_validation" && body.payload?.plainToken) {
-    log.info("zoom.url_validation");
-    const res = await buildZoomUrlValidationResponse(
-      env.ZOOM_WEBHOOK_SECRET_TOKEN,
-      body.payload.plainToken,
-    );
-    return Response.json(res, { status: 200 });
-  }
-
-  // Meeting events → the co-working DO, keyed by meeting ID so all events for one meeting
-  // serialize through a single instance (race-free). Awaited so ordering is preserved.
-  // The subscription is account-wide, so events arrive for every meeting under the account;
-  // only the configured co-working meeting is ours — ignore the rest (still 200: Zoom retries
-  // non-2xx responses and can eventually deactivate the endpoint).
-  if (isZoomMeetingEvent(body)) {
-    const meeting = String(body.payload.object.id);
-    if (meeting !== env.ZOOM_MEETING_ID) {
-      log.info("zoom.webhook.ignored", { event: body.event, meeting });
-      return new Response(null, { status: 200 });
-    }
-    log.info("zoom.webhook", { event: body.event, meeting });
-    const stub = env.COWORKING_ROOM.getByName(meeting);
-    try {
-      await stub.handleZoomEvent(body);
-    } catch (error) {
-      // Alert #bot-log, then still 200: a persistent DO/Slack failure shouldn't trigger a Zoom
-      // retry-storm or risk the account-wide endpoint being deactivated. Room presence
-      // self-corrects on the next participant event.
-      log.error("zoom.webhook.failed", { event: body.event, meeting, error: String(error) });
-      await notifyBotLog(env, "zoom.webhook.failed", {
-        event: body.event,
-        meeting,
-        error: String(error),
-      });
-    }
-  }
-  return new Response(null, { status: 200 });
 }
 
 // Google Calendar push (`watch`) notifications POST here with an empty body — all signal is in
@@ -192,12 +134,4 @@ async function handleGoogleNotify(
     })(),
   );
   return new Response(null, { status: 200 });
-}
-
-function safeJson<T>(raw: string): T | null {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
 }

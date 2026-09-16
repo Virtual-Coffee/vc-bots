@@ -35,7 +35,8 @@ room message has its own unit suite (`test/room-message.test.ts`) against the fa
 **Request flow.** `src/index.ts` is the Worker entrypoint (`fetch` + `scheduled` cron). `fetch`
 delegates to `src/router.ts`, a plain `method + path` switch (no router lib) over the provider
 routes `/zoom/webhook`, `/slack/events`, `/slack/interactivity`, `/slack/commands`, plus
-`GET /join/<token>` (the co-working join redirect) and `/health`.
+`GET /join/<token>` (the co-working join redirect) and `/health`. `POST /zoom/webhook` is
+`handleZoomWebhook` in `src/zoom/webhook.ts` (the router only dispatches to it).
 All three `POST /slack/*` routes delegate to one path-agnostic `SlackApp`
 (`slack-cloudflare-workers`), built per request by `createSlackApp(env, publicBaseUrl)` in
 `src/slack/app.ts` — handler registrations (`.event()` / `.action()` / `.command()`) live there.
@@ -44,8 +45,9 @@ Hand the request to `app.run(req, ctx)` **unread** (it reads the body itself).
 **Two invariants every route follows, in order:**
 
 1. **Verify the provider signature against the *raw* body first**, before parsing JSON. The
-   Zoom route does this inline (`verifyZoomRequest`, HMAC via `src/crypto.ts` /
-   `crypto.subtle` — never hand-roll a timing-safe compare); the Slack routes get it from
+   Zoom route does this as its first step in `src/zoom/webhook.ts` (`verifyZoomRequest`, HMAC
+   via `src/crypto.ts` / `crypto.subtle` — never hand-roll a timing-safe compare); the Slack
+   routes get it from
    `SlackApp`, which verifies before dispatching listeners.
 2. **Handle the provider URL-verification handshake**, then dispatch (`SlackApp` answers
    Slack's `url_verification` itself).
@@ -55,14 +57,16 @@ immediately and run the actual bot work afterwards via `ctx.waitUntil(...)` — 
 is the `SlackApp` ack/lazy-handler split (every registration in `src/slack/app.ts` ACKs with a
 no-op and does the work in the lazy handler). Every lazy handler is wrapped by `lazy()` there:
 slack-edge hands the lazy promise to `waitUntil` with no try/catch, so the wrapper is what
-turns an escaped rejection into a `slack.lazy_failed` alert in `#bot-log`. Final user-facing
-replies go back through Slack's `response_url` via `src/slack/response.ts` (`respondEphemeral`
-/ `deleteOriginal` / `replaceEphemeral`) rather than the HTTP response. ⚠️ Keep using those
-helpers — they hard-code `response_type: "ephemeral"`; the framework's `context.respond` posts
-params verbatim with no such guardrail, so **don't adopt it**. `respondEphemeral` pins
-`replace_original: false`; `replaceEphemeral` (`true`) and `deleteOriginal` are safe **only
-against per-user ephemerals** (the admin panel, the join ephemeral) — never the shared room
-message's `response_url`.
+turns an escaped rejection into a `slack.lazy_failed` alert in `#bot-log`. ⚠️ The one exception
+to `waitUntil` is the Zoom route: it **awaits** the DO call, because a meeting's webhooks must
+reach the DO in the order Zoom sent them; a Zoom retry on a slow 200 is the accepted trade-off
+(the DO handlers are idempotent). Final user-facing replies go back through Slack's
+`response_url` via `src/slack/response.ts` (`respondEphemeral` / `deleteOriginal` /
+`replaceEphemeral`) rather than the HTTP response. ⚠️ Keep using those helpers — they hard-code
+`response_type: "ephemeral"`; the framework's `context.respond` posts params verbatim with no
+such guardrail, so **don't adopt it**. `respondEphemeral` pins `replace_original: false`;
+`replaceEphemeral` (`true`) and `deleteOriginal` are safe **only against per-user ephemerals**
+(the admin panel, the join ephemeral) — never the shared room message's `response_url`.
 
 **Admin actions (`src/bots/admin/`).** One `AdminAction` union (`actions.ts`) backs both admin
 surfaces: `runAdminAction(env, userId, action)` applies the workspace-admin gate, runs the

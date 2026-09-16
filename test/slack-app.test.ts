@@ -1,7 +1,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hmacSha256Hex } from "../src/crypto";
 import { route } from "../src/router";
+import { signSlack } from "./helpers/signing";
 
 /**
  * End-to-end coverage of the SlackApp pipeline (`src/slack/app.ts`) through `route()`:
@@ -67,16 +67,10 @@ async function post(
   contentType: string,
   opts?: { secret?: string },
 ): Promise<Response> {
-  const timestamp = String(Math.floor(Date.now() / 1000));
   const secret = opts?.secret ?? env.SLACK_SIGNING_SECRET;
-  const signature = `v0=${await hmacSha256Hex(secret, `v0:${timestamp}:${rawBody}`)}`;
   const req = new Request(`https://bots.example${path}`, {
     method: "POST",
-    headers: {
-      "Content-Type": contentType,
-      "x-slack-request-timestamp": timestamp,
-      "x-slack-signature": signature,
-    },
+    headers: { "Content-Type": contentType, ...(await signSlack(secret, rawBody)) },
     body: rawBody,
   });
   const ctx = createExecutionContext();
