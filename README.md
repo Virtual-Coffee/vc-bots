@@ -75,8 +75,8 @@ src/
                       the starting-soon.ts scheduled pair
     welcome.ts        new-member welcome DM
     app-home.ts       App Home tab
-    admin.ts          /vc-bot-admin slash command
-    admin-panel.ts    the interactive /vc-bot-admin button panel + its modals
+    admin/            /vc-bot-admin: actions.ts (the AdminAction union, gate + error handling),
+                      slash.ts (the text command), panel.ts (the button panel + its modals)
   slack/
     app.ts            the per-request SlackApp: event/action/command/viewSubmission handlers
     client.ts         Slack client factory (createSlackClient / createSlackApp)

@@ -1,12 +1,17 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleAdminCommand, type AdminCommandPayload } from "../src/bots/admin";
+import { handleAdminCommand, type AdminCommandPayload } from "../src/bots/admin/slash";
 import type { GoogleCalendarEvent } from "../src/google/calendar";
 import {
   type FetchRecorder,
   installFetchRecorder,
   type RecordedCall,
 } from "./helpers/fetch-recorder";
+
+/**
+ * The `/vc-bot-admin` slash adapter: parsing, the admin gate on its own replies, and the reply
+ * text per verb. The operations themselves are covered in admin-actions.test.ts.
+ */
 
 const RESPONSE_URL = "https://hooks.slack.com/commands/resp-1";
 
@@ -65,21 +70,6 @@ describe("handleAdminCommand — reminders", () => {
     expect(replyText()).toContain("source: *google*");
   });
 
-  it("daily schedules a starting-soon pair and reports it", async () => {
-    googleEvents = [googleEvt(Date.now() + 6 * 3_600_000)];
-    await handleAdminCommand(cmd("daily"), env);
-    expect(callsTo("/api/chat.scheduleMessage")).toHaveLength(2); // public + admin mirror
-    // The summary itself is day-dependent (Mondays skip it), so assert the stable part.
-    expect(replyText()).toContain("Scheduled 1 starting-soon message");
-  });
-
-  it("reports when there are no upcoming events", async () => {
-    googleEvents = [];
-    await handleAdminCommand(cmd("weekly"), env);
-    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
-    expect(replyText()).toContain("No upcoming events");
-  });
-
   it("rejects an unknown source name with a friendly message and makes no Slack API calls", async () => {
     await handleAdminCommand(cmd("daily nonsense"), env);
     expect(replyText()).toContain("Unknown event source");
@@ -94,7 +84,7 @@ describe("handleAdminCommand — previews", () => {
     await handleAdminCommand(cmd("welcome"), env);
     const post = callsTo("/api/chat.postMessage")[0];
     expect(new URLSearchParams(post!.body).get("channel")).toBe("U1");
-    expect(replyText()).toContain("welcome");
+    expect(replyText()).toBe(":white_check_mark: Sent you the welcome message.");
   });
 
   it("home publishes the App Home view", async () => {

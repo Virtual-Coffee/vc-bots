@@ -37,6 +37,10 @@ Strip the standing invite from an ended card because a newer room message has ta
 A room message an admin posts by hand, with no Zoom session behind it. It behaves like a session for the purposes of cards and the standing invite.
 _Avoid_: announce-only message, admin announce
 
+**Admin action**:
+One thing a workspace admin can make the bots do by hand (run a reminder, send a welcome, publish an App Home, announce the co-working room, manage the calendar watch). The slash command and the admin panel are two ways of requesting the same action; the gate and the outcome are the same whichever asked.
+_Avoid_: admin command, panel action, subcommand (for the action itself; a subcommand is how the slash surface spells one)
+
 **Presence**:
 Who is in the room right now.
 

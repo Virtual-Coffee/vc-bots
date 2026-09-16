@@ -49,7 +49,8 @@ export function getEventSource(env: Env, name?: string): EventSource {
   return SOURCES[resolved](env);
 }
 
-const EASTERN = "America/New_York";
+/** The zone event windows are computed in (and the admin panel picks dates in). */
+export const EASTERN = "America/New_York";
 
 /** Compute a reminder kind's event window, anchored in Eastern time. */
 export function reminderRange(kind: ReminderName, nowMs: number): EventRange {

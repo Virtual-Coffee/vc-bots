@@ -1,5 +1,5 @@
 import { SlackApp, type AckResponse } from "slack-cloudflare-workers";
-import { ADMIN_COMMAND, handleAdminCommand } from "../bots/admin";
+import { ADMIN_COMMAND, handleAdminCommand } from "../bots/admin/slash";
 import {
   COWORKING_MODAL_CALLBACK_ID,
   handleCoworkingSubmit,
@@ -21,7 +21,7 @@ import {
   PANEL_WELCOME_ACTION_ID,
   REMINDER_MODAL_CALLBACK_ID,
   WELCOME_MODAL_CALLBACK_ID,
-} from "../bots/admin-panel";
+} from "../bots/admin/panel";
 import { handleAppHomeOpened } from "../bots/app-home";
 import {
   CANCEL_ACTION_ID,

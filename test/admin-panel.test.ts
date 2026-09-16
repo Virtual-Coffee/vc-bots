@@ -17,11 +17,13 @@ import {
   handlePanelReminderClick,
   handlePanelWelcomeClick,
   handleReminderSubmit,
+  handlePanelWatchStatusClick,
   handleWelcomeSubmit,
   PANEL_COWORKING_ACTION_ID,
+  PANEL_WATCH_STATUS_ACTION_ID,
   REMINDER_MODAL_CALLBACK_ID,
   WELCOME_MODAL_CALLBACK_ID,
-} from "../src/bots/admin-panel";
+} from "../src/bots/admin/panel";
 
 /**
  * Unit coverage for the `/vc-bot-admin` panel handlers, using the same stubbed-fetch harness
@@ -228,6 +230,23 @@ describe("admin panel — coworking submit", () => {
     );
     expect(callsTo("/api/chat.update")).toHaveLength(0);
     expect(panelReply()!.text).toContain("No open announcement to close");
+  });
+});
+
+describe("admin panel — watch buttons", () => {
+  beforeEach(async () => {
+    const stub = env.CALENDAR_SYNC.getByName("default");
+    await runInDurableObject(stub, async (_i, state) => {
+      await state.storage.deleteAlarm();
+      state.storage.sql.exec("DELETE FROM channel; DELETE FROM event_snapshot;");
+    });
+  });
+
+  it("watch status replaces the panel with the status line", async () => {
+    await handlePanelWatchStatusClick(action(PANEL_WATCH_STATUS_ACTION_ID), env);
+    const reply = panelReply()!;
+    expect(reply.replace_original).toBe(true);
+    expect(reply.text).toContain("Calendar watch is *not active*");
   });
 });
 

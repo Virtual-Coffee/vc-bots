@@ -61,16 +61,25 @@ such guardrail, so **don't adopt it**. `respondEphemeral` pins `replace_original
 `replaceEphemeral` (`true`) and `deleteOriginal` are safe **only against per-user ephemerals**
 (the admin panel, the join ephemeral) — never the shared room message's `response_url`.
 
-**Modals (`.viewSubmission`).** `/vc-bot-admin` with no args posts an ephemeral admin panel
-(`src/bots/admin-panel.ts`): buttons open modals via `client.views.open({ trigger_id, view })`,
-and submits run through `.viewSubmission(callbackId, ack, lazy)` registrations in
-`src/slack/app.ts`. The view ack is an **empty `async () => {}`** — returning void closes the
-modal (the shared `ack` const's `AckResponse` type doesn't satisfy the view ack). A
-`view_submission` payload carries **no `response_url`**, so the panel's travels into the modal
-as `private_metadata` (`JSON.stringify({ response_url })`) and back out on submit; the handler
-then `replaceEphemeral`s the panel with output (reminder counts) or `deleteOriginal`s it when
-the result is self-verifiable in a channel/Home/DM. Re-check `isWorkspaceAdmin` in every panel
-action + view handler.
+**Admin actions (`src/bots/admin/`).** One `AdminAction` union (`actions.ts`) backs both admin
+surfaces: `runAdminAction(env, userId, action)` applies the workspace-admin gate, runs the
+operation inside the single try/catch, and returns an `AdminResult` (`denied` / `failed` / the
+outcome); `adminReplyText(result)` is the reply line. `slash.ts` (`/vc-bot-admin <verb>`) and
+`panel.ts` (the no-args button panel + its modals) are adapters: parse their payload into an
+action, run it, deliver the result. Neither adapter gates or catches on its own — the only
+direct `guardAdmin` calls are for work that runs no action (the slash usage/panel replies, the
+panel buttons that open a modal). Put a new admin operation in `actions.ts`, then wire the
+surfaces.
+
+**Modals (`.viewSubmission`).** Panel buttons open modals via
+`client.views.open({ trigger_id, view })`, and submits run through
+`.viewSubmission(callbackId, ack, lazy)` registrations in `src/slack/app.ts`. The view ack is
+an **empty `async () => {}`** — returning void closes the modal (the shared `ack` const's
+`AckResponse` type doesn't satisfy the view ack). A `view_submission` payload carries **no
+`response_url`**, so the panel's travels into the modal as `private_metadata`
+(`JSON.stringify({ response_url })`) and back out on submit; the handler then
+`replaceEphemeral`s the panel with output (reminder counts) or `deleteOriginal`s it when the
+result is self-verifiable in a channel/Home/DM.
 
 **Co-working room = the one stateful piece.** `CoworkingRoom` (`src/bots/coworking/durable-object.ts`)
 is a SQLite-backed Durable Object, **one instance per Zoom meeting ID**, addressed with

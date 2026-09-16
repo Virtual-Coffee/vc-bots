@@ -9,7 +9,7 @@ import { getEventSource, reminderRange } from "./source";
 import { reconcileStartingSoon } from "./starting-soon";
 
 export type { ReminderName } from "./source";
-export { EVENT_SOURCE_NAMES, isEventSourceName } from "./source";
+export { EASTERN, EVENT_SOURCE_NAMES, isEventSourceName } from "./source";
 
 /**
  * Event announcements. `sendReminder` does the actual work and is shared by the cron
