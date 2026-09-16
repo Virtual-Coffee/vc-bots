@@ -5,7 +5,9 @@ import { createSlackClient } from "./client";
 /**
  * Post an important error alert to the private `#bot-log` channel
  * (`SLACK_BOTLOG_CHANNEL_ID`). Called explicitly at the few catch sites with no other surface
- * — the cron reminder run and the co-working DO/Zoom paths — not wired into `log.ts`.
+ * — the cron reminder run, the co-working DO/Zoom paths, and the `lazy()` wrapper in
+ * `src/slack/app.ts` that catches whatever escapes a Slack lazy handler — not wired into
+ * `log.ts`.
  *
  * Three guarantees, because this runs on the failure path:
  * - **No-op when unconfigured.** Empty channel id → return immediately (safe before the

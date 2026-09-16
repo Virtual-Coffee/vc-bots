@@ -53,13 +53,16 @@ Hand the request to `app.run(req, ctx)` **unread** (it reads the body itself).
 **ACK fast, work later.** Slack/Zoom impose a ~3s response window. Routes return `200`
 immediately and run the actual bot work afterwards via `ctx.waitUntil(...)` — for Slack that
 is the `SlackApp` ack/lazy-handler split (every registration in `src/slack/app.ts` ACKs with a
-no-op and does the work in the lazy handler). Final user-facing replies go back through
-Slack's `response_url` via `src/slack/response.ts` (`respondEphemeral` / `deleteOriginal` /
-`replaceEphemeral`) rather than the HTTP response. ⚠️ Keep using those helpers — they hard-code
-`response_type: "ephemeral"`; the framework's `context.respond` posts params verbatim with no
-such guardrail, so **don't adopt it**. `respondEphemeral` pins `replace_original: false`;
-`replaceEphemeral` (`true`) and `deleteOriginal` are safe **only against per-user ephemerals**
-(the admin panel, the join ephemeral) — never the shared room message's `response_url`.
+no-op and does the work in the lazy handler). Every lazy handler is wrapped by `lazy()` there:
+slack-edge hands the lazy promise to `waitUntil` with no try/catch, so the wrapper is what
+turns an escaped rejection into a `slack.lazy_failed` alert in `#bot-log`. Final user-facing
+replies go back through Slack's `response_url` via `src/slack/response.ts` (`respondEphemeral`
+/ `deleteOriginal` / `replaceEphemeral`) rather than the HTTP response. ⚠️ Keep using those
+helpers — they hard-code `response_type: "ephemeral"`; the framework's `context.respond` posts
+params verbatim with no such guardrail, so **don't adopt it**. `respondEphemeral` pins
+`replace_original: false`; `replaceEphemeral` (`true`) and `deleteOriginal` are safe **only
+against per-user ephemerals** (the admin panel, the join ephemeral) — never the shared room
+message's `response_url`.
 
 **Admin actions (`src/bots/admin/`).** One `AdminAction` union (`actions.ts`) backs both admin
 surfaces: `runAdminAction(env, userId, action)` applies the workspace-admin gate, runs the
@@ -163,9 +166,10 @@ spell weekdays as `MON`/`SUN` so a numeric field can't silently shift the day (L
 deleting the key would leave them running. The same `sendReminder` is reused by the
 `/vc-bot-admin` slash command for manual runs; it accepts an optional source arg (e.g.
 `daily google`) naming a registered source; cron always uses `EVENT_SOURCE`. Failure paths that
-have no other surface (the cron run, the co-working DO/Zoom handlers, the join flow) alert the
-private `#bot-log` channel via `notifyBotLog` (`src/slack/notify.ts`, `SLACK_BOTLOG_CHANNEL_ID`)
-— a no-op when the channel id is empty, and self-swallowing so a failed alert never loops.
+have no other surface (the cron run, the co-working DO/Zoom handlers, the join flow, and any
+Slack lazy handler that rejects — `slack.lazy_failed`) alert the private `#bot-log` channel via
+`notifyBotLog` (`src/slack/notify.ts`, `SLACK_BOTLOG_CHANNEL_ID`) — a no-op when the channel id
+is empty, and self-swallowing so a failed alert never loops.
 
 **Slack client.** Always `createSlackClient(env)` for outbound calls with no inbound Slack
 request (the CoworkingRoom DO, the cron reminders); inside `SlackApp` handlers it's the same
