@@ -66,10 +66,12 @@ src/
   env.ts              hand-maintained Env interface (bindings, secrets, vars)
   crypto.ts           timing-safe HMAC helpers on crypto.subtle
   log.ts              leveled logger (threshold from LOG_LEVEL)
+  events.ts           source-agnostic event model (ReminderEvent, EventRange)
   bots/
+    calendar-sync/    Durable Object: Calendar watch lifecycle + change notices (over CalendarPort)
     coworking/        the room: Durable Object (session state), RoomMessage (the channel message
                       + its Slack port), Zoom event helpers, join flow + ephemeral
-    reminders/        cron dispatch, event model + Google Calendar source, Block Kit builders
+    reminders/        cron dispatch, event-source registry, Block Kit builders
     welcome.ts        new-member welcome DM
     app-home.ts       App Home tab
     admin.ts          /vc-bot-admin slash command
@@ -79,6 +81,7 @@ src/
     client.ts         Slack client factory (createSlackClient / createSlackApp)
     notify.ts         #bot-log error alerts (notifyBotLog)
     response.ts       ephemeral reply helpers over response_url
+  google/             service-account auth + the Google Calendar adapter (CalendarPort)
   zoom/               Zoom S2S OAuth, webhook verification, invite links, payload types
 test/                 vitest suites that run inside real workerd (Miniflare)
 ```

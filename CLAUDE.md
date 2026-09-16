@@ -126,9 +126,14 @@ post to three channels: daily/weekly summaries → `SLACK_ANNOUNCEMENTS_CHANNEL_
 start − 10 min via Slack `chat.scheduleMessage`, first deleting the bot's scheduled messages in
 the window so re-runs reconcile instead of duplicating; on Mondays it skips its summary (the
 weekly covers it) but still schedules. Event windows are computed in `America/New_York`. Events
-come through the `EventSource` abstraction (`source.ts`); Google Calendar
-(`sources/google-calendar.ts`, service-account JWT-bearer auth signed in `src/google/auth.ts`)
-is the only registered source and the `EVENT_SOURCE` default. Per `docs/adr/0001`: the Join Link
+come through the `EventSource` abstraction (`source.ts`); Google Calendar is the only registered
+source and the `EVENT_SOURCE` default. All Google Calendar HTTP lives in **one adapter**,
+`createGoogleCalendarPort` in `src/google/calendar.ts`, behind the `CalendarPort` seam
+(`listEvents` / `getEvent` / `watch` / `stopChannel`); the reminders source is its `listEvents`,
+and the `CalendarSync` DO (`src/bots/calendar-sync/`) takes the port as an injected field so
+tests swap in `test/helpers/calendar-fake.ts`. The adapter caches its access token per instance
+(minted by the pure `fetchGoogleAccessToken` in `src/google/auth.ts`, service-account JWT-bearer).
+The shared event model (`ReminderEvent`, `EventRange`) is `src/events.ts`. Per `docs/adr/0001`: the Join Link
 is the event's `location` (video `conferenceData` is the fallback; a `private.joinLink` property
 is ignored), descriptions are **Markdown** rendered with `slackify-markdown`, and the host key is
 the event's `extendedProperties.private.hostCode` (the calendar is private; the Zoom API stopped

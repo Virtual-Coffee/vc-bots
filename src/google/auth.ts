@@ -1,13 +1,13 @@
 import { importPKCS8, SignJWT } from "jose";
 import type { Env } from "../env";
-import { log } from "../log";
 
 /**
  * Google service-account auth (JWT-bearer grant).
  *
  * Signs a short-lived assertion with the service-account private key and exchanges it for an
- * access token at the OAuth token endpoint. Tokens last ~1h and have no refresh token, so the
- * result is cached module-level and re-fetched shortly before expiry.
+ * access token at the OAuth token endpoint. This is the pure sign-and-exchange step; tokens last
+ * ~1h and have no refresh token, so the Calendar adapter (`src/google/calendar.ts`) caches the
+ * result per instance and re-fetches shortly before expiry.
  *
  * The service-account JSON, the signed assertion, and the access token are all credentials —
  * never log them.
@@ -17,26 +17,10 @@ import { log } from "../log";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SCOPE = "https://www.googleapis.com/auth/calendar";
-/** Re-fetch this far ahead of expiry to avoid using a token mid-flight as it lapses. */
-const EXPIRY_SKEW_MS = 60_000;
 
 interface ServiceAccountKey {
   client_email: string;
   private_key: string;
-}
-
-interface CachedToken {
-  accessToken: string;
-  expiresAtMs: number;
-}
-
-// Best-effort per-isolate cache: no cross-request locking (unlike the DO-storage-backed Zoom
-// cache), so overlapping runs may each mint a token; last-writer-wins is harmless.
-let cache: CachedToken | undefined;
-
-/** Reset the module-level token cache. Test-only. */
-export function resetGoogleTokenCacheForTests(): void {
-  cache = undefined;
 }
 
 function parseServiceAccountKey(raw: string): ServiceAccountKey {
@@ -58,7 +42,11 @@ function parseServiceAccountKey(raw: string): ServiceAccountKey {
   return parsed as ServiceAccountKey;
 }
 
-async function fetchGoogleAccessToken(
+/**
+ * Mint a fresh access token: sign the JWT-bearer assertion at `nowMs` and exchange it. No
+ * caching here — callers own that.
+ */
+export async function fetchGoogleAccessToken(
   env: Env,
   nowMs: number,
 ): Promise<{ accessToken: string; expiresInSec: number }> {
@@ -93,23 +81,4 @@ async function fetchGoogleAccessToken(
     throw new Error("Google token exchange returned an unexpected body shape");
   }
   return { accessToken: body.access_token, expiresInSec: body.expires_in };
-}
-
-/**
- * Return a valid Google access token, reusing the cached one until it nears expiry.
- * `nowMs` is injectable for tests.
- */
-export async function getGoogleAccessToken(
-  env: Env,
-  nowMs: number = Date.now(),
-): Promise<string> {
-  if (cache && cache.expiresAtMs - EXPIRY_SKEW_MS > nowMs) {
-    log.debug("google.token.cache_hit");
-    return cache.accessToken;
-  }
-  log.debug("google.token.fetch");
-  const { accessToken, expiresInSec } = await fetchGoogleAccessToken(env, nowMs);
-  cache = { accessToken, expiresAtMs: nowMs + expiresInSec * 1000 };
-  log.debug("google.token.fetched", { expiresInSec });
-  return accessToken;
 }

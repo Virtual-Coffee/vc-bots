@@ -1,8 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { DateTime } from "luxon";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GoogleCalendarEvent } from "../src/bots/reminders/sources/google-calendar";
-import { resetGoogleTokenCacheForTests } from "../src/google/auth";
+import type { GoogleCalendarEvent } from "../src/google/calendar";
 import {
   type FetchRecorder,
   installFetchRecorder,
@@ -40,7 +39,6 @@ let googleEvents: GoogleCalendarEvent[];
 let postMessageOk: boolean;
 
 beforeEach(() => {
-  resetGoogleTokenCacheForTests();
   isAdmin = true;
   googleEvents = [];
   postMessageOk = true;

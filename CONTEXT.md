@@ -60,8 +60,16 @@ The opaque token a member's Join button carries. It resolves to that member's in
 
 ## Event announcements
 
+**Calendar**:
+The Google Calendar that is the system of record for VirtualCoffee events. The bots read events from it and subscribe to its changes; they never write events to it.
+_Avoid_: Google API, gcal, events feed
+
+**Calendar watch**:
+The bots' subscription to Calendar changes: a push channel that Google renews on a fixed lifetime and that the bots re-register before it lapses.
+_Avoid_: webhook, notification channel, sync channel
+
 **Event**:
-One timed entry on the Google Calendar that is the system of record for VirtualCoffee events. The bots read it; they never write it.
+One timed entry on the Calendar. The bots read it; they never write it.
 _Avoid_: CMS event, reminder event
 
 **Join Link**:

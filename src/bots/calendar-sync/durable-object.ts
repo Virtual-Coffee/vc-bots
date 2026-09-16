@@ -1,15 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
 import { DateTime } from "luxon";
 import type { Env } from "../../env";
-import { getGoogleAccessToken } from "../../google/auth";
+import type { ReminderEvent } from "../../events";
+import type { CalendarPort } from "../../google/calendar";
+import { createGoogleCalendarPort } from "../../google/calendar";
 import { log, setLogLevel } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
 import type { ReminderMessage } from "../reminders/blocks";
 import { buildCancellationMessage, buildRescheduleMessage } from "../reminders/blocks";
-import { createGoogleCalendarSource } from "../reminders/sources/google-calendar";
 import { reconcileStartingSoon } from "../reminders/index";
-import type { ReminderEvent } from "../reminders/source";
 import { reminderRange } from "../reminders/source";
 
 /**
@@ -28,18 +28,18 @@ import { reminderRange } from "../reminders/source";
  *   call loses (and alerts on) a notice rather than re-posting it to every channel on the next
  *   push. `notify` drops pushes whose channel id isn't the stored one (stale/replaced channels).
  *
- * ⚠️ The watch token (`GOOGLE_WATCH_TOKEN`), address (`GOOGLE_WATCH_ADDRESS`), and Google access
- * tokens are credentials — never log them. The channel id is a random uuid, safe to log.
+ * All Google Calendar traffic goes through the injected `CalendarPort` (`this.calendar`, the
+ * real adapter from `src/google/calendar.ts` in production, a fake in tests) — this class knows
+ * nothing about the wire shapes.
+ *
+ * ⚠️ The watch token (`GOOGLE_WATCH_TOKEN`) and address are credentials — never log them. The
+ * channel id is a random uuid, safe to log.
  */
 
-/** Google's default (and max) TTL for a calendar push channel: 7 days. */
-const WATCH_TTL_SECONDS = 604800;
 /** Renew (and fire the alarm) this far before expiry so the channel never lapses mid-window. */
 const RENEW_BUFFER_MS = 24 * 60 * 60 * 1000;
 /** When a renewal fails, try again this much later (well inside the 24h buffer). */
 const RENEW_RETRY_MS = 60 * 60 * 1000;
-const CALENDAR_BASE = "https://www.googleapis.com/calendar/v3/calendars";
-const CHANNELS_STOP_URL = "https://www.googleapis.com/calendar/v3/channels/stop";
 
 /** Public watch state returned to the admin panel + tests. Never carries the token. */
 export type WatchStatus = {
@@ -64,11 +64,14 @@ type SnapshotRow = {
 
 export class CalendarSync extends DurableObject<Env> {
   private readonly sql: SqlStorage;
+  // Not readonly: tests swap in a fake (`installCalendarFake`).
+  private calendar: CalendarPort;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     setLogLevel(env.LOG_LEVEL); // the DO runs in its own isolate
     this.sql = ctx.storage.sql;
+    this.calendar = createGoogleCalendarPort(env);
     ctx.blockConcurrencyWhile(async () => this.migrate());
   }
 
@@ -111,39 +114,16 @@ export class CalendarSync extends DurableObject<Env> {
 
     // (Re)create. The replacement is created and persisted BEFORE the old channel is stopped, so
     // a failure here leaves the old (still-registered) channel and its row intact.
-    const token = await getGoogleAccessToken(this.env);
-    const calendarId = encodeURIComponent(this.env.GOOGLE_CALENDAR_ID);
-    const channelId = crypto.randomUUID();
-    const res = await fetch(`${CALENDAR_BASE}/${calendarId}/events/watch`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        id: channelId,
-        type: "web_hook",
-        address: this.notifyAddress(),
-        token: this.env.GOOGLE_WATCH_TOKEN,
-        params: { ttl: String(WATCH_TTL_SECONDS) },
-      }),
-    });
-    if (!res.ok) {
-      // Google's error body may be useful; the request body (carrying address/token) is not echoed.
-      throw new Error(`Google Calendar watch failed: ${res.status} ${await res.text()}`);
-    }
-    const body = await res.json<{ resourceId?: string; expiration?: string }>();
-    if (typeof body.resourceId !== "string" || typeof body.expiration !== "string") {
-      throw new Error("Google Calendar watch returned an unexpected body shape");
-    }
-    const expirationMs = Number(body.expiration);
+    const { channelId, resourceId, expirationMs } = await this.calendar.watch(
+      this.notifyAddress(),
+    );
 
     // Replace the single channel row.
     this.sql.exec("DELETE FROM channel");
     this.sql.exec(
       "INSERT INTO channel (id, resource_id, expiration_ms, token) VALUES (?, ?, ?, ?)",
       channelId,
-      body.resourceId,
+      resourceId,
       expirationMs,
       this.env.GOOGLE_WATCH_TOKEN,
     );
@@ -153,7 +133,7 @@ export class CalendarSync extends DurableObject<Env> {
     // Now retire the old channel best-effort. A stop that fails is harmless: `notify` ignores
     // pushes from any channel id other than the one just stored.
     if (existing) {
-      await this.stopChannel(existing.id, existing.resource_id);
+      await this.calendar.stopChannel(existing.id, existing.resource_id);
     }
 
     // First-time setup: establish a snapshot baseline so the next notification has something to
@@ -175,7 +155,7 @@ export class CalendarSync extends DurableObject<Env> {
     const existing = this.getChannel();
     if (!existing) return { stopped: false };
 
-    const result = await this.stopChannel(existing.id, existing.resource_id);
+    const result = await this.calendar.stopChannel(existing.id, existing.resource_id);
     if (result === "failed") {
       throw new Error("Google refused to stop the calendar watch channel; the watch is still registered");
     }
@@ -199,7 +179,7 @@ export class CalendarSync extends DurableObject<Env> {
    */
   async seed(nowMs: number = Date.now()): Promise<void> {
     const range = reminderRange("weekly", nowMs);
-    const events = await createGoogleCalendarSource(this.env).fetchEvents(range);
+    const events = await this.calendar.listEvents(range);
     this.writeSnapshot(events);
     log.info("calendar_sync.seeded", { count: events.length });
   }
@@ -232,8 +212,7 @@ export class CalendarSync extends DurableObject<Env> {
     const weekly = reminderRange("weekly", nowMs);
     const daily = reminderRange("daily", nowMs);
 
-    const source = createGoogleCalendarSource(this.env);
-    const current = await source.fetchEvents(weekly);
+    const current = await this.calendar.listEvents(weekly);
 
     const prior = new Map<string, { startsAt: string; title: string | null }>();
     for (const row of this.sql.exec<SnapshotRow>("SELECT * FROM event_snapshot").toArray()) {
@@ -257,24 +236,32 @@ export class CalendarSync extends DurableObject<Env> {
     for (const [id, snap] of prior) {
       if (currentById.has(id)) continue;
       if (!isFuture(snap.startsAt)) continue; // already happened — nothing to correct
-      const event = await this.getEvent(id);
-      if (event === null || event.status === "cancelled") {
-        const reconstructed: ReminderEvent = {
-          id,
-          title: snap.title ?? "(event)",
-          startsAt: snap.startsAt,
-        };
-        notices.push(buildCancellationMessage(reconstructed));
-        cancellations += 1;
-      } else if (event.start?.dateTime) {
-        const newStart =
-          DateTime.fromISO(event.start.dateTime, { setZone: true }).toUTC().toISO() ??
-          event.start.dateTime;
-        const moved: ReminderEvent = { id, title: snap.title ?? "(event)", startsAt: newStart };
-        notices.push(buildRescheduleMessage(moved, snap.startsAt));
-        reschedules += 1;
+      const lookup = await this.calendar.getEvent(id);
+      switch (lookup.kind) {
+        case "cancelled": {
+          const reconstructed: ReminderEvent = {
+            id,
+            title: snap.title ?? "(event)",
+            startsAt: snap.startsAt,
+          };
+          notices.push(buildCancellationMessage(reconstructed));
+          cancellations += 1;
+          break;
+        }
+        case "live": {
+          const moved: ReminderEvent = {
+            id,
+            title: snap.title ?? "(event)",
+            startsAt: lookup.event.startsAt,
+          };
+          notices.push(buildRescheduleMessage(moved, snap.startsAt));
+          reschedules += 1;
+          break;
+        }
+        case "all-day":
+          // A live all-day event (start.date only) that left the timed window: no actionable notice.
+          break;
       }
-      // A live all-day event (start.date only) that left the timed window: no actionable notice.
     }
 
     // In-window reschedules: present in both, but the start time changed.
@@ -322,7 +309,7 @@ export class CalendarSync extends DurableObject<Env> {
     // exactly — the source bounds the events, avoiding a brittle string compare between UTC `…Z`
     // startsAt and the Eastern-offset range bounds.
     try {
-      const dailyEvents = await source.fetchEvents(daily);
+      const dailyEvents = await this.calendar.listEvents(daily);
       await reconcileStartingSoon(client, this.env, dailyEvents, nowMs, daily);
     } catch (error) {
       log.error("calendar_sync.reconcile_failed", { error: String(error) });
@@ -395,56 +382,6 @@ export class CalendarSync extends DurableObject<Env> {
         e.startsAt,
         e.title,
       );
-    }
-  }
-
-  /**
-   * Fetch a single Calendar event. Returns null on 404/410 (the event is gone), throws on other
-   * non-OK responses so a transient API failure surfaces rather than masquerading as a deletion.
-   */
-  private async getEvent(
-    id: string,
-  ): Promise<{ status?: string; start?: { dateTime?: string; date?: string } } | null> {
-    const token = await getGoogleAccessToken(this.env);
-    const calendarId = encodeURIComponent(this.env.GOOGLE_CALENDAR_ID);
-    const res = await fetch(
-      `${CALENDAR_BASE}/${calendarId}/events/${encodeURIComponent(id)}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (res.status === 404 || res.status === 410) return null;
-    if (!res.ok) {
-      throw new Error(`Google Calendar get event failed: ${res.status} ${await res.text()}`);
-    }
-    return res.json<{ status?: string; start?: { dateTime?: string; date?: string } }>();
-  }
-
-  /**
-   * Stop a push channel. `"gone"` means Google no longer knows it (404/410 — already expired or
-   * stopped), which callers treat like success. Failures are logged (warn) and reported, never
-   * thrown — callers decide whether they matter.
-   */
-  private async stopChannel(
-    id: string,
-    resourceId: string | null,
-  ): Promise<"stopped" | "gone" | "failed"> {
-    if (!resourceId) return "gone";
-    try {
-      const token = await getGoogleAccessToken(this.env);
-      const res = await fetch(CHANNELS_STOP_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ id, resourceId }),
-      });
-      if (res.ok) return "stopped";
-      if (res.status === 404 || res.status === 410) return "gone";
-      log.warn("calendar_sync.stop_channel_failed", { channelId: id, status: res.status });
-      return "failed";
-    } catch (error) {
-      log.warn("calendar_sync.stop_channel_failed", { channelId: id, error: String(error) });
-      return "failed";
     }
   }
 }

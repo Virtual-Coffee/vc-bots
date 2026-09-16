@@ -8,9 +8,11 @@ import { vi } from "vitest";
  * `installFetchRecorder` stubs the global `fetch` (undo it with `vi.unstubAllGlobals()` in
  * `afterEach`). Answers come from the test's own `respond` override first, then the defaults:
  * Zoom OAuth → a token, Zoom invite links → one attendee with `zoomJoinUrl`, Google OAuth → a
- * token, Google Calendar events list → `{ items: googleEvents }`, `users.profile.get` →
- * `profileName`, `chat.postMessage` → the next ts in `postTs` (the last one repeats), and
- * anything else → `{ ok: true }` with `defaultTs`.
+ * token, Google Calendar events list → the next page in `googlePages` else `{ items: googleEvents }`,
+ * a single-event GET → `googleEvent(id)` else the matching `googleEvents` item else 404,
+ * `events/watch` → a `res-1` channel expiring in 7 days, `channels/stop` → `{}`,
+ * `users.profile.get` → `profileName`, `chat.postMessage` → the next ts in `postTs` (the last
+ * one repeats), and anything else → `{ ok: true }` with `defaultTs`.
  */
 
 export interface RecordedCall {
@@ -38,6 +40,10 @@ export interface FetchRecorderOptions {
   profileName?: string;
   /** Events: list items the Google Calendar stub returns (a single page); a thunk is re-read per call. */
   googleEvents?: object[] | (() => object[]);
+  /** Raw Events: list pages shifted off this array in order (pagination); once drained, `googleEvents`. */
+  googlePages?: object[];
+  /** Answer a single-event GET yourself (a body, a Response, or `undefined` for the default). */
+  googleEvent?: (id: string) => object | Response | undefined;
 }
 
 export interface FetchRecorder {
@@ -65,10 +71,11 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
   const defaultTs = options.defaultTs ?? DEFAULT_TS;
   const zoomJoinUrl = options.zoomJoinUrl ?? "https://zoom.us/w/personal-1";
   const profileName = options.profileName ?? "Ada";
-  const googleEvents = () => {
+  const googleEvents = (): object[] => {
     const events = options.googleEvents ?? [];
     return typeof events === "function" ? events() : events;
   };
+  const googlePages = options.googlePages ?? [];
 
   const spy = vi.fn(async (input: unknown, init?: { method?: string; body?: unknown }) => {
     let url: string;
@@ -98,8 +105,8 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
     if (url.startsWith("https://oauth2.googleapis.com/token")) {
       return Response.json({ access_token: "g-tok", expires_in: 3600 });
     }
-    if (url.includes("googleapis.com/calendar/v3/calendars/")) {
-      return Response.json({ items: googleEvents() });
+    if (url.startsWith("https://www.googleapis.com/calendar/v3/")) {
+      return googleCalendar(url, method);
     }
     if (url.includes("/api/users.profile.get")) {
       return Response.json({ ok: true, profile: { real_name: profileName } });
@@ -111,6 +118,27 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
     return Response.json({ ok: true, ts: defaultTs, channel: "C0B6C3BFEDD" });
   });
   vi.stubGlobal("fetch", spy);
+
+  function googleCalendar(url: string, method: string): Response {
+    const { pathname } = new URL(url);
+    if (pathname === "/calendar/v3/channels/stop") {
+      return Response.json({});
+    }
+    if (method === "POST" && pathname.endsWith("/events/watch")) {
+      return Response.json({ resourceId: "res-1", expiration: String(Date.now() + 604_800_000) });
+    }
+    // Single-event GET: /calendar/v3/calendars/{id}/events/{eventId}
+    const single = pathname.match(/\/events\/([^/]+)$/);
+    if (single) {
+      const id = decodeURIComponent(single[1]!);
+      const custom = options.googleEvent?.(id);
+      if (custom instanceof Response) return custom;
+      const body = custom ?? googleEvents().find((e) => (e as { id?: string }).id === id);
+      return body ? Response.json(body) : new Response("not found", { status: 404 });
+    }
+    // Events: list.
+    return Response.json(googlePages.shift() ?? { items: googleEvents() });
+  }
 
   const callsTo = (fragment: string) => calls.filter((c) => c.url.includes(fragment));
   const form = (call: RecordedCall) => new URLSearchParams(call.body);

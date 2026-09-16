@@ -1,8 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAdminCommand, type AdminCommandPayload } from "../src/bots/admin";
-import type { GoogleCalendarEvent } from "../src/bots/reminders/sources/google-calendar";
-import { resetGoogleTokenCacheForTests } from "../src/google/auth";
+import type { GoogleCalendarEvent } from "../src/google/calendar";
 import {
   type FetchRecorder,
   installFetchRecorder,
@@ -16,7 +15,6 @@ let isAdmin: boolean;
 let googleEvents: GoogleCalendarEvent[];
 
 beforeEach(() => {
-  resetGoogleTokenCacheForTests();
   isAdmin = true;
   googleEvents = [];
   rec = installFetchRecorder({

@@ -1,15 +1,15 @@
 import { DateTime } from "luxon";
 import type { Env } from "../../env";
 import type { EventRange, ReminderEvent } from "../../events";
-import { createGoogleCalendarSource } from "./sources/google-calendar";
+import { createGoogleCalendarPort } from "../../google/calendar";
 
 /**
  * Event-source registry for the reminders bot.
  *
  * Senders and Block Kit builders depend only on the source-agnostic model in `src/events.ts`
  * (re-exported here) — never on a provider's field names. Google Calendar is the system of
- * record and the only `EventSource` today (see docs/adr/0001). The registry stays as the
- * `EVENT_SOURCE` / admin `[source]` seam.
+ * record and the only `EventSource` today (see docs/adr/0001); it is the `CalendarPort`
+ * adapter's `listEvents`. The registry stays as the `EVENT_SOURCE` / admin `[source]` seam.
  * `getEventSource` resolves: explicit name (from `/vc-bot-admin daily|weekly [source]`) wins;
  * otherwise `env.EVENT_SOURCE`; throws on unknown so a typo'd config var fails loudly (admin
  * pre-validates for a friendly message).
@@ -25,7 +25,10 @@ export interface EventSource {
 export type ReminderName = "daily" | "weekly";
 
 const SOURCES = {
-  google: createGoogleCalendarSource,
+  google: (env: Env): EventSource => {
+    const port = createGoogleCalendarPort(env);
+    return { name: "google", fetchEvents: (range) => port.listEvents(range) };
+  },
 } satisfies Record<string, (env: Env) => EventSource>;
 
 export type EventSourceName = keyof typeof SOURCES;

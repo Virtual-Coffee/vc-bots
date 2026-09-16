@@ -1,8 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendReminder } from "../src/bots/reminders";
-import type { GoogleCalendarEvent } from "../src/bots/reminders/sources/google-calendar";
-import { resetGoogleTokenCacheForTests } from "../src/google/auth";
+import type { GoogleCalendarEvent } from "../src/google/calendar";
 import { parseZoomMeetingId } from "../src/zoom/join-link";
 import { type FetchRecorder, HOST_CODE, installFetchRecorder } from "./helpers/fetch-recorder";
 
@@ -17,7 +16,6 @@ let googleEvents: GoogleCalendarEvent[];
 let staleScheduled: Array<{ id: string; channel_id: string; post_at: number }>;
 
 beforeEach(() => {
-  resetGoogleTokenCacheForTests();
   googleEvents = [];
   staleScheduled = [];
   rec = installFetchRecorder({
