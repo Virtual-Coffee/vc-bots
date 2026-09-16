@@ -315,11 +315,11 @@ describe("CalendarSync — notify", () => {
 });
 
 // ---------------------------------------------------------------------------
-// processNotification — diff detection
+// processNotification — the I/O around the diff (rules: test/calendar-sync-diff.test.ts)
 // ---------------------------------------------------------------------------
 
 describe("CalendarSync — processNotification", () => {
-  it("posts a cancellation notice when an upcoming snapshot event disappears (cancelled)", async () => {
+  it("cancellation end-to-end: one getEvent lookup, one notice to all three channels in order", async () => {
     const stub = syncStub();
 
     // Seed the snapshot with one upcoming timed event (Friday this week).
@@ -343,69 +343,7 @@ describe("CalendarSync — processNotification", () => {
     expect(postedText()).toContain("Cancelled");
   });
 
-  it("posts a reschedule notice when an upcoming event's start time changes in-window", async () => {
-    const stub = syncStub();
-
-    fake.setEvents([timedEvent("evt-1", at(48))]); // Friday
-    await withSync(stub, (instance) => instance.seed(NOW));
-
-    // Same event, different start time (Saturday — still in this week's window).
-    fake.setEvents([timedEvent("evt-1", at(72))]);
-
-    await withSync(stub, (instance) => instance.processNotification(NOW));
-
-    expect(slackPosts()).toHaveLength(3);
-    expect(postedText()).toContain("Rescheduled");
-  });
-
-  it("posts a reschedule notice when an upcoming event moves out of the week", async () => {
-    const stub = syncStub();
-
-    fake.setEvents([timedEvent("evt-1", at(48))]); // Friday, this week
-    await withSync(stub, (instance) => instance.seed(NOW));
-
-    // The event left this week's window but is alive at a new time (next Tuesday) — an
-    // out-of-window reschedule, not a cancellation.
-    fake.setEvents([timedEvent("evt-1", at(24 * 6))]);
-
-    await withSync(stub, (instance) => instance.processNotification(NOW));
-
-    expect(fake.callsTo("getEvent").map((c) => c.args)).toEqual([["evt-1"]]);
-    expect(slackPosts()).toHaveLength(3);
-    expect(postedText()).toContain("Rescheduled");
-  });
-
-  it("posts nothing when a departed event turned all-day (no timed slot to correct to)", async () => {
-    const stub = syncStub();
-
-    fake.setEvents([timedEvent("evt-1", at(48))]);
-    await withSync(stub, (instance) => instance.seed(NOW));
-
-    fake.setEvents([]);
-    fake.lookups.set("evt-1", { kind: "all-day" });
-
-    await withSync(stub, (instance) => instance.processNotification(NOW));
-
-    expect(slackPosts()).toHaveLength(0);
-  });
-
-  it("posts nothing when a departed event turned invalid (a Zoom link that lost its host key)", async () => {
-    const stub = syncStub();
-
-    fake.setEvents([timedEvent("evt-1", at(48))]);
-    await withSync(stub, (instance) => instance.seed(NOW));
-
-    // The adapter now rejects it: it's no longer in the listing, and the lookup says why.
-    fake.setEvents([]);
-    fake.lookups.set("evt-1", { kind: "invalid", reason: "zoom-no-host-key" });
-
-    await withSync(stub, (instance) => instance.processNotification(NOW));
-
-    expect(fake.callsTo("getEvent")).toHaveLength(1);
-    expect(slackPosts()).toHaveLength(0);
-  });
-
-  it("does NOT notify when the changed event's announced start is already in the past", async () => {
+  it("skips the getEvent lookup when the departed event's announced start is already past", async () => {
     const stub = syncStub();
 
     // Seed an event earlier this week (Tuesday), before `NOW` (Wednesday).
@@ -418,17 +356,6 @@ describe("CalendarSync — processNotification", () => {
     await withSync(stub, (instance) => instance.processNotification(NOW));
 
     expect(fake.callsTo("getEvent")).toHaveLength(0);
-    expect(slackPosts()).toHaveLength(0);
-  });
-
-  it("posts nothing when the live window matches the snapshot", async () => {
-    const stub = syncStub();
-
-    fake.setEvents([timedEvent("evt-1", at(48))]);
-    await withSync(stub, (instance) => instance.seed(NOW));
-
-    await withSync(stub, (instance) => instance.processNotification(NOW));
-
     expect(slackPosts()).toHaveLength(0);
   });
 

@@ -1,16 +1,14 @@
 import { DurableObject } from "cloudflare:workers";
-import { DateTime } from "luxon";
 import type { Env } from "../../env";
 import type { ReminderEvent } from "../../events";
-import type { CalendarPort } from "../../google/calendar";
+import type { CalendarEventLookup, CalendarPort } from "../../google/calendar";
 import { createGoogleCalendarPort } from "../../google/calendar";
 import { log, setLogLevel } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
-import type { ReminderMessage } from "../reminders/blocks";
-import { buildCancellationMessage, buildRescheduleMessage } from "../reminders/blocks";
 import { reconcileStartingSoon } from "../reminders/starting-soon";
 import { reminderRange } from "../reminders/source";
+import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
 
 /**
  * Calendar sync — a single singleton Durable Object (addressed elsewhere via
@@ -199,11 +197,10 @@ export class CalendarSync extends DurableObject<Env> {
   }
 
   /**
-   * Core push-notification handler. Diffs the live weekly window against the last snapshot:
-   * detects cancellations (left window + the event is gone/cancelled) and reschedules
-   * (out-of-window moves and in-window time changes), persists the new snapshot, then posts
-   * standout notices to the three event channels and reconciles the scheduled "Starting Soon"
-   * queue for the daily window. New events get no notice — the scheduling reconcile handles them.
+   * Core push-notification handler. Diffs the live weekly window against the last snapshot
+   * (the rules live in `./diff.ts`), persists the new snapshot, then posts standout notices to
+   * the three event channels and reconciles the scheduled "Starting Soon" queue for the daily
+   * window.
    *
    * Delivery failures don't stop the run: each post and the reconcile are isolated, and one
    * aggregate error is thrown at the end so the caller can alert #bot-log.
@@ -214,72 +211,29 @@ export class CalendarSync extends DurableObject<Env> {
 
     const current = await this.calendar.listEvents(weekly);
 
-    const prior = new Map<string, { startsAt: string; title: string | null }>();
+    const prior = new Map<string, SnapshotEntry>();
     for (const row of this.sql.exec<SnapshotRow>("SELECT * FROM event_snapshot").toArray()) {
-      prior.set(row.id, { startsAt: row.starts_at, title: row.title });
+      prior.set(row.id, { id: row.id, startsAt: row.starts_at, title: row.title });
     }
     const currentById = new Map<string, ReminderEvent>();
     for (const e of current) currentById.set(e.id, e);
 
-    // Only announce a change for an event whose announced start is still upcoming. A change to an
-    // event that has already begun/passed needs no correction; and because the window is the
-    // current Mon–Sun announced week (Change 1), next week's events aren't in the snapshot at all,
-    // so they never produce a diff until their own Monday summary goes out.
-    const isFuture = (iso: string): boolean =>
-      DateTime.fromISO(iso, { setZone: true }).toMillis() > nowMs;
-
-    const notices: ReminderMessage[] = [];
-    let cancellations = 0;
-    let reschedules = 0;
-
-    // Snapshot ids no longer in the live window: cancelled, or rescheduled out of the window.
-    for (const [id, snap] of prior) {
-      if (currentById.has(id)) continue;
-      if (!isFuture(snap.startsAt)) continue; // already happened — nothing to correct
-      const lookup = await this.calendar.getEvent(id);
-      switch (lookup.kind) {
-        case "cancelled": {
-          const reconstructed: ReminderEvent = {
-            id,
-            title: snap.title ?? "(event)",
-            startsAt: snap.startsAt,
-            join: { kind: "none" },
-          };
-          notices.push(buildCancellationMessage(reconstructed));
-          cancellations += 1;
-          break;
-        }
-        case "live": {
-          const moved: ReminderEvent = {
-            id,
-            title: snap.title ?? "(event)",
-            startsAt: lookup.event.startsAt,
-            join: { kind: "none" },
-          };
-          notices.push(buildRescheduleMessage(moved, snap.startsAt));
-          reschedules += 1;
-          break;
-        }
-        case "all-day":
-          // A live all-day event (start.date only) that left the timed window: no actionable notice.
-          break;
-        case "invalid":
-          // Still live, but unannounceable (e.g. a Zoom link lost its host key): the adapter has
-          // already alerted #bot-log; it just leaves the snapshot without a notice.
-          log.info("calendar_sync.event_invalid", { id, reason: lookup.reason });
-          break;
-      }
+    // Departed-and-upcoming ids need a single-event lookup to tell cancelled from moved.
+    const lookups = new Map<string, CalendarEventLookup>();
+    for (const id of departedUpcoming(prior, currentById, nowMs)) {
+      lookups.set(id, await this.calendar.getEvent(id));
     }
 
-    // In-window reschedules: present in both, but the start time changed.
-    for (const [id, event] of currentById) {
-      const snap = prior.get(id);
-      if (!snap) continue; // new event — scheduling handles it, no notice
-      if (!isFuture(snap.startsAt)) continue; // the announced slot already passed
-      if (event.startsAt !== snap.startsAt) {
-        notices.push(buildRescheduleMessage(event, snap.startsAt));
-        reschedules += 1;
-      }
+    const { notices, cancellations, reschedules, invalid } = diffSnapshot(
+      prior,
+      currentById,
+      lookups,
+      nowMs,
+    );
+    for (const { id, reason } of invalid) {
+      // Still live, but unannounceable (e.g. a Zoom link lost its host key): the adapter has
+      // already alerted #bot-log; it just leaves the snapshot without a notice.
+      log.info("calendar_sync.event_invalid", { id, reason });
     }
 
     // Commit the new baseline before delivering anything: a delivery failure below then loses a

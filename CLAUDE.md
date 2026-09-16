@@ -144,8 +144,10 @@ source and the `EVENT_SOURCE` default. All Google Calendar HTTP lives in **one a
 `createGoogleCalendarPort` in `src/google/calendar.ts`, behind the `CalendarPort` seam
 (`listEvents` / `getEvent` / `watch` / `stopChannel`); the reminders source is its `listEvents`,
 and the `CalendarSync` DO (`src/bots/calendar-sync/`) takes the port as an injected field so
-tests swap in `test/helpers/calendar-fake.ts`. The adapter caches its access token per instance
-(minted by the pure `fetchGoogleAccessToken` in `src/google/auth.ts`, service-account JWT-bearer).
+tests swap in `test/helpers/calendar-fake.ts`; its snapshot diff is pure in `diff.ts`
+(`departedUpcoming` / `diffSnapshot`) and unit-tested without the DO. The adapter caches its
+access token per instance (minted by the pure `fetchGoogleAccessToken` in `src/google/auth.ts`,
+service-account JWT-bearer).
 The shared event model (`ReminderEvent`, `EventRange`) is `src/events.ts`. Per `docs/adr/0001`: the Join Link
 is the event's `location` (video `conferenceData` is the fallback; a `private.joinLink` property
 is ignored), descriptions are **Markdown** rendered with `slackify-markdown`, and the host key is
