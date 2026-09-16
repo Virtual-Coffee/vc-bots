@@ -92,15 +92,20 @@ export class CalendarSync extends DurableObject<Env> {
   // --- Watch lifecycle ---
 
   /**
-   * Ensure an active Calendar push channel exists, (re)creating it when missing or near expiry, and
-   * arm the renewal alarm. Healthy channels are left in place — just re-arm the alarm. Returns the
-   * current status (no token).
+   * Ensure an active Calendar push channel exists, (re)creating it when missing, near expiry, or
+   * registered with a token other than the current `GOOGLE_WATCH_TOKEN`, and arm the renewal
+   * alarm. Healthy channels are left in place — just re-arm the alarm. Returns the current status
+   * (no token).
    */
   async ensureWatch(): Promise<WatchStatus> {
     const existing = this.getChannel();
     const now = Date.now();
 
-    if (existing && existing.expiration_ms !== null && existing.expiration_ms - RENEW_BUFFER_MS > now) {
+    if (
+      existing &&
+      this.channelIsLive(existing, now) &&
+      existing.expiration_ms - RENEW_BUFFER_MS > now
+    ) {
       // Still healthy — just keep the renewal alarm armed.
       await this.ctx.storage.setAlarm(existing.expiration_ms - RENEW_BUFFER_MS);
       log.info("calendar_sync.watch_healthy", {
@@ -111,7 +116,10 @@ export class CalendarSync extends DurableObject<Env> {
     }
 
     // (Re)create. The replacement is created and persisted BEFORE the old channel is stopped, so
-    // a failure here leaves the old (still-registered) channel and its row intact.
+    // a failure here leaves the old (still-registered) channel and its row intact. A rotated
+    // `GOOGLE_WATCH_TOKEN` lands here too: Google keeps sending whatever token the channel was
+    // registered with, so the router would reject every push from the old channel — only a fresh
+    // channel (registered with the current token) makes pushes verifiable again.
     const { channelId, resourceId, expirationMs } = await this.calendar.watch(
       this.notifyAddress(),
     );
@@ -163,11 +171,15 @@ export class CalendarSync extends DurableObject<Env> {
     return { stopped: true };
   }
 
-  /** Current watch status (no token). Active = a row exists and isn't past its expiry. */
+  /**
+   * Current watch status (no token). Active = a row exists, isn't past its expiry, and was
+   * registered with the current `GOOGLE_WATCH_TOKEN` (a rotated token means the router rejects
+   * its pushes, so it isn't delivering even though Google still has it).
+   */
   async watchStatus(): Promise<WatchStatus> {
     const existing = this.getChannel();
     if (!existing) return { active: false, channelId: null, expiresAt: null };
-    const active = existing.expiration_ms !== null && existing.expiration_ms > Date.now();
+    const active = this.channelIsLive(existing, Date.now());
     return { active, channelId: existing.id, expiresAt: existing.expiration_ms };
   }
 
@@ -324,6 +336,22 @@ export class CalendarSync extends DurableObject<Env> {
 
   private getChannel(): ChannelRow | undefined {
     return this.sql.exec<ChannelRow>("SELECT * FROM channel LIMIT 1").toArray()[0];
+  }
+
+  /**
+   * A stored channel is live when it hasn't expired AND was registered with the current
+   * `GOOGLE_WATCH_TOKEN` — otherwise its pushes fail the router's token check and it needs
+   * replacing. Narrows `expiration_ms` for the caller.
+   */
+  private channelIsLive(
+    row: ChannelRow,
+    nowMs: number,
+  ): row is ChannelRow & { expiration_ms: number } {
+    return (
+      row.expiration_ms !== null &&
+      row.expiration_ms > nowMs &&
+      row.token === this.env.GOOGLE_WATCH_TOKEN
+    );
   }
 
   private snapshotEmpty(): boolean {

@@ -179,6 +179,33 @@ describe("CalendarSync — ensureWatch", () => {
     expect(rows[0]?.resource_id).toBe("res-2");
   });
 
+  it("replaces a channel registered with a rotated token (Google would keep sending the old one)", async () => {
+    const stub = syncStub();
+    await withSync(stub, (instance) => instance.ensureWatch());
+    const [old] = await channelRows(stub);
+    // Simulate a GOOGLE_WATCH_TOKEN rotation: the stored row still carries the previous value.
+    await withSync(stub, (_i, state) =>
+      state.storage.sql.exec("UPDATE channel SET token = ?", "rotated-away"),
+    );
+    fake.calls.length = 0;
+    fake.watchResponse = { resourceId: "res-2" };
+
+    // Not active: its pushes fail the router's token check.
+    const before = await withSync(stub, (instance) => instance.watchStatus());
+    expect(before.active).toBe(false);
+    expect(before.channelId).toBe(old?.id);
+
+    const status = await withSync(stub, (instance) => instance.ensureWatch());
+
+    expect(status.active).toBe(true);
+    expect(status.channelId).not.toBe(old?.id);
+    expect(fake.callsTo("watch")).toHaveLength(1);
+    expect(fake.callsTo("stopChannel")[0]!.args).toEqual([old?.id, "res-1"]);
+    const rows = await channelRows(stub);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.token).toBe(env.GOOGLE_WATCH_TOKEN);
+  });
+
   it("keeps the old channel (and never stops it) when creating the replacement fails", async () => {
     const stub = syncStub();
     await withSync(stub, (instance) => instance.ensureWatch());
