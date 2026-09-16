@@ -71,7 +71,8 @@ src/
     calendar-sync/    Durable Object: Calendar watch lifecycle + change notices (over CalendarPort)
     coworking/        the room: Durable Object (session state), RoomMessage (the channel message
                       + its Slack port), Zoom event helpers, join flow + ephemeral
-    reminders/        cron dispatch, event-source registry, Block Kit builders
+    reminders/        cron dispatch, event-source registry, Block Kit builders,
+                      the starting-soon.ts scheduled pair
     welcome.ts        new-member welcome DM
     app-home.ts       App Home tab
     admin.ts          /vc-bot-admin slash command

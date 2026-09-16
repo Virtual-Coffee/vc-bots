@@ -9,7 +9,7 @@ import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
 import type { ReminderMessage } from "../reminders/blocks";
 import { buildCancellationMessage, buildRescheduleMessage } from "../reminders/blocks";
-import { reconcileStartingSoon } from "../reminders/index";
+import { reconcileStartingSoon } from "../reminders/starting-soon";
 import { reminderRange } from "../reminders/source";
 
 /**
