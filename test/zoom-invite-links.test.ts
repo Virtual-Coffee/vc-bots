@@ -70,12 +70,7 @@ describe("createInviteLink step logs", () => {
   beforeEach(() => {
     setLogLevel("debug");
     debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({ attendees: [{ name: "Ada", join_url: "https://zoom.us/w/SECRET-TOKEN-123" }] }),
-      ),
-    );
+    installFetchRecorder({ zoomJoinUrl: "https://zoom.us/w/SECRET-TOKEN-123" });
   });
   afterEach(() => {
     vi.restoreAllMocks();
