@@ -380,15 +380,15 @@ describe("legacy standing-invite cleanup", () => {
     expect(port.deletes).toHaveLength(1); // one-shot
   });
 
-  it("warns on a failed delete and keeps the pointer for the next open to retry", async () => {
+  it("swallows a failed delete but still forgets the pointer (one-shot either way)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await storage.put(LEGACY_KEY, "1699999999.000001");
-    port.deleteError = new Error("ratelimited");
+    port.deleteError = new Error("message_not_found");
 
     expect(await room.open(STARTED_AT)).toBe(port.posts[0]!.ts); // the session still opens
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("coworking.room_msg.retire_failed step=legacy_delete"),
+      expect.stringContaining("coworking.legacy_invite.delete_failed"),
     );
-    expect(storage.map.has(LEGACY_KEY)).toBe(true);
+    expect(storage.map.has(LEGACY_KEY)).toBe(false);
   });
 });

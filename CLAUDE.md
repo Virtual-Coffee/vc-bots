@@ -99,7 +99,7 @@ itself, right after posting: it re-renders that card with `{ invite: false }`, c
 open announcement (without invite), and runs the one-shot legacy `idle_invite_ts` delete — so
 exactly one standing invite exists at a time. Retiring is best-effort: each step is try/caught on
 its own, warns `coworking.room_msg.retire_failed`, and keeps its pointer for the next takeover to
-retry — it never blocks the session. Pointers live in DO storage under `last_closed_message` (the
+retry (the legacy delete stays one-shot) — it never blocks the session. Pointers live in DO storage under `last_closed_message` (the
 cached `SessionStats` — `participant` rows are deleted at close, so the roster can't be re-derived
 from SQL) and `room_message:announcement`; the DO never touches them.
 Announcements (`/vc-bot-admin coworking open|close`) join the same chain: `announceClose` renders

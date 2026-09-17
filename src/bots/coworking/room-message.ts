@@ -185,11 +185,16 @@ export class RoomMessage {
       );
     }
 
+    // One-shot regardless of outcome: `port.delete` doesn't classify a hand-deleted message as
+    // vanished, so keeping the pointer would warn on every takeover forever.
     const legacyTs = await this.storage.get<string>(LEGACY_ROOM_MESSAGE_KEY);
     if (legacyTs) {
-      await this.retireStep("legacy_delete", legacyTs, LEGACY_ROOM_MESSAGE_KEY, () =>
-        this.port.delete(legacyTs),
-      );
+      try {
+        await this.port.delete(legacyTs);
+      } catch (err) {
+        log.warn("coworking.legacy_invite.delete_failed", { ts: legacyTs, err: String(err) });
+      }
+      await this.storage.delete(LEGACY_ROOM_MESSAGE_KEY);
     }
   }
 
