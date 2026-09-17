@@ -496,6 +496,35 @@ describe("CoworkingRoom — vanished room message self-healing", () => {
     );
   });
 
+  it("a retire failure doesn't drop the joins that follow", async () => {
+    const stub = room("heal6");
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+    await stub.handleZoomEvent(event("meeting.ended", "uuid-1")); // ended card holds the invite
+
+    // Retiring the ended card fails outright (not a vanished message) — Slack is having a moment.
+    let updateFails = true;
+    fetched.respondWith((call) => {
+      if (updateFails && call.url.includes("/api/chat.update")) {
+        return Response.json({ ok: false, error: "ratelimited" });
+      }
+      return undefined;
+    });
+    await stub.handleZoomEvent(event("meeting.started", "uuid-2"));
+    expect((await sessions(stub)).find((r) => r.instance_uuid === "uuid-2")?.status).toBe("active");
+    // The old card still holds its invite pointer, so the next takeover retries it.
+    expect(
+      await runInDurableObject(stub, (_i, state) => state.storage.get("last_closed_message")),
+    ).toMatchObject({ ts: STARTED_TS });
+
+    // The session is live, so the join that follows lands and renders.
+    updateFails = false;
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-2", { user_id: "p1", user_name: "Ada" }),
+    );
+    expect(lastUpdatedTs()).toBe(SECOND_TS);
+    expect(lastBlocks("/api/chat.update")).toContain("Ada");
+  });
+
   it("admin close treats a deleted announcement as nothing-to-close", async () => {
     const stub = room("heal4");
     await stub.adminAnnounceOpen();

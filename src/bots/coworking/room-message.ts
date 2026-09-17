@@ -20,10 +20,11 @@ import { dateToken } from "../../slack/date";
  *
  * Standing-invite chain: every ended card is rendered with the "start the next session" button,
  * and the most recent one is remembered as the *last closed card*. When a newer room message
- * takes over (a session start or an announcement), `retirePrevious` re-renders the remembered
- * card without the button, so exactly one standing invite exists at a time. Announcements join
- * the same chain: `announceClose` turns the announcement into an ended card that becomes the last
- * closed card, and a lingering open announcement is closed (without invite) by `retirePrevious`.
+ * takes over (`open` for a session start, `announceOpen` for an announcement), it re-renders the
+ * remembered card without the button itself, right after posting, so exactly one standing invite
+ * exists at a time. Announcements join the same chain: `announceClose` turns the announcement into
+ * an ended card that becomes the last closed card, and a lingering open announcement is closed
+ * (without invite) by the next takeover.
  */
 
 /** The seam to Slack: the three operations the room message needs against the co-working channel. */
@@ -89,18 +90,14 @@ export class RoomMessage {
   }
 
   /**
-   * Post a fresh open card for a session that just started. Always a NEW message, never an edit
-   * of the previous card: a fresh post is what makes Slack notify the channel that the room just
-   * opened (an edit is silent). Resolves to the message ts, or null when Slack returned none.
+   * Post a fresh open card for a session that just started and take over as the newest room
+   * message (the previous standing invite is retired). Always a NEW message, never an edit of the
+   * previous card: a fresh post is what makes Slack notify the channel that the room just opened
+   * (an edit is silent). Resolves to the message ts, or null when Slack returned none.
    */
   async open(startedAtMs: number): Promise<string | null> {
     log.debug("coworking.room_msg.open");
-    const ts = await this.port.post(
-      roomOpenText(this.roomTitle),
-      buildRoomOpenBlocks(this.roomTitle, [], startedAtMs),
-    );
-    if (!ts) log.warn("coworking.room_msg.no_ts");
-    return ts;
+    return this.takeOver(buildRoomOpenBlocks(this.roomTitle, [], startedAtMs));
   }
 
   /**
@@ -137,8 +134,22 @@ export class RoomMessage {
   }
 
   /**
-   * A newer room message is taking over: strip the standing invite from whatever carried it so
-   * only one exists at a time. Each step is best-effort on its own.
+   * Post a new open card and retire whatever carried the standing invite until now. The post
+   * comes first so a failed post never leaves the channel with no way in; the retire is
+   * best-effort and runs even when Slack returned no ts (the room is open either way, so the old
+   * invite is stale).
+   */
+  private async takeOver(blocks: AnyMessageBlock[]): Promise<string | null> {
+    const ts = await this.port.post(roomOpenText(this.roomTitle), blocks);
+    if (!ts) log.warn("coworking.room_msg.no_ts");
+    await this.retirePrevious();
+    return ts;
+  }
+
+  /**
+   * A newer room message has taken over: strip the standing invite from whatever carried it so
+   * only one exists at a time. Each step is best-effort on its own — a failure warns, keeps its
+   * pointer so the next takeover retries it, and never blocks the session behind it.
    *
    * 1. The last closed card is re-rendered without the invite (from its cached stats — the
    *    roster is gone from SQL by now).
@@ -147,57 +158,70 @@ export class RoomMessage {
    * 3. One-shot legacy cleanup: the retired lifecycle's standing-invite message carried no
    *    history worth keeping, so it's deleted outright rather than left with a live button.
    */
-  async retirePrevious(): Promise<void> {
+  private async retirePrevious(): Promise<void> {
     const last = await this.storage.get<LastClosed>(LAST_CLOSED_KEY);
     if (last) {
       log.debug("coworking.room_msg.retire", { ts: last.ts });
-      await this.port.update(
-        last.ts,
-        roomClosedText(this.roomTitle),
-        buildRoomClosedBlocks(this.roomTitle, last.stats, { invite: false }),
+      await this.retireStep("last_closed", last.ts, LAST_CLOSED_KEY, () =>
+        this.port.update(
+          last.ts,
+          roomClosedText(this.roomTitle),
+          buildRoomClosedBlocks(this.roomTitle, last.stats, { invite: false }),
+        ),
       );
-      await this.storage.delete(LAST_CLOSED_KEY);
     }
 
     const announcement = await this.storage.get<Announcement>(ANNOUNCEMENT_KEY);
     if (announcement) {
       log.debug("coworking.room_msg.retire_announcement", { ts: announcement.ts });
-      await this.port.update(
-        announcement.ts,
-        roomClosedText(this.roomTitle),
-        buildRoomClosedBlocks(this.roomTitle, announcementStats(announcement, Date.now()), {
-          invite: false,
-        }),
+      await this.retireStep("announcement", announcement.ts, ANNOUNCEMENT_KEY, () =>
+        this.port.update(
+          announcement.ts,
+          roomClosedText(this.roomTitle),
+          buildRoomClosedBlocks(this.roomTitle, announcementStats(announcement, Date.now()), {
+            invite: false,
+          }),
+        ),
       );
-      await this.storage.delete(ANNOUNCEMENT_KEY);
     }
 
     const legacyTs = await this.storage.get<string>(LEGACY_ROOM_MESSAGE_KEY);
     if (legacyTs) {
-      try {
-        await this.port.delete(legacyTs);
-      } catch (err) {
-        log.warn("coworking.legacy_invite.delete_failed", { ts: legacyTs, err: String(err) });
-      }
-      await this.storage.delete(LEGACY_ROOM_MESSAGE_KEY);
+      await this.retireStep("legacy_delete", legacyTs, LEGACY_ROOM_MESSAGE_KEY, () =>
+        this.port.delete(legacyTs),
+      );
     }
+  }
+
+  /**
+   * One retire step: run it, and forget its pointer only once it went through (a vanished
+   * target counts — there's nothing left to retry against). Any other failure warns and leaves
+   * the pointer for the next takeover.
+   */
+  private async retireStep(
+    step: string,
+    ts: string,
+    key: string,
+    run: () => Promise<unknown>,
+  ): Promise<void> {
+    try {
+      await run();
+    } catch (err) {
+      log.warn("coworking.room_msg.retire_failed", { step, ts, err: String(err) });
+      return;
+    }
+    await this.storage.delete(key);
   }
 
   /**
    * Admin announcement (`/vc-bot-admin coworking open`): an open card with no session behind it —
    * no presence, no start line — but the Join button works as ever. It takes over as the newest
-   * room message, so the previous standing invite is retired first.
+   * room message, so the previous standing invite (a still-open announcement included) is retired.
    */
   async announceOpen(): Promise<void> {
-    await this.retirePrevious();
-    const ts = await this.port.post(
-      roomOpenText(this.roomTitle),
-      buildRoomOpenBlocks(this.roomTitle, []),
-    );
+    const ts = await this.takeOver(buildRoomOpenBlocks(this.roomTitle, []));
     if (ts) {
       await this.storage.put<Announcement>(ANNOUNCEMENT_KEY, { ts, openedAtMs: Date.now() });
-    } else {
-      log.warn("coworking.room_msg.no_ts");
     }
     log.info("coworking.admin_announce", { action: "open", ts });
   }

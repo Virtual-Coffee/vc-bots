@@ -25,6 +25,8 @@ export interface FakeRoomChannelPort extends RoomChannelPort {
   vanish(ts: string): void;
   /** When true, `post` resolves to null (Slack answered without a ts). */
   postWithoutTs: boolean;
+  /** When set, `update` rejects with this error (a non-vanished Slack failure) instead of recording. */
+  updateError: Error | null;
   /** When set, `delete` rejects with this error. */
   deleteError: Error | null;
   /** The most recent update's blocks as JSON, for substring assertions. */
@@ -45,6 +47,7 @@ export function createFakeRoomChannelPort(): FakeRoomChannelPort {
     updates,
     deletes,
     postWithoutTs: false,
+    updateError: null,
     deleteError: null,
     vanish: (ts) => vanished.add(ts),
     lastUpdateJson: () => JSON.stringify(updates.at(-1)?.blocks ?? []),
@@ -56,6 +59,7 @@ export function createFakeRoomChannelPort(): FakeRoomChannelPort {
       return ts;
     },
     async update(ts, text, blocks) {
+      if (port.updateError) throw port.updateError;
       const result = vanished.has(ts) ? "vanished" : "ok";
       updates.push({ ts, text, blocks, result });
       return result;

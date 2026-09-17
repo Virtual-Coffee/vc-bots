@@ -277,7 +277,7 @@ export class CoworkingRoom extends DurableObject<Env> {
     // worker wasn't reachable). One Zoom meeting ID has at most one live instance, and duplicate
     // start webhooks reuse the same uuid (deduped above), so a start with a NEW uuid proves the
     // old session is stale. Close it now (ended card) instead of leaving the room wedged until
-    // the 18h stale-session alarm; its standing invite is retired below like any previous card's.
+    // the 18h stale-session alarm; its standing invite is retired by `open` like any previous card's.
     const staleSessions = this.sql
       .exec<SessionRow>("SELECT * FROM session WHERE status = 'active'")
       .toArray();
@@ -303,11 +303,6 @@ export class CoworkingRoom extends DurableObject<Env> {
 
     await this.ctx.storage.setAlarm(Date.now() + STALE_SESSION_MS);
     log.info("coworking.started", { instance: uuid });
-
-    // Retire the previous standing invite last: after the new message is up (so a failed post
-    // never leaves the channel with no way in) and after the session is recorded (so a failure
-    // here can't wedge the room by dropping the joins that follow).
-    await this.roomMessage.retirePrevious();
   }
 
   private async onParticipantJoined(event: ZoomMeetingEvent): Promise<void> {

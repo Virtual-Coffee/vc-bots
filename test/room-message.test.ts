@@ -13,8 +13,9 @@ import {
 
 /**
  * `RoomMessage` against the fake channel port and a Map-backed storage: the card layouts, the
- * standing-invite hand-off between cards, announcements, and vanished-message handling. The
- * Slack adapter and the DO's session state machine are covered end-to-end in coworking-do.test.ts.
+ * standing-invite hand-off between cards (retired by the next `open` / `announceOpen`),
+ * announcements, and vanished-message handling. The Slack adapter and the DO's session state
+ * machine are covered end-to-end in coworking-do.test.ts.
  */
 
 const env = { ROOM_TITLE: "Co-Working Room" };
@@ -132,7 +133,7 @@ describe("the ended card", () => {
 
   it("drops the invite when retired by a newer room message, keeping the stats", async () => {
     await room.close("ts-1", stats({ attendees: [{ slackUserId: "U1" }] }));
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
 
     const retired = port.updates.at(-1)!;
     expect(retired.ts).toBe("ts-1");
@@ -190,19 +191,44 @@ describe("the ended card", () => {
 });
 
 describe("the standing invite", () => {
-  it("close remembers the ended card; retirePrevious strips its invite once and forgets it", async () => {
+  it("close remembers the ended card; the next open strips its invite once and forgets it", async () => {
     await room.close("ts-1", stats());
     expect(storage.map.get(LAST_CLOSED_KEY)).toMatchObject({ ts: "ts-1" });
 
-    await room.retirePrevious();
+    const post = vi.spyOn(port, "post");
+    const update = vi.spyOn(port, "update");
+    await room.open(STARTED_AT);
+    expect(port.posts).toHaveLength(1);
     expect(port.updates).toHaveLength(2);
     expect(port.updates[1]!.ts).toBe("ts-1");
     expect(port.lastUpdateJson()).not.toContain(JOIN_ACTION_ID);
     expect(storage.map.has(LAST_CLOSED_KEY)).toBe(false);
+    // The new card goes up first, so a failed post never leaves the channel with no way in.
+    expect(post.mock.invocationCallOrder[0]).toBeLessThan(update.mock.invocationCallOrder[0]!);
 
     // Nothing left to retire — a second start doesn't touch the old card again.
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     expect(port.updates).toHaveLength(2);
+  });
+
+  it("a retire failure still opens the room and leaves the pointer for the next open to retry", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await room.close("ts-1", stats());
+
+    port.updateError = new Error("ratelimited");
+    const ts = await room.open(STARTED_AT);
+    expect(ts).toBe(port.posts[0]!.ts); // the session gets its card regardless
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("coworking.room_msg.retire_failed step=last_closed ts=ts-1"),
+    );
+    expect(storage.map.get(LAST_CLOSED_KEY)).toMatchObject({ ts: "ts-1" }); // not spent
+
+    // The next takeover retries it and only then forgets it.
+    port.updateError = null;
+    await room.open(STARTED_AT);
+    expect(port.updates.at(-1)!.ts).toBe("ts-1");
+    expect(port.lastUpdateJson()).not.toContain(JOIN_ACTION_ID);
+    expect(storage.map.has(LAST_CLOSED_KEY)).toBe(false);
   });
 
   it("does not remember a card that vanished before it could be closed", async () => {
@@ -211,7 +237,7 @@ describe("the standing invite", () => {
     expect(port.updates.at(-1)!.result).toBe("vanished");
     expect(storage.map.has(LAST_CLOSED_KEY)).toBe(false);
 
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     expect(port.updates).toHaveLength(1); // nothing to retire
   });
 
@@ -221,10 +247,10 @@ describe("the standing invite", () => {
     expect(port.updates.at(-1)!.result).toBe("vanished");
   });
 
-  it("retirePrevious still clears the pointer when the ended card has vanished", async () => {
+  it("open still clears the pointer when the ended card has vanished", async () => {
     await room.close("ts-1", stats());
     port.vanish("ts-1");
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     expect(storage.map.has(LAST_CLOSED_KEY)).toBe(false);
   });
 });
@@ -264,21 +290,22 @@ describe("announcements", () => {
     expect(json).toContain(String(Math.floor(ENDED_AT / 1000)));
 
     // The next room message retires it exactly like a session's ended card.
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     const retired = port.updates.at(-1)!;
     expect(retired.ts).toBe(announcementTs);
     expect(JSON.stringify(retired.blocks)).not.toContain(JOIN_ACTION_ID);
     expect(await room.announceClose()).toEqual({ closed: false }); // pointer spent
   });
 
-  it("retirePrevious closes a lingering open announcement without the invite", async () => {
+  it("open closes a lingering open announcement without the invite", async () => {
     vi.spyOn(Date, "now").mockReturnValue(STARTED_AT);
     await room.announceOpen();
     const announcementTs = port.posts[0]!.ts;
 
     vi.spyOn(Date, "now").mockReturnValue(ENDED_AT);
-    await room.retirePrevious(); // a session started while the announcement was still open
+    await room.open(STARTED_AT); // a session started while the announcement was still open
 
+    expect(port.posts).toHaveLength(2); // the session's own card
     const closed = port.updates.at(-1)!;
     expect(closed.ts).toBe(announcementTs);
     const json = JSON.stringify(closed.blocks);
@@ -306,14 +333,17 @@ describe("announcements", () => {
     expect(port.updates.at(-1)!.ts).toBe(port.posts[1]!.ts);
   });
 
-  it("announceOpen retires the previous session's ended card first", async () => {
+  it("announceOpen retires the previous session's ended card after posting", async () => {
     await room.close("ts-1", stats());
+    const post = vi.spyOn(port, "post");
+    const update = vi.spyOn(port, "update");
     await room.announceOpen();
 
     const retired = port.updates.at(-1)!;
     expect(retired.ts).toBe("ts-1");
     expect(JSON.stringify(retired.blocks)).not.toContain(JOIN_ACTION_ID);
     expect(port.posts).toHaveLength(1);
+    expect(post.mock.invocationCallOrder[0]).toBeLessThan(update.mock.invocationCallOrder[0]!);
   });
 
   it("announceClose is a no-op with nothing announced", async () => {
@@ -342,19 +372,23 @@ describe("legacy standing-invite cleanup", () => {
   it("deletes the retired lifecycle's message once and forgets the pointer", async () => {
     await storage.put(LEGACY_KEY, "1699999999.000001");
 
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     expect(port.deletes).toEqual(["1699999999.000001"]);
     expect(storage.map.has(LEGACY_KEY)).toBe(false);
 
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     expect(port.deletes).toHaveLength(1); // one-shot
   });
 
-  it("swallows a failed delete but still forgets the pointer", async () => {
+  it("warns on a failed delete and keeps the pointer for the next open to retry", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await storage.put(LEGACY_KEY, "1699999999.000001");
-    port.deleteError = new Error("message_not_found");
+    port.deleteError = new Error("ratelimited");
 
-    await expect(room.retirePrevious()).resolves.toBeUndefined();
-    expect(storage.map.has(LEGACY_KEY)).toBe(false);
+    expect(await room.open(STARTED_AT)).toBe(port.posts[0]!.ts); // the session still opens
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("coworking.room_msg.retire_failed step=legacy_delete"),
+    );
+    expect(storage.map.has(LEGACY_KEY)).toBe(true);
   });
 });
