@@ -18,7 +18,7 @@ beforeEach(() => {
   cmsEvents = [];
   const spy = vi.fn(async (input: unknown, init?: { body?: unknown }) => {
     let url: string;
-    let body = "";
+    let body: string;
     if (input instanceof Request) {
       url = input.url;
       body = new TextDecoder().decode(await input.clone().arrayBuffer());

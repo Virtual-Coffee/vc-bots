@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { log } from "../log";
+import { log, renderFields } from "../log";
 import { createSlackClient } from "./client";
 
 /**
@@ -15,17 +15,8 @@ export async function notifyBotLog(
 ): Promise<void> {
   if (!env.SLACK_BOTLOG_CHANNEL_ID) return;
 
-  // Render fields as `key=val` lines — same shape as the console logger, so the two read alike.
-  const detail = fields
-    ? Object.entries(fields)
-        .filter(([, value]) => value !== undefined)
-        .map(([key, value]) => {
-          const rendered =
-            value === null || typeof value === "object" ? JSON.stringify(value) : String(value);
-          return `${key}=${rendered}`;
-        })
-        .join("\n")
-    : "";
+  // `key=val` lines — same renderer as the console logger, so the two read alike.
+  const detail = fields ? renderFields(fields).join("\n") : "";
   const text = detail
     ? `:rotating_light: *${event}*\n\`\`\`${detail}\`\`\``
     : `:rotating_light: *${event}*`;

@@ -47,12 +47,13 @@ export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
     new SlackApp<Env>({
       env,
       // Static authorize (fixed single-workspace token) and the self-event filter off — ADR 0007.
-      authorize: async () => ({
-        botToken: env.SLACK_BOT_TOKEN,
-        botId: "",
-        botUserId: "",
-        botScopes: [],
-      }),
+      authorize: () =>
+        Promise.resolve({
+          botToken: env.SLACK_BOT_TOKEN,
+          botId: "",
+          botUserId: "",
+          botScopes: [],
+        }),
       ignoreSelfEvents: false,
     })
       .event("team_join", async ({ payload }) => handleTeamJoin(payload, env))

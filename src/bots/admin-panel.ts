@@ -5,7 +5,7 @@ import { log } from "../log";
 import { createSlackClient } from "../slack/client";
 import { deleteOriginal, replaceEphemeral } from "../slack/response";
 import { isWorkspaceAdmin, reminderReply } from "./admin";
-import { type ReminderName, sendReminder } from "./reminders";
+import { sendReminder } from "./reminders";
 import { publishHomeTab, sendWelcomeDm } from "./welcome";
 
 /**

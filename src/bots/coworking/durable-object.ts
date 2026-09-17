@@ -76,7 +76,8 @@ export class CoworkingRoom extends DurableObject<Env> {
     setLogLevel(env.LOG_LEVEL); // the DO runs in its own isolate
     this.sql = ctx.storage.sql;
     this.roomMessage = new RoomMessage(createSlackRoomChannelPort(env), ctx.storage, env);
-    ctx.blockConcurrencyWhile(async () => this.migrate());
+    // The runtime holds deliveries until this settles; nothing to await in a constructor.
+    void ctx.blockConcurrencyWhile(async () => this.migrate());
   }
 
   private async migrate(): Promise<void> {
@@ -244,7 +245,7 @@ export class CoworkingRoom extends DurableObject<Env> {
   }
 
   /** Resolve a `/join/<token>` redirect to its personal Zoom url, or null if unknown/expired. */
-  async resolveJoinToken(token: string): Promise<{ joinUrl: string } | null> {
+  resolveJoinToken(token: string): { joinUrl: string } | null {
     const row = this.sql
       .exec<{ join_url: string }>(
         "SELECT join_url FROM invite_link WHERE token = ? AND expires_at >= ?",

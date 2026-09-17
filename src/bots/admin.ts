@@ -4,7 +4,7 @@ import { log } from "../log";
 import { createSlackClient } from "../slack/client";
 import { respondEphemeral } from "../slack/response";
 import { adminPanelBlocks, PANEL_TEXT } from "./admin-panel";
-import { type ReminderName, type SendResult, sendReminder } from "./reminders";
+import { type SendResult, sendReminder } from "./reminders";
 import { publishHomeTab, sendWelcomeDm } from "./welcome";
 
 /**
