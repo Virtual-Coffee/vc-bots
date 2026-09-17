@@ -1,0 +1,10 @@
+{
+  "printWidth": 100,
+  "trailingComma": "all",
+  "overrides": [
+    {
+      "files": ["*.jsonc", ".vscode/*.json"],
+      "options": { "parser": "jsonc", "trailingComma": "none" }
+    }
+  ]
+}
