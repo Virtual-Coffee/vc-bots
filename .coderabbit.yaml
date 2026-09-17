@@ -29,6 +29,11 @@ reviews:
     - "!node_modules/**"
     - "!.wrangler/**"
     - "!dist/**"
+    # `pnpm gen:api-types` output and the vendored provider specs (docs/adr/0012); the two
+    # hand-written OAuth fragments in specs/ stay in review.
+    - "!src/generated/**"
+    - "!specs/google-calendar-v3.openapi.json"
+    - "!specs/zoom-meetings.openapi.json"
 
   pre_merge_checks:
     docstrings:
