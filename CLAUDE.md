@@ -76,10 +76,13 @@ action + view handler.
 is a SQLite-backed Durable Object, **one instance per Zoom meeting ID**, addressed with
 `env.COWORKING_ROOM.getByName(meetingId)`. The Zoom webhook subscription is account-wide, so the
 router drops events whose meeting ID isn't `ZOOM_MEETING_ID` (other meetings under the account)
-before any DO is touched. Routing all of a meeting's webhooks through a single
-instance serializes them, so there are no eventual-consistency races (a member_link row is always
-written before the join that reads it). The DO must be re-exported from `src/index.ts` for the
-runtime to bind it. Schema (`session` / `member_link` / `participant` / `invite_link`) is created
+before any DO is touched, then ACKs and dispatches in `ctx.waitUntil`. ⚠️ A single instance does
+**not** make the handlers race-free: input gates only cover storage ops, so other requests are
+delivered while a handler awaits a Slack `fetch`. The DO therefore queues everything that touches
+the session state machine or the room message itself (`enqueue` — Zoom events, the alarm, admin
+announcements); the join-token RPCs only touch `member_link` / `invite_link` and stay outside so
+the Join button isn't slowed. See `docs/adr/0003-zoom-events-serialized-in-the-do.md`. The DO must
+be re-exported from `src/index.ts` for the runtime to bind it. Schema (`session` / `member_link` / `participant` / `invite_link`) is created
 idempotently in `migrate()` under `blockConcurrencyWhile`. A stale-session `alarm()` force-closes sessions that
 never received `meeting.ended`. The DO owns only the session state machine and the join tokens;
 everything about the channel message is delegated to `RoomMessage`.

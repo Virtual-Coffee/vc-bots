@@ -13,9 +13,8 @@ import {
 import { eventTimeMs, instanceUuid, participantIdentity } from "./zoom-events";
 
 /**
- * Co-working room — one Durable Object instance per Zoom meeting ID. All events for a meeting
- * serialize through this single instance, so the session row is always written before a join
- * is processed (no eventual-consistency race).
+ * Co-working room — one Durable Object instance per Zoom meeting ID. The instance alone does not
+ * serialize its handlers; `enqueue` does (ADR 0003).
  *
  * The DO owns the session state machine (the `session` / `participant` / `member_link` /
  * `invite_link` tables, the stale-session alarm, and the join tokens) and mints per-user Zoom
@@ -66,6 +65,8 @@ type ParticipantRow = {
 export class CoworkingRoom extends DurableObject<Env> {
   private readonly sql: SqlStorage;
   private readonly roomMessage: RoomMessage;
+  /** Tail of the serialized work queue — see `enqueue`. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -120,6 +121,16 @@ export class CoworkingRoom extends DurableObject<Env> {
       .toArray()
       .some((c) => c.name === column);
     if (!exists) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+
+  /**
+   * Run `work` after every previously queued piece of work has finished (ADR 0003). The tail
+   * never rejects, so one failing handler can't wedge the room; the caller still sees its own failure.
+   */
+  private enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(work);
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
   // --- RPC surface ---
@@ -194,36 +205,40 @@ export class CoworkingRoom extends DurableObject<Env> {
    * session behind it, so it never collides with the Zoom-driven flow.
    */
   async adminAnnounceOpen(): Promise<void> {
-    await this.roomMessage.announceOpen();
+    await this.enqueue(() => this.roomMessage.announceOpen());
   }
 
   /** Admin (`/vc-bot-admin coworking close`): turn the open announcement into an ended card. */
   async adminAnnounceClose(): Promise<{ closed: boolean }> {
-    return this.roomMessage.announceClose();
+    return this.enqueue(() => this.roomMessage.announceClose());
   }
 
   async handleZoomEvent(event: ZoomMeetingEvent): Promise<void> {
-    switch (event.event) {
-      case "meeting.started":
-        return this.onMeetingStarted(event);
-      case "meeting.ended":
-        return this.onMeetingEnded(event);
-      case "meeting.participant_joined":
-        return this.onParticipantJoined(event);
-      case "meeting.participant_left":
-        return this.onParticipantLeft(event);
-    }
+    return this.enqueue(() => {
+      switch (event.event) {
+        case "meeting.started":
+          return this.onMeetingStarted(event);
+        case "meeting.ended":
+          return this.onMeetingEnded(event);
+        case "meeting.participant_joined":
+          return this.onParticipantJoined(event);
+        case "meeting.participant_left":
+          return this.onParticipantLeft(event);
+      }
+    });
   }
 
   /** Stale-session safety net: force-end any session still active hours after it started. */
   override async alarm(): Promise<void> {
-    const active = this.sql
-      .exec<SessionRow>("SELECT * FROM session WHERE status = 'active'")
-      .toArray();
-    log.warn("coworking.alarm", { staleSessions: active.length });
-    for (const session of active) {
-      await this.closeSession(session, Date.now());
-    }
+    await this.enqueue(async () => {
+      const active = this.sql
+        .exec<SessionRow>("SELECT * FROM session WHERE status = 'active'")
+        .toArray();
+      log.warn("coworking.alarm", { staleSessions: active.length });
+      for (const session of active) {
+        await this.closeSession(session, Date.now());
+      }
+    });
   }
 
   // --- Event handlers ---
@@ -275,8 +290,8 @@ export class CoworkingRoom extends DurableObject<Env> {
     const uuid = instanceUuid(event);
     const session = this.getSession(uuid);
     if (session?.status !== "active") {
-      log.debug("coworking.joined.drop_no_session", { instance: uuid });
-      return; // no open session — drop (race-safe)
+      log.warn("coworking.joined.drop_no_session", { instance: uuid });
+      return; // no open session — dropped, not buffered (ADR 0003)
     }
 
     const participant = event.payload.object.participant;

@@ -34,8 +34,8 @@ there's no signature to check), and `GET /health`. Every provider route:
 
 **The co-working room is the one stateful piece.** `CoworkingRoom`
 (`src/bots/coworking/durable-object.ts`) is a SQLite-backed Durable Object, one instance per
-Zoom meeting ID. Routing all of a meeting's webhooks through a single instance serializes them,
-eliminating eventual-consistency races. The DO keeps the session state; the room message itself
+Zoom meeting ID. The DO queues its own handlers so a join can't interleave with the session start
+(`docs/adr/0003`). The DO keeps the session state; the room message itself
 lives in `RoomMessage` (`src/bots/coworking/room-message.ts`), behind a small Slack port. Zoom
 `meeting.started` **posts a new** open card — a fresh post is what makes Slack notify the channel
 that the room opened, where an edit would be silent; `participant_joined/left` edit its live
