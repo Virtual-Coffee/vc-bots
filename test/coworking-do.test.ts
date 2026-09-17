@@ -26,7 +26,8 @@ afterEach(() => vi.unstubAllGlobals());
 // --- helpers ---
 
 interface ParticipantInput {
-  user_id: string;
+  user_id?: string;
+  participant_uuid?: string;
   user_name: string;
 }
 
@@ -387,6 +388,23 @@ describe("CoworkingRoom — participant correlation & presence", () => {
     const presence = lastBlocks("/api/chat.update");
     expect(presence).not.toContain("Ada");
     expect(presence.toLowerCase()).toContain("nobody");
+  });
+
+  it("a joiner with only participant_uuid is tracked, and their leave matches", async () => {
+    const stub = room("c4b");
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-1", { participant_uuid: "pu-1", user_name: "Ada" }),
+    );
+    expect(lastBlocks("/api/chat.update")).toContain("Ada");
+
+    await stub.handleZoomEvent(
+      event("meeting.participant_left", "uuid-1", { participant_uuid: "pu-1", user_name: "Ada" }),
+    );
+    const parts = await participants(stub);
+    expect(parts).toHaveLength(1);
+    expect(parts[0]?.left_at).not.toBeNull();
+    expect(lastBlocks("/api/chat.update")).not.toContain("Ada");
   });
 
   it("drops a participant_joined with no active session", async () => {

@@ -3,14 +3,13 @@ import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
 import { getCachedZoomToken } from "../../zoom/oauth";
 import { createInviteLink } from "../../zoom/invite-links";
-import type { ZoomMeetingEvent } from "../../zoom/types";
+import type { ZoomMeetingEvent, ZoomParticipant } from "../../zoom/types";
 import {
   type PresenceUser,
   RoomMessage,
   type SessionStats,
   createSlackRoomChannelPort,
 } from "./room-message";
-import { eventTimeMs, instanceUuid, participantIdentity } from "./zoom-events";
 
 /**
  * Co-working room — one Durable Object instance per Zoom meeting ID. The instance alone does not
@@ -327,7 +326,10 @@ export class CoworkingRoom extends DurableObject<Env> {
     const participant = event.payload.object.participant;
     if (!participant) return;
     const id = participantIdentity(participant);
-    if (!id.zoomUserId) return;
+    if (!id.zoomUserId) {
+      log.debug("coworking.joined.drop_no_id", { instance: uuid });
+      return;
+    }
 
     log.debug("coworking.join.correlate", { instance: uuid });
     // Best-effort: match the Zoom display name to a member who minted an invite link.
@@ -511,4 +513,31 @@ export class CoworkingRoom extends DurableObject<Env> {
       .exec<SessionRow>("SELECT * FROM session WHERE instance_uuid = ?", uuid)
       .toArray()[0];
   }
+}
+
+// --- Zoom event helpers ---
+
+interface ParticipantIdentity {
+  /** Per-meeting id used to match a later participant_left to this join. */
+  zoomUserId: string;
+  displayName: string;
+}
+
+function instanceUuid(event: ZoomMeetingEvent): string {
+  return event.payload.object.uuid;
+}
+
+/** Event timestamp in ms — prefer Zoom's `event_ts`, fall back to wall clock. */
+function eventTimeMs(event: ZoomMeetingEvent): number {
+  return typeof event.event_ts === "number" ? event.event_ts : Date.now();
+}
+
+function participantIdentity(p: ZoomParticipant): ParticipantIdentity {
+  // user_id is the per-meeting handle Zoom reuses across this participant's join/leave pair.
+  // participant_uuid is the most reliable fallback if user_id is absent.
+  const zoomUserId = p.user_id || p.participant_uuid || p.participant_user_id || "";
+  return {
+    zoomUserId,
+    displayName: p.user_name?.trim() || "A guest",
+  };
 }
