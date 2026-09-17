@@ -26,12 +26,9 @@ async function postToResponseUrl(
 }
 
 /**
- * Post a message to a Slack `response_url` (interactivity + slash-command follow-ups).
- * Defaults to an ephemeral reply visible only to the invoking user.
- *
- * `replace_original: false` matters when the interaction came from a shared channel message
- * (e.g. the room's Join button): without it Slack could replace that message for everyone
- * instead of adding a new ephemeral for the clicker.
+ * Post a new ephemeral reply to a Slack `response_url` (interactivity + slash-command
+ * follow-ups). Pins `response_type: "ephemeral"` and `replace_original: false`, so it is safe
+ * against any `response_url` — including a shared channel message's. See ADR 0004.
  */
 export async function respondEphemeral(
   responseUrl: string,
@@ -53,9 +50,8 @@ export async function respondEphemeral(
 }
 
 /**
- * Replace the message an interaction came from with new content (`replace_original: true`).
- * Only safe for per-user surfaces (the admin panel ephemeral) — on a shared channel message
- * (e.g. the room's Join button) this would rewrite that message for everyone.
+ * Replace the message an interaction came from (`replace_original: true`). Per-user
+ * ephemerals only (the admin panel), never a shared channel message's `response_url`. ADR 0004.
  */
 export async function replaceEphemeral(
   responseUrl: string,
@@ -75,8 +71,8 @@ export async function replaceEphemeral(
 }
 
 /**
- * Delete the message an interaction came from. Only safe for per-user surfaces (the join
- * ephemeral) — on a shared channel message this would delete it for everyone.
+ * Delete the message an interaction came from. Per-user ephemerals only (the join ephemeral),
+ * never a shared channel message's `response_url`. ADR 0004.
  */
 export async function deleteOriginal(responseUrl: string): Promise<void> {
   await postToResponseUrl(responseUrl, { delete_original: true }, "deleteOriginal");

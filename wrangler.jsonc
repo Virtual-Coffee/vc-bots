@@ -13,7 +13,7 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] }],
 
   // Event announcements (UTC). Disable with [] — dropping the key leaves deployed crons running.
-  // Weekdays are Quartz-style (1 = Sunday), so spell them (MON). Pinned by test/reminders-cron.test.ts.
+  // Weekdays spelled (MON): Cloudflare is Quartz-style. Pinned by test/reminders-cron.test.ts; ADR 0005.
   "triggers": { "crons": ["0 12 * * *", "0 12 * * MON"] },
 
   "observability": { "enabled": true },

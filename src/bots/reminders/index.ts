@@ -26,8 +26,8 @@ export type { ReminderName } from "./source";
  *
  * Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST (accepted DST drift). Both crons
  * are live in wrangler.jsonc.
- * ⚠️ `CRON_TO_KIND` keys MUST equal `triggers.crons` byte-for-byte — enforced by test/reminders-cron.test.ts.
- * ⚠️ Weekdays are spelled (`MON`), never numeric (Cloudflare is Quartz-style) — same test.
+ * ⚠️ `CRON_TO_KIND` keys MUST equal `triggers.crons` byte-for-byte — enforced by test/reminders-cron.test.ts; ADR 0005.
+ * ⚠️ Weekdays are spelled (`MON`), never numeric (Cloudflare is Quartz-style) — same test; ADR 0005.
  */
 
 // Maps each cron expression → reminder name. Pinned to wrangler.jsonc by test/reminders-cron.test.ts.

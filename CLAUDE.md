@@ -50,16 +50,12 @@ Hand the request to `app.run(req, ctx)` **unread** (it reads the body itself).
 2. **Handle the provider URL-verification handshake**, then dispatch (`SlackApp` answers
    Slack's `url_verification` itself).
 
-**ACK fast, work later.** Slack/Zoom impose a ~3s response window. Routes return `200`
-immediately and run the actual bot work afterwards via `ctx.waitUntil(...)` — for Slack that
-is the `SlackApp` ack/lazy-handler split (every registration in `src/slack/app.ts` ACKs with a
-no-op and does the work in the lazy handler). Final user-facing replies go back through
-Slack's `response_url` via `src/slack/response.ts` (`respondEphemeral` / `deleteOriginal` /
-`replaceEphemeral`) rather than the HTTP response. ⚠️ Keep using those helpers — they hard-code
-`response_type: "ephemeral"`; the framework's `context.respond` posts params verbatim with no
-such guardrail, so **don't adopt it**. `respondEphemeral` pins `replace_original: false`;
-`replaceEphemeral` (`true`) and `deleteOriginal` are safe **only against per-user ephemerals**
-(the admin panel, the join ephemeral) — never the shared room message's `response_url`.
+**ACK fast, work later** (ADR 0004). Routes return `200` immediately and do the work in
+`ctx.waitUntil(...)`; for Slack every registration in `src/slack/app.ts` ACKs with a no-op and
+works in the lazy handler. Replies go through `src/slack/response.ts` only — `respondEphemeral`
+against any `response_url`; `replaceEphemeral` / `deleteOriginal` only against per-user
+ephemerals (the admin panel, the join ephemeral), never the shared room message's. Not the
+framework's `context.respond`.
 
 **Modals (`.viewSubmission`).** `/vc-bot-admin` with no args posts an ephemeral admin panel
 (`src/bots/admin-panel.ts`): buttons open modals via `client.views.open({ trigger_id, view })`,
@@ -134,23 +130,20 @@ start − 10 min via Slack `chat.scheduleMessage`, first deleting the bot's sche
 the window so re-runs reconcile instead of duplicating; on Mondays it skips its summary (the
 weekly covers it) but still schedules. Event windows are computed in `America/New_York`. Events
 come through the `EventSource` abstraction (`source.ts`); the CMS GraphQL adapter
-(`sources/cms.ts`) is the only source today — a Google Calendar source is planned. ⚠️ The cron
-strings in `CRON_TO_KIND` (`index.ts`) **must stay byte-identical to `triggers.crons` in
-wrangler.jsonc** — that string is the lookup key mapping a fired cron to a reminder kind. Crons
-fire in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * MON` weekly). ⚠️ Cloudflare
-parses cron weekdays **Quartz-style — `1` = Sunday … `7` = Saturday**, not the Unix `0` = Sunday;
-spell weekdays as `MON`/`SUN` so a numeric field can't silently shift the day (Luxon's
-`weekday === 1` in `sendDaily` is ISO Monday and unrelated). To disable, set
-`triggers.crons: []` — deploying an empty array deregisters crons already on Cloudflare, whereas
-deleting the key would leave them running. The same `sendReminder` is reused by the
-`/vc-bot-admin` slash command for manual runs/previews. Failure paths that have no other surface
-(the cron run, the co-working DO/Zoom handlers, the join flow) alert the private `#bot-log`
-channel via `notifyBotLog` (`src/slack/notify.ts`, `SLACK_BOTLOG_CHANNEL_ID`) — a no-op when the
-channel id is empty, and self-swallowing so a failed alert never loops.
+(`sources/cms.ts`) is the only source today — a Google Calendar source is planned. Crons fire
+in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * MON` weekly); `CRON_TO_KIND`
+(`src/bots/reminders/index.ts`) must match `triggers.crons` in wrangler.jsonc byte-for-byte,
+weekdays spelled `MON`/`SUN` (Cloudflare is Quartz-style), disable by deploying
+`triggers.crons: []` — `test/reminders-cron.test.ts` enforces the first two (ADR 0005). The
+same `sendReminder` is reused by the `/vc-bot-admin` slash command for manual runs/previews.
+Failure paths with no other surface (the cron run, the Zoom webhook → DO dispatch, the join
+flow) alert `#bot-log` via an explicit `notifyBotLog` call (`src/slack/notify.ts`; a no-op when
+`SLACK_BOTLOG_CHANNEL_ID` is empty) — never hooked into `log` (ADR 0006).
 
 **Slack client.** Always `createSlackClient(env)` for outbound calls with no inbound Slack
 request (the CoworkingRoom DO, the cron reminders); inside `SlackApp` handlers it's the same
-client either way. All Slack imports (client, Block Kit types, payload types) come from
+client either way. `createSlackApp` uses a static `authorize` (fixed token, empty bot ids) with
+`ignoreSelfEvents: false` (ADR 0007). All Slack imports (client, Block Kit types, payload types) come from
 `slack-cloudflare-workers` (which re-exports `slack-edge` and `slack-web-api-client`) —
 **do not add `@slack/web-api`** (it isn't edge-compatible) and don't depend on
 `slack-web-api-client` directly (it's transitive; pnpm's strict `node_modules` would break).
