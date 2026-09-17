@@ -620,7 +620,8 @@ describe("CoworkingRoom — schema migration", () => {
         .map((c) => c.name);
 
     // The instance has already booted (and migrated) by the time the callback runs, so rebuild
-    // the pre-A2 schema by hand: the open card's ts on the session row, no open pointer.
+    // the pre-A2 schema by hand: the open card's ts on the session row, no open pointer. A second,
+    // older row still marked active (its meeting.ended never arrived) must not win the adoption.
     await runInDurableObject(stub, async (instance, state) => {
       state.storage.sql.exec(`
         DROP TABLE session;
@@ -633,7 +634,8 @@ describe("CoworkingRoom — schema migration", () => {
           peak_participants INTEGER NOT NULL DEFAULT 0
         );
         INSERT INTO session (instance_uuid, slack_message_ts, started_at, status)
-          VALUES ('uuid-old', 'old-ts', 1700000000000, 'active');
+          VALUES ('uuid-older', 'older-ts', 1600000000000, 'active'),
+                 ('uuid-old', 'old-ts', 1700000000000, 'active');
       `);
       await state.storage.delete("room_message:open");
       expect(columns(state)).toContain("slack_message_ts");

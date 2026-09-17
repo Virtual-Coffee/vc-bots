@@ -122,7 +122,9 @@ export class CoworkingRoom extends DurableObject<Env> {
       const open = this.sql
         .exec<{ slack_message_ts: string; started_at: number | null }>(
           `SELECT slack_message_ts, started_at FROM session
-           WHERE status = 'active' AND slack_message_ts IS NOT NULL`,
+           WHERE status = 'active' AND slack_message_ts IS NOT NULL
+           ORDER BY started_at DESC
+           LIMIT 1`,
         )
         .toArray()[0];
       if (open) {
