@@ -58,6 +58,7 @@ answer is "keep your own datastore" — see
   is workspace-readable, not public; the site's `/admin/events` is the only writer of `hostCode`
   (Google's UI cannot set extended properties) and requires one whenever the Join Link is a Zoom
   URL. The `joinLink` and `slackChannelId` private properties are retired on that side too.
-- Calendar migration (manual): set `location` on the Morning/Afternoon Crowd series, clear the
-  old `joinLink` property, keep `hostCode` on every Zoom series, and convert existing
-  descriptions to Markdown.
+- Calendar migration: `pnpm fix-calendar --apply` (`scripts/fix-calendar.ts`) sets `location`
+  from the old `joinLink` property wherever they differ (the Morning/Afternoon Crowd series),
+  deletes `joinLink`, and converts existing descriptions to Markdown; `hostCode` stays on every
+  Zoom series. Dry-run by default.

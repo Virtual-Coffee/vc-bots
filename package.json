@@ -15,6 +15,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
+    "fix-calendar": "node scripts/fix-calendar.ts",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm knip"
   },
   "keywords": [],

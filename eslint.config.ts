@@ -61,6 +61,13 @@ export default defineConfig(
     extends: [tseslint.configs.disableTypeChecked],
   },
   {
+    // One-off CLIs (`pnpm fix-calendar`) run under plain `node`, sit outside tsconfig
+    // `include` like the root config files, and print to stdout by design.
+    files: ["scripts/**/*.ts"],
+    extends: [tseslint.configs.disableTypeChecked],
+    rules: { "no-console": "off" },
+  },
+  {
     // The leveled logger is the one sanctioned console caller.
     files: ["src/log.ts"],
     rules: { "no-console": "off" },

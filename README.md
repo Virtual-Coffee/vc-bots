@@ -164,6 +164,9 @@ pnpm cf-types     # regenerate worker-configuration.d.ts after wrangler.jsonc ch
 
 pnpm vitest run test/coworking-do.test.ts   # a single test file
 pnpm vitest -t "name of test"               # tests matching a name
+
+pnpm fix-calendar [--apply]   # one-off Join Link / Markdown calendar migration (ADR 0001);
+                              # dry-run by default, needs GOOGLE_SERVICE_ACCOUNT_KEY in the env
 ```
 
 Tests run inside `workerd` via `@cloudflare/vitest-pool-workers`, so Web Crypto, the Durable
