@@ -2,10 +2,9 @@ import type { SlackAPIClient } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
-import { homeView } from "../app-home";
 import type { WatchStatus } from "../calendar-sync/durable-object";
 import { type ReminderName, type SendResult, sendReminder } from "../reminders";
-import { welcomeBlocks } from "../welcome";
+import { publishHomeTab, sendWelcomeDm } from "../welcome";
 
 /**
  * The admin actions behind `/vc-bot-admin`, surface-agnostic. The slash command (`slash.ts`)
@@ -91,19 +90,12 @@ async function perform(env: Env, action: AdminAction): Promise<AdminResult> {
     }
 
     case "welcome": {
-      await createSlackClient(env).chat.postMessage({
-        channel: action.target,
-        text: "Welcome message preview",
-        blocks: welcomeBlocks(env, action.target),
-        link_names: true,
-        unfurl_links: false,
-        unfurl_media: false,
-      });
+      await sendWelcomeDm(env, action.target);
       return { kind: "welcome", target: action.target };
     }
 
     case "home": {
-      await createSlackClient(env).views.publish({ user_id: action.userId, view: homeView(env) });
+      await publishHomeTab(env, action.userId);
       return { kind: "home" };
     }
 
@@ -187,7 +179,8 @@ function watchStatusText(status: WatchStatus): string {
   if (status.channelId) parts.push(`Channel: \`${status.channelId}\`.`);
   if (status.expiresAt !== null) {
     const secs = Math.floor(status.expiresAt / 1000);
-    const fallback = new Date(status.expiresAt).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+    const fallback =
+      new Date(status.expiresAt).toISOString().replace("T", " ").slice(0, 16) + " UTC";
     parts.push(`Expires <!date^${secs}^{date_short_pretty} {time}|${fallback}>.`);
   }
   return parts.join(" ");

@@ -1,6 +1,10 @@
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
+import { unstable_readConfig } from "wrangler";
 import { generateServiceAccountKey } from "./test/helpers/google-key";
+
+// The live cron strings, so test/reminders-cron.test.ts can pin CRON_TO_KIND to wrangler.jsonc.
+const { crons } = unstable_readConfig({ config: "./wrangler.jsonc" }).triggers;
 
 /**
  * Tests run inside the real `workerd` runtime (via Miniflare), so Web Crypto, the Durable
@@ -38,6 +42,8 @@ export default defineConfig(async () => {
             GOOGLE_SERVICE_ACCOUNT_KEY: testServiceAccountKey,
             GOOGLE_WATCH_TOKEN: "test-watch-token",
             GOOGLE_CALENDAR_ID: "vc-events-test@group.calendar.google.com",
+            // Test-only: the configured `triggers.crons`, for the cron-contract test.
+            TEST_WRANGLER_CRONS: JSON.stringify(crons),
           },
         },
       }),

@@ -80,7 +80,7 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
   const spy = vi.fn(async (input: unknown, init?: { method?: string; body?: unknown }) => {
     let url: string;
     let method: string;
-    let body = "";
+    let body: string;
     if (input instanceof Request) {
       url = input.url;
       method = input.method;

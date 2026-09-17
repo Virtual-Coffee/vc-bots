@@ -9,7 +9,11 @@ import type { CalendarSync } from "../src/bots/calendar-sync/durable-object";
 import type { Env } from "../src/env";
 import { setLogLevel } from "../src/log";
 import { route } from "../src/router";
-import { createCalendarFake, type FakeCalendar, installCalendarFake } from "./helpers/calendar-fake";
+import {
+  createCalendarFake,
+  type FakeCalendar,
+  installCalendarFake,
+} from "./helpers/calendar-fake";
 import { type FetchRecorder, installFetchRecorder } from "./helpers/fetch-recorder";
 
 /**
@@ -107,12 +111,11 @@ async function send(req: Request, overrideEnv: Env): Promise<Response> {
   return res;
 }
 
-const googleEnv = (): Env =>
-  ({
-    ...env,
-    EVENT_SOURCE: "google",
-    GOOGLE_WATCH_TOKEN: "tok",
-  }) as Env;
+const googleEnv = (): Env => ({
+  ...env,
+  EVENT_SOURCE: "google",
+  GOOGLE_WATCH_TOKEN: "tok",
+});
 
 describe("POST /google/notify", () => {
   it("200s the initial sync notification without touching the calendar", async () => {
@@ -125,10 +128,7 @@ describe("POST /google/notify", () => {
     setLogLevel("info");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const res = await send(
-      gcalRequest("sync", { "X-Goog-Channel-Token": "wrong" }),
-      googleEnv(),
-    );
+    const res = await send(gcalRequest("sync", { "X-Goog-Channel-Token": "wrong" }), googleEnv());
 
     expect(res.status).toBe(200);
     expect(untouched()).toBe(true);
@@ -138,11 +138,7 @@ describe("POST /google/notify", () => {
 
   it("404s a non-POST method (route is POST-only)", async () => {
     const ctx = createExecutionContext();
-    const res = await route(
-      new Request("https://bots.example/google/notify"),
-      googleEnv(),
-      ctx,
-    );
+    const res = await route(new Request("https://bots.example/google/notify"), googleEnv(), ctx);
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(404);
   });
@@ -151,10 +147,7 @@ describe("POST /google/notify", () => {
     setLogLevel("info");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const res = await send(
-      gcalRequest("exists", { "X-Goog-Channel-Token": "wrong" }),
-      googleEnv(),
-    );
+    const res = await send(gcalRequest("exists", { "X-Goog-Channel-Token": "wrong" }), googleEnv());
 
     expect(res.status).toBe(200);
     expect(untouched()).toBe(true);
@@ -166,7 +159,7 @@ describe("POST /google/notify", () => {
     const res = await send(gcalRequest("exists"), {
       ...googleEnv(),
       EVENT_SOURCE: "cms",
-    } as Env);
+    });
 
     expect(res.status).toBe(200);
     expect(untouched()).toBe(true);

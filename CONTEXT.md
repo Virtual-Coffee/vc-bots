@@ -49,7 +49,7 @@ Everyone who dropped in during a session, each listed once.
 _Avoid_: attendees, participants list
 
 **Member**:
-A person in the room who has been matched to their Slack account.
+A person in the room matched, by the display name on a recent invite link, to their Slack account.
 
 **Guest**:
 A person in the room who could not be matched to a Slack account.

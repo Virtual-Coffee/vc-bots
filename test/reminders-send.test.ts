@@ -58,7 +58,13 @@ describe("sendReminder — daily", () => {
   it("skips the summary on Mondays (weekly covers it) but still schedules", async () => {
     googleEvents = [evt("1", "2026-05-25T18:00:00")];
     const result = await sendReminder("daily", env, MONDAY_NOW);
-    expect(result).toEqual({ posted: false, count: 1, scheduled: 1, reason: "monday", source: "google" });
+    expect(result).toEqual({
+      posted: false,
+      count: 1,
+      scheduled: 1,
+      reason: "monday",
+      source: "google",
+    });
 
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(2);
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
@@ -66,14 +72,23 @@ describe("sendReminder — daily", () => {
 
   it("posts nothing when there are no events", async () => {
     const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: false, count: 0, scheduled: 0, reason: "no-events", source: "google" });
+    expect(result).toEqual({
+      posted: false,
+      count: 0,
+      scheduled: 0,
+      reason: "no-events",
+      source: "google",
+    });
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
   });
 });
 
 describe("sendReminder — weekly", () => {
   it("posts one summary to the announcements channel and schedules nothing", async () => {
-    googleEvents = [evt("1", "2026-05-28T18:00:00"), evt("2", "2026-05-30T15:00:00", ZOOM_LOCATION)];
+    googleEvents = [
+      evt("1", "2026-05-28T18:00:00"),
+      evt("2", "2026-05-30T15:00:00", ZOOM_LOCATION),
+    ];
     const result = await sendReminder("weekly", env, NOW);
     expect(result).toEqual({ posted: true, count: 2, source: "google" });
 

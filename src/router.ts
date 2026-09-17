@@ -12,17 +12,13 @@ import { handleZoomWebhook } from "./zoom/webhook";
  * the Zoom route (`src/zoom/webhook.ts`) does it as its FIRST step; the Slack routes delegate
  * to the `SlackApp` (`src/slack/app.ts`), which does the same internally.
  */
-export async function route(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<Response> {
+export async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method;
 
   // Health check — handy for uptime pings and the deploy smoke test.
-  if ((method === "GET" && path === "/health") || (method === 'HEAD' && path === '/')) {
+  if ((method === "GET" && path === "/health") || (method === "HEAD" && path === "/")) {
     return new Response("ok", { status: 200 });
   }
 
@@ -36,7 +32,7 @@ export async function route(
 
   switch (`${method} ${path}`) {
     case "POST /zoom/webhook":
-      return handleZoomWebhook(req, env);
+      return handleZoomWebhook(req, env, ctx);
 
     case "POST /google/notify":
       return handleGoogleNotify(req, env, ctx);
@@ -87,11 +83,7 @@ async function handleJoinRedirect(token: string, env: Env): Promise<Response> {
 // X-Goog-* headers. There's no body signature; authenticity is the per-channel token we set when
 // registering the watch. We ACK fast (200) and run the sync via the DO in the background — non-2xx
 // would make Google retry-storm, so even dropped notifications return 200.
-async function handleGoogleNotify(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<Response> {
+function handleGoogleNotify(req: Request, env: Env, ctx: ExecutionContext): Response {
   const goog: Record<string, string> = {};
   for (const [k, v] of req.headers) {
     if (k.startsWith("x-goog-")) goog[k] = v;

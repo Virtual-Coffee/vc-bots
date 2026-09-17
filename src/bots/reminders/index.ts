@@ -22,16 +22,12 @@ export { activeSourceName, EASTERN, EVENT_SOURCE_NAMES, isEventSourceName } from
  *
  * Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST (accepted DST drift). Both crons
  * are live in wrangler.jsonc.
- * ⚠️ The cron strings in `CRON_TO_KIND` MUST stay byte-identical to `triggers.crons` in
- * wrangler.jsonc — `controller.cron` is the configured expression character-for-character,
- * so a mismatch means that reminder silently never runs.
- * ⚠️ Cloudflare parses cron weekdays Quartz-style (1 = Sunday … 7 = Saturday), so the weekday
- * is spelled `MON` rather than a number. Unrelated to the Luxon `weekday === 1` check in
- * `sendDaily`, which is ISO (1 = Monday) and correct as written.
+ * ⚠️ `CRON_TO_KIND` keys MUST equal `triggers.crons` byte-for-byte — enforced by test/reminders-cron.test.ts; ADR 0005.
+ * ⚠️ Weekdays are spelled (`MON`), never numeric (Cloudflare is Quartz-style) — same test; ADR 0005.
  */
 
-// Maps each cron expression → reminder name. Keys must equal wrangler.jsonc cron strings.
-const CRON_TO_KIND: Record<string, ReminderName> = {
+// Maps each cron expression → reminder name. Pinned to wrangler.jsonc by test/reminders-cron.test.ts.
+export const CRON_TO_KIND: Record<string, ReminderName> = {
   "0 12 * * *": "daily",
   "0 12 * * MON": "weekly",
 };
@@ -74,11 +70,12 @@ export async function runReminders(
   controller: ScheduledController,
   env: Env,
   _ctx: ExecutionContext,
+  send: typeof sendReminder = sendReminder,
 ): Promise<void> {
   const name = CRON_TO_KIND[controller.cron];
   if (!name) return; // unrecognized cron — nothing to do
   try {
-    await sendReminder(name, env, controller.scheduledTime);
+    await send(name, env, controller.scheduledTime);
   } catch (error) {
     // No user surface on the cron path — log, alert #bot-log, and swallow so a Calendar/Zoom/
     // Slack hiccup doesn't surface as an unhandled rejection in `scheduled()`.
@@ -111,7 +108,13 @@ async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<
   // Mondays get the weekly summary instead; the starting-soon scheduling above still ran.
   if (DateTime.fromMillis(nowMs, { zone: "America/New_York" }).weekday === 1) {
     log.info("reminder.daily_monday_skip", { count: events.length, scheduled });
-    return { posted: false, count: events.length, scheduled, reason: "monday", source: source.name };
+    return {
+      posted: false,
+      count: events.length,
+      scheduled,
+      reason: "monday",
+      source: source.name,
+    };
   }
   if (events.length === 0) {
     log.info("reminder.skipped", { kind: "daily" });

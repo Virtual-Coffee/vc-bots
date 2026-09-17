@@ -1,6 +1,11 @@
 import { DateTime } from "luxon";
 import { describe, expect, it } from "vitest";
-import { EVENT_SOURCE_NAMES, getEventSource, isEventSourceName, reminderRange } from "../src/bots/reminders/source";
+import {
+  EVENT_SOURCE_NAMES,
+  getEventSource,
+  isEventSourceName,
+  reminderRange,
+} from "../src/bots/reminders/source";
 import { env } from "cloudflare:test";
 import type { Env } from "../src/env";
 
@@ -15,19 +20,19 @@ describe("getEventSource / isEventSourceName", () => {
   });
 
   it("returns the google source when EVENT_SOURCE is 'google'", () => {
-    const source = getEventSource({ ...env, EVENT_SOURCE: "google" } as Env);
+    const source = getEventSource({ ...env, EVENT_SOURCE: "google" });
     expect(source.name).toBe("google");
   });
 
   it("explicit name beats env var", () => {
-    const source = getEventSource({ ...env, EVENT_SOURCE: "bogus" } as Env, "google");
+    const source = getEventSource({ ...env, EVENT_SOURCE: "bogus" }, "google");
     expect(source.name).toBe("google");
   });
 
   it("throws on unknown source name and lists valid names in the message", () => {
     expect(() => getEventSource(env as Env, "bogus")).toThrow("bogus");
     expect(() => getEventSource(env as Env, "bogus")).toThrow("google");
-    expect(() => getEventSource({ ...env, EVENT_SOURCE: "cms" } as Env)).toThrow("cms");
+    expect(() => getEventSource({ ...env, EVENT_SOURCE: "cms" })).toThrow("cms");
   });
 
   it("EVENT_SOURCE_NAMES is exactly google", () => {
@@ -76,7 +81,9 @@ describe("reminderRange", () => {
   it("weekly is stable across the week — a Sunday run yields the same Monday-anchored window", () => {
     // Sunday 2026-05-31 still belongs to the ISO week starting Monday 2026-05-25.
     const { rangeStart, rangeEnd } = reminderRange("weekly", Date.parse("2026-05-31T18:00:00Z"));
-    expect(DateTime.fromISO(rangeStart, { setZone: true }).toFormat("yyyy-MM-dd")).toBe("2026-05-25");
+    expect(DateTime.fromISO(rangeStart, { setZone: true }).toFormat("yyyy-MM-dd")).toBe(
+      "2026-05-25",
+    );
     expect(DateTime.fromISO(rangeEnd, { setZone: true }).toFormat("yyyy-MM-dd")).toBe("2026-06-01");
   });
 });

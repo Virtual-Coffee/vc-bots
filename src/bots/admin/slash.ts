@@ -1,6 +1,6 @@
 import type { Env } from "../../env";
 import { respondEphemeral } from "../../slack/response";
-import { EVENT_SOURCE_NAMES, type ReminderName, isEventSourceName } from "../reminders";
+import { EVENT_SOURCE_NAMES, isEventSourceName } from "../reminders";
 import { type AdminAction, adminReplyText, guardAdmin, runAdminAction } from "./actions";
 import { adminPanelBlocks, PANEL_TEXT } from "./panel";
 
@@ -44,9 +44,7 @@ export interface AdminCommandPayload {
 }
 
 type ParsedCommand =
-  | { kind: "panel" }
-  | { kind: "reply"; text: string }
-  | { kind: "action"; action: AdminAction };
+  { kind: "panel" } | { kind: "reply"; text: string } | { kind: "action"; action: AdminAction };
 
 export async function handleAdminCommand(cmd: AdminCommandPayload, env: Env): Promise<void> {
   const parsed = parseAdminCommand(cmd.text, cmd.user_id);
@@ -85,11 +83,14 @@ function parseAdminCommand(text: string, userId: string): ParsedCommand {
     case "weekly": {
       if (arg !== undefined && !isEventSourceName(arg)) {
         const list = EVENT_SOURCE_NAMES.map((n) => `\`${n}\``).join(", ");
-        return { kind: "reply", text: `:warning: Unknown event source \`${arg}\`. Valid sources: ${list}` };
+        return {
+          kind: "reply",
+          text: `:warning: Unknown event source \`${arg}\`. Valid sources: ${list}`,
+        };
       }
       return {
         kind: "action",
-        action: { kind: "reminder", name: sub as ReminderName, nowMs: Date.now(), source: arg },
+        action: { kind: "reminder", name: sub, nowMs: Date.now(), source: arg },
       };
     }
 
@@ -112,7 +113,10 @@ function parseAdminCommand(text: string, userId: string): ParsedCommand {
       if (arg === "open" || arg === "close") {
         return { kind: "action", action: { kind: "coworking", op: arg } };
       }
-      return { kind: "reply", text: `Usage: \`coworking open\` or \`coworking close\`.\n\n${USAGE}` };
+      return {
+        kind: "reply",
+        text: `Usage: \`coworking open\` or \`coworking close\`.\n\n${USAGE}`,
+      };
     }
 
     case "watch": {

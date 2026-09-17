@@ -1,10 +1,6 @@
 import { DateTime } from "luxon";
 import { describe, expect, it } from "vitest";
-import {
-  departedUpcoming,
-  diffSnapshot,
-  type SnapshotEntry,
-} from "../src/bots/calendar-sync/diff";
+import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "../src/bots/calendar-sync/diff";
 import type { ReminderEvent } from "../src/events";
 import type { CalendarEventLookup } from "../src/google/calendar";
 

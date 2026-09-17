@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+dist/
+pnpm-lock.yaml
+worker-configuration.d.ts
+# Markdown and YAML are out of scope (hand-wrapped prose; workflow files).
+*.md
+*.yml
+*.yaml

@@ -56,7 +56,10 @@ describe("runAdminAction — gate", () => {
 
   it("an allowlisted id bypasses users.info", async () => {
     isAdmin = false;
-    const result = await runAdminAction(env, "U031H1A1BGR", { kind: "home", userId: "U031H1A1BGR" });
+    const result = await runAdminAction(env, "U031H1A1BGR", {
+      kind: "home",
+      userId: "U031H1A1BGR",
+    });
     expect(result).toEqual({ kind: "home" });
     expect(callsTo("/api/users.info")).toHaveLength(0);
     expect(callsTo("/api/views.publish")).toHaveLength(1);
@@ -103,7 +106,8 @@ describe("runAdminAction — welcome / home", () => {
     expect(post).toHaveLength(1);
     const form = rec.form(post[0]!);
     expect(form.get("channel")).toBe("U2");
-    expect(form.get("text")).toBe("Welcome message preview");
+    // The same DM the `team_join` sender posts — the admin run is the real thing, not a preview.
+    expect(form.get("text")).toBe("👋 Welcome to Virtual Coffee!");
     expect(form.get("link_names")).toBe("true");
     expect(form.get("unfurl_links")).toBe("false");
     expect(form.get("unfurl_media")).toBe("false");
@@ -234,7 +238,11 @@ describe("adminReplyText", () => {
       },
       ":information_source: No upcoming events for the *weekly* window — nothing posted (source: *google*).",
     ],
-    ["welcome", { kind: "welcome", target: "U2" }, ":white_check_mark: Sent the welcome message to <@U2>."],
+    [
+      "welcome",
+      { kind: "welcome", target: "U2" },
+      ":white_check_mark: Sent the welcome message to <@U2>.",
+    ],
     ["home", { kind: "home" }, ":white_check_mark: Published your App Home."],
     [
       "coworking open",
@@ -265,7 +273,11 @@ describe("adminReplyText", () => {
       },
       ":satellite_antenna: Calendar watch is *active*. Channel: `chan-1`. Expires <!date^1700000000^{date_short_pretty} {time}|2023-11-14 22:13 UTC>.",
     ],
-    ["watch stopped", { kind: "watch", op: "stop", stopped: true }, ":octagonal_sign: Calendar watch stopped."],
+    [
+      "watch stopped",
+      { kind: "watch", op: "stop", stopped: true },
+      ":octagonal_sign: Calendar watch stopped.",
+    ],
     [
       "watch nothing to stop",
       { kind: "watch", op: "stop", stopped: false },

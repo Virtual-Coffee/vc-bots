@@ -21,12 +21,14 @@ beforeAll(async () => {
   ({ json: serviceAccountKey, privateKeyPem } = await generateServiceAccountKey());
 });
 
-let fetchSpy: ReturnType<typeof vi.fn>;
+let fetchSpy: ReturnType<
+  typeof vi.fn<(input: unknown, init: { body?: unknown }) => Promise<Response>>
+>;
 let goodEnv: Env;
 beforeEach(() => {
   fetchSpy = vi.fn(async () => Response.json({ access_token: "g-tok", expires_in: 3600 }));
   vi.stubGlobal("fetch", fetchSpy);
-  goodEnv = { ...env, GOOGLE_SERVICE_ACCOUNT_KEY: serviceAccountKey } as Env;
+  goodEnv = { ...env, GOOGLE_SERVICE_ACCOUNT_KEY: serviceAccountKey };
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -52,7 +54,7 @@ describe("fetchGoogleAccessToken", () => {
     });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [input, init] = fetchSpy.mock.calls[0] as [unknown, { body?: unknown }];
+    const [input, init] = fetchSpy.mock.calls[0]!;
     expect(input instanceof Request ? input.url : String(input)).toBe(TOKEN_URL);
 
     const bodyText =

@@ -4,7 +4,7 @@ import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { deleteOriginal, replaceEphemeral } from "../../slack/response";
-import { EASTERN, type ReminderName } from "../reminders";
+import { EASTERN } from "../reminders";
 import {
   type AdminAction,
   type AdminResult,
@@ -112,7 +112,9 @@ interface PanelMetadata {
 function parseMetadata(raw: string): PanelMetadata | undefined {
   try {
     const parsed = JSON.parse(raw) as Partial<PanelMetadata>;
-    return typeof parsed.response_url === "string" ? { response_url: parsed.response_url } : undefined;
+    return typeof parsed.response_url === "string"
+      ? { response_url: parsed.response_url }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -177,7 +179,9 @@ function welcomeModal(responseUrl: string, userId: string): ModalView {
     },
     {
       type: "context",
-      elements: [{ type: "mrkdwn", text: "Sends the welcome message as a DM to the chosen member." }],
+      elements: [
+        { type: "mrkdwn", text: "Sends the welcome message as a DM to the chosen member." },
+      ],
     },
   ];
   return {
@@ -405,7 +409,7 @@ export async function handleReminderSubmit(
     : Date.now();
   const result = await runAdminAction(env, payload.user.id, {
     kind: "reminder",
-    name: kind as ReminderName,
+    name: kind,
     nowMs,
   });
   await deliver(responseUrl, result, false); // the counts are output the admin can't otherwise see

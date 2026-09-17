@@ -3,7 +3,11 @@ import { DateTime } from "luxon";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CalendarSync } from "../src/bots/calendar-sync/durable-object";
 import type { JoinInfo, ReminderEvent } from "../src/events";
-import { createCalendarFake, type FakeCalendar, installCalendarFake } from "./helpers/calendar-fake";
+import {
+  createCalendarFake,
+  type FakeCalendar,
+  installCalendarFake,
+} from "./helpers/calendar-fake";
 import { type FetchRecorder, installFetchRecorder } from "./helpers/fetch-recorder";
 
 /**
@@ -38,7 +42,8 @@ beforeEach(() => {
       }
       if (call.url.includes("/api/chat.postMessage")) {
         const channel = new URLSearchParams(call.body).get("channel") ?? "";
-        if (failPostsTo.has(channel)) return Response.json({ ok: false, error: "channel_not_found" });
+        if (failPostsTo.has(channel))
+          return Response.json({ ok: false, error: "channel_not_found" });
       }
       return undefined;
     },
@@ -450,9 +455,9 @@ describe("CalendarSync — processNotification", () => {
     await withSync(stub, (instance) => instance.seed(NOW));
     fake.failNext("listEvents", new Error("Google Calendar API error: 503 down"));
 
-    await expect(
-      withSync(stub, (instance) => instance.processNotification(NOW)),
-    ).rejects.toThrow(/503/);
+    await expect(withSync(stub, (instance) => instance.processNotification(NOW))).rejects.toThrow(
+      /503/,
+    );
 
     expect(slackPosts()).toHaveLength(0);
   });
@@ -466,9 +471,9 @@ describe("CalendarSync — processNotification", () => {
     fake.setEvents([]);
     failPostsTo = new Set([env.SLACK_EVENTS_CHANNEL_ID]);
 
-    await expect(
-      withSync(stub, (instance) => instance.processNotification(NOW)),
-    ).rejects.toThrow(/1 delivery failure/);
+    await expect(withSync(stub, (instance) => instance.processNotification(NOW))).rejects.toThrow(
+      /1 delivery failure/,
+    );
 
     // All three channels were attempted, and the reconcile still ran after the failure.
     expect(slackPosts()).toHaveLength(3);

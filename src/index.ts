@@ -16,11 +16,7 @@ export default {
     return route(req, env, ctx);
   },
 
-  async scheduled(
-    controller: ScheduledController,
-    env: Env,
-    ctx: ExecutionContext,
-  ): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     setLogLevel(env.LOG_LEVEL);
     log.info("cron.fired", { cron: controller.cron });
     return runReminders(controller, env, ctx);

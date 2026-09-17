@@ -2,7 +2,11 @@ import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoworkingRoom } from "../src/bots/coworking/durable-object";
 import type { ZoomMeetingEvent, ZoomMeetingEventType } from "../src/zoom/types";
-import { createInviteLinkFake, type FakeInviteLinks, installInviteLinkFake } from "./helpers/invite-link-fake";
+import {
+  createInviteLinkFake,
+  type FakeInviteLinks,
+  installInviteLinkFake,
+} from "./helpers/invite-link-fake";
 import {
   createFakeRoomChannelPort,
   type FakeRoomChannelPort,
@@ -35,7 +39,8 @@ afterEach(() => vi.unstubAllGlobals());
 // --- helpers ---
 
 interface ParticipantInput {
-  user_id: string;
+  user_id?: string;
+  participant_uuid?: string;
   user_name: string;
 }
 
@@ -81,7 +86,7 @@ function withRoom<T>(
 
 const send = (stub: RoomStub, ev: ZoomMeetingEvent) =>
   withRoom(stub, (live) => live.handleZoomEvent(ev));
-const join = (stub: RoomStub, input: { slackUserId: string; displayName: string }) =>
+const join = (stub: RoomStub, input: { slackUserId: string; displayName: string | null }) =>
   withRoom(stub, (live) => live.handleJoinRequest(input));
 
 /** ts of the n-th message the bot posted — every session start / announcement is its own. */
@@ -135,10 +140,13 @@ describe("CoworkingRoom — room message lifecycle", () => {
     // The open card carries the session start time, from the meeting.started event ts.
     expect(open).toContain("Session started at <!date^1700000000^{time}|");
 
-    // The new session tracks its own message, not the previous one.
-    const rows = await sessions(stub);
-    expect(rows.find((r) => r.instance_uuid === "uuid-2")?.slack_message_ts).toBe(postedTs(1));
-    expect(rows.find((r) => r.instance_uuid === "uuid-1")?.slack_message_ts).toBe(postedTs(0));
+    // The new session edits its own message, not the previous one.
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-2", { user_id: "p1", user_name: "Ada" }),
+    );
+    expect(lastUpdatedTs()).toBe(postedTs(1));
+    expect(port.lastUpdateJson()).toContain("Ada");
   });
 
   it("hands the standing invite to the ended card, then retires it on the next start", async () => {
@@ -234,15 +242,24 @@ describe("CoworkingRoom — room message lifecycle", () => {
     // Ada (member) and Bob (guest) overlap → peak 2.
     await send(
       stub,
-      eventAt("meeting.participant_joined", "uuid-1", t0 + 60_000, { user_id: "p1", user_name: "Ada" }),
+      eventAt("meeting.participant_joined", "uuid-1", t0 + 60_000, {
+        user_id: "p1",
+        user_name: "Ada",
+      }),
     );
     await send(
       stub,
-      eventAt("meeting.participant_joined", "uuid-1", t0 + 120_000, { user_id: "p2", user_name: "Bob" }),
+      eventAt("meeting.participant_joined", "uuid-1", t0 + 120_000, {
+        user_id: "p2",
+        user_name: "Bob",
+      }),
     );
     await send(
       stub,
-      eventAt("meeting.participant_left", "uuid-1", t0 + 180_000, { user_id: "p1", user_name: "Ada" }),
+      eventAt("meeting.participant_left", "uuid-1", t0 + 180_000, {
+        user_id: "p1",
+        user_name: "Ada",
+      }),
     );
     // Ends 90 minutes after it started.
     await send(stub, eventAt("meeting.ended", "uuid-1", t0 + 90 * 60_000));
@@ -337,10 +354,70 @@ describe("CoworkingRoom — participant correlation & presence", () => {
     expect((await participants(stub))[0]?.slack_user_id).toBeNull();
   });
 
+  it("a join request with no display name stores no member_link; a Zoom joiner named like the fallback is a guest", async () => {
+    const stub = room("c2c");
+    // Profile lookup failed upstream → the DO pre-fills a generic name but records nothing.
+    const { token } = await join(stub, { slackUserId: "U777", displayName: null });
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
+    const links = await runInDurableObject(stub, (_i, state) =>
+      state.storage.sql.exec("SELECT COUNT(*) AS n FROM member_link").toArray(),
+    );
+    expect(links[0]?.n).toBe(0);
+
+    await send(stub, event("meeting.started", "uuid-1"));
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-1", {
+        user_id: "p1",
+        user_name: "VirtualCoffee member",
+      }),
+    );
+
+    // Nobody owns the fallback name, so whoever joins under it is a plain guest.
+    const presence = port.lastUpdateJson();
+    expect(presence).toContain("VirtualCoffee member");
+    expect(presence).not.toContain("U777");
+    expect(presence).not.toContain('"user_id"');
+    expect((await participants(stub))[0]?.slack_user_id).toBeNull();
+  });
+
+  it("a member_link older than the invite TTL no longer correlates; a fresh one does", async () => {
+    const stub = room("c2d");
+    await join(stub, { slackUserId: "U777", displayName: "Ada" });
+    // Age the link past the invite TTL (2h) — the invite it was minted with is dead by now.
+    await runInDurableObject(stub, (_i, state) =>
+      state.storage.sql.exec(
+        "UPDATE member_link SET created_at = ?",
+        Date.now() - 7200 * 1000 - 1000,
+      ),
+    );
+
+    await send(stub, event("meeting.started", "uuid-1"));
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
+    );
+    expect(port.lastUpdateJson()).not.toContain("U777");
+    expect((await participants(stub))[0]?.slack_user_id).toBeNull();
+
+    // A fresh Join click renews the link, and the next joiner by that name is the member again.
+    await join(stub, { slackUserId: "U777", displayName: "Ada" });
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-1", { user_id: "p2", user_name: "Ada" }),
+    );
+    expect(port.lastUpdateJson()).toContain('"user_id":"U777"');
+    const parts = await participants(stub);
+    expect(parts.find((p) => p.zoom_user_id === "p2")?.slack_user_id).toBe("U777");
+  });
+
   it("is idempotent for duplicate participant_joined", async () => {
     const stub = room("c3");
     await send(stub, event("meeting.started", "uuid-1"));
-    const joined = event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" });
+    const joined = event("meeting.participant_joined", "uuid-1", {
+      user_id: "p1",
+      user_name: "Ada",
+    });
     await send(stub, joined);
     await send(stub, joined);
 
@@ -372,7 +449,26 @@ describe("CoworkingRoom — participant correlation & presence", () => {
     expect(presence.toLowerCase()).toContain("nobody");
   });
 
-  it("drops a participant_joined with no active session (race-safe)", async () => {
+  it("a joiner with only participant_uuid is tracked, and their leave matches", async () => {
+    const stub = room("c4b");
+    await send(stub, event("meeting.started", "uuid-1"));
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-1", { participant_uuid: "pu-1", user_name: "Ada" }),
+    );
+    expect(port.lastUpdateJson()).toContain("Ada");
+
+    await send(
+      stub,
+      event("meeting.participant_left", "uuid-1", { participant_uuid: "pu-1", user_name: "Ada" }),
+    );
+    const parts = await participants(stub);
+    expect(parts).toHaveLength(1);
+    expect(parts[0]?.left_at).not.toBeNull();
+    expect(port.lastUpdateJson()).not.toContain("Ada");
+  });
+
+  it("drops a participant_joined with no active session", async () => {
     const stub = room("c5");
     await send(
       stub,
@@ -510,13 +606,39 @@ describe("CoworkingRoom — vanished room message self-healing", () => {
     await send(stub, event("meeting.ended", "uuid-1")); // ended card holds the invite
 
     port.vanish(postedTs(0));
-    // Retiring the vanished card reports vanished — the new session must still open normally.
+    // Retiring the vanished card reports vanished — the new session must still open normally,
+    // on its own card.
     await send(stub, event("meeting.started", "uuid-2"));
-
-    expect(port.posts).toHaveLength(2);
-    expect((await sessions(stub)).find((r) => r.instance_uuid === "uuid-2")?.slack_message_ts).toBe(
-      postedTs(1),
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-2", { user_id: "p1", user_name: "Ada" }),
     );
+    expect(port.posts).toHaveLength(2);
+    expect(lastUpdatedTs()).toBe(postedTs(1));
+  });
+
+  it("a retire failure doesn't drop the joins that follow", async () => {
+    const stub = room("heal6");
+    await send(stub, event("meeting.started", "uuid-1"));
+    await send(stub, event("meeting.ended", "uuid-1")); // ended card holds the invite
+
+    // Retiring the ended card fails outright (not a vanished message) — Slack is having a moment.
+    port.updateError = new Error("Slack chat.update failed: ratelimited");
+    await send(stub, event("meeting.started", "uuid-2"));
+    expect((await sessions(stub)).find((r) => r.instance_uuid === "uuid-2")?.status).toBe("active");
+    // The old card still holds its invite pointer, so the next takeover retries it.
+    expect(
+      await runInDurableObject(stub, (_i, state) => state.storage.get("last_closed_message")),
+    ).toMatchObject({ ts: postedTs(0) });
+
+    // The session is live, so the join that follows lands and renders.
+    port.updateError = null;
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-2", { user_id: "p1", user_name: "Ada" }),
+    );
+    expect(lastUpdatedTs()).toBe(postedTs(1));
+    expect(port.lastUpdateJson()).toContain("Ada");
   });
 
   it("admin close treats a deleted announcement as nothing-to-close", async () => {
@@ -530,6 +652,58 @@ describe("CoworkingRoom — vanished room message self-healing", () => {
   });
 });
 
+describe("CoworkingRoom — schema migration", () => {
+  it("migrate adopts a pre-existing open card and drops the slack_message_ts column", async () => {
+    const stub = room("mig1");
+    const columns = (state: DurableObjectState) =>
+      state.storage.sql
+        .exec<{ name: string }>("PRAGMA table_info(session)")
+        .toArray()
+        .map((c) => c.name);
+
+    // The instance has already booted (and migrated) by the time the callback runs, so rebuild
+    // the pre-A2 schema by hand: the open card's ts on the session row, no open pointer. A second,
+    // older row still marked active (its meeting.ended never arrived) must not win the adoption.
+    await runInDurableObject(stub, async (instance, state) => {
+      state.storage.sql.exec(`
+        DROP TABLE session;
+        CREATE TABLE session (
+          instance_uuid     TEXT PRIMARY KEY,
+          slack_message_ts  TEXT,
+          started_at        INTEGER,
+          ended_at          INTEGER,
+          status            TEXT NOT NULL,
+          peak_participants INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO session (instance_uuid, slack_message_ts, started_at, status)
+          VALUES ('uuid-older', 'older-ts', 1600000000000, 'active'),
+                 ('uuid-old', 'old-ts', 1700000000000, 'active');
+      `);
+      await state.storage.delete("room_message:open");
+      expect(columns(state)).toContain("slack_message_ts");
+
+      await (instance as CoworkingRoom)["migrate"]();
+
+      expect(columns(state)).not.toContain("slack_message_ts");
+      expect(await state.storage.get("room_message:open")).toEqual({
+        ts: "old-ts",
+        startedAtMs: 1700000000000,
+      });
+      await (instance as CoworkingRoom)["migrate"](); // idempotent once the column is gone
+    });
+
+    // The live session keeps editing the card it opened before the deploy — no fresh post.
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-old", { user_id: "p1", user_name: "Ada" }),
+    );
+    expect(port.posts).toHaveLength(0);
+    expect(lastUpdatedTs()).toBe("old-ts");
+    expect(port.lastUpdateJson()).toContain("Ada");
+    expect(port.lastUpdateJson()).toContain("Session started at <!date^1700000000^{time}|");
+  });
+});
+
 describe("CoworkingRoom — stale-session alarm", () => {
   it("force-ends a still-active session when the alarm fires", async () => {
     const stub = room("a1");
@@ -538,5 +712,68 @@ describe("CoworkingRoom — stale-session alarm", () => {
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(port.lastUpdateJson()).toContain("session has ended");
     expect((await sessions(stub))[0]?.status).toBe("ended");
+  });
+});
+
+describe("CoworkingRoom — event serialization (ADR 0003)", () => {
+  /** Park the DO inside its next channel `post` / `update`; `release` lets it continue. */
+  function holdChannel(kind: "posts" | "updates") {
+    let release!: () => void;
+    port.hold[kind] = new Promise<void>((resolve) => (release = resolve));
+    return release;
+  }
+  /** Wait until the DO has entered its `n`th `post` / `update` (i.e. it's parked there). */
+  const parkedAt = (kind: "posts" | "updates", n: number) =>
+    vi.waitFor(() => expect(port.attempts[kind]).toBe(n));
+  /** Wait until the DO holds `n` queued/running items — the RPC fired while parked has reached `enqueue`. */
+  const queued = (stub: RoomStub, n: number) =>
+    vi.waitFor(async () =>
+      expect(await runInDurableObject(stub, (i) => (i as CoworkingRoom).queueDepth)).toBe(n),
+    );
+
+  it("records a join that arrives while meeting.started is still posting the open card", async () => {
+    const stub = room("q1");
+    const release = holdChannel("posts");
+
+    // The host's join webhook lands ~40 ms after meeting.started — mid-post (2026-09-17 logs).
+    const started = send(stub, event("meeting.started", "uuid-1"));
+    await parkedAt("posts", 1);
+    const joined = send(
+      stub,
+      event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
+    );
+    await queued(stub, 2);
+    expect(await participants(stub)).toHaveLength(0); // still parked — the join is queued, not dropped
+    release();
+    await Promise.all([started, joined]);
+
+    expect(await participants(stub)).toHaveLength(1);
+    expect(port.lastUpdateJson()).toContain("Ada");
+  });
+
+  it("does not let a join that arrives while meeting.ended is closing overwrite the ended card", async () => {
+    const stub = room("q2");
+    await send(stub, event("meeting.started", "uuid-1"));
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
+    );
+
+    const release = holdChannel("updates");
+    const ended = send(stub, event("meeting.ended", "uuid-1"));
+    await parkedAt("updates", 2); // #1 was Ada's presence edit; #2 is the ended card
+    const lateJoin = send(
+      stub,
+      event("meeting.participant_joined", "uuid-1", { user_id: "p2", user_name: "Bob" }),
+    );
+    await queued(stub, 2);
+    release();
+    await Promise.all([ended, lateJoin]);
+
+    expect((await sessions(stub))[0]?.status).toBe("ended");
+    expect(await participants(stub)).toHaveLength(0);
+    // The ended card is the last edit — the late join was dropped, not rendered over it.
+    expect(port.lastUpdateJson()).toContain("session has ended");
+    expect(port.lastUpdateJson()).not.toContain("Bob");
   });
 });

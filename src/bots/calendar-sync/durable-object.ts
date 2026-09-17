@@ -78,7 +78,8 @@ export class CalendarSync extends DurableObject<Env> {
     setLogLevel(env.LOG_LEVEL); // the DO runs in its own isolate
     this.sql = ctx.storage.sql;
     this.calendar = createGoogleCalendarPort(env);
-    ctx.blockConcurrencyWhile(async () => this.migrate());
+    // The runtime holds deliveries until this settles; nothing to await in a constructor.
+    void ctx.blockConcurrencyWhile(() => Promise.resolve(this.migrate()));
   }
 
   private migrate(): void {
@@ -129,9 +130,7 @@ export class CalendarSync extends DurableObject<Env> {
     // `GOOGLE_WATCH_TOKEN` lands here too: Google keeps sending whatever token the channel was
     // registered with, so the router would reject every push from the old channel — only a fresh
     // channel (registered with the current token) makes pushes verifiable again.
-    const { channelId, resourceId, expirationMs } = await this.calendar.watch(
-      this.notifyAddress(),
-    );
+    const { channelId, resourceId, expirationMs } = await this.calendar.watch(this.notifyAddress());
 
     // Replace the single channel row.
     this.sql.exec("DELETE FROM channel");
@@ -171,7 +170,9 @@ export class CalendarSync extends DurableObject<Env> {
 
     const result = await this.calendar.stopChannel(existing.id, existing.resource_id);
     if (result === "failed") {
-      throw new Error("Google refused to stop the calendar watch channel; the watch is still registered");
+      throw new Error(
+        "Google refused to stop the calendar watch channel; the watch is still registered",
+      );
     }
     this.sql.exec("DELETE FROM channel");
     await this.ctx.storage.deleteAlarm();
@@ -184,7 +185,7 @@ export class CalendarSync extends DurableObject<Env> {
    * registered with the current `GOOGLE_WATCH_TOKEN` (a rotated token means the router rejects
    * its pushes, so it isn't delivering even though Google still has it).
    */
-  async watchStatus(): Promise<WatchStatus> {
+  watchStatus(): WatchStatus {
     const existing = this.getChannel();
     if (!existing) return { active: false, channelId: null, expiresAt: null };
     const active = this.channelIsLive(existing, Date.now());

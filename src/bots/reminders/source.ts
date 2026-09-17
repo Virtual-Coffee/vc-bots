@@ -47,9 +47,7 @@ export function activeSourceName(env: Env): string {
 export function getEventSource(env: Env, name?: string): EventSource {
   const resolved = name ?? activeSourceName(env);
   if (!isEventSourceName(resolved)) {
-    throw new Error(
-      `Unknown event source "${resolved}" (valid: ${EVENT_SOURCE_NAMES.join(", ")})`,
-    );
+    throw new Error(`Unknown event source "${resolved}" (valid: ${EVENT_SOURCE_NAMES.join(", ")})`);
   }
   return SOURCES[resolved](env);
 }

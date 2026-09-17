@@ -57,7 +57,7 @@ beforeEach(() => {
     GOOGLE_CALENDAR_ID: CALENDAR_ID,
     GOOGLE_SERVICE_ACCOUNT_KEY: serviceAccountKey,
     GOOGLE_WATCH_TOKEN: "watch-tok",
-  } as Env;
+  };
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -410,7 +410,11 @@ describe("getEvent", () => {
   });
 
   it("keeps an unparseable start.dateTime as a live event with the raw string", async () => {
-    singleEvents.set("ev-1", { id: "ev-1", status: "confirmed", start: { dateTime: "not-a-date" } });
+    singleEvents.set("ev-1", {
+      id: "ev-1",
+      status: "confirmed",
+      start: { dateTime: "not-a-date" },
+    });
     expect(await port().getEvent("ev-1")).toEqual({
       kind: "live",
       event: expect.objectContaining({ id: "ev-1", startsAt: "not-a-date" }),

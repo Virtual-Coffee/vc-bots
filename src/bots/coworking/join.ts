@@ -41,10 +41,7 @@ export interface JoinActionPayload {
  * Delete the join ephemeral after either of its buttons is clicked. For ☕ Join the browser is
  * already opening the url client-side; this just makes the message vanish behind it.
  */
-export async function handleJoinDismiss(
-  payload: JoinActionPayload,
-  _env: Env,
-): Promise<void> {
+export async function handleJoinDismiss(payload: JoinActionPayload, _env: Env): Promise<void> {
   const action = payload.actions[0]?.action_id ?? "unknown";
   log.info("join.dismiss", { user: payload.user.id, action });
   if (!payload.response_url) return;
@@ -71,13 +68,15 @@ export async function handleJoinClick(
   }
 
   // Resolve a display name to pre-fill on the invite link (and to correlate the Zoom join later).
-  let displayName = "VirtualCoffee member";
+  // `null` when the profile can't be read: the DO then pre-fills a generic name and records
+  // nothing to correlate on, so two members with unreadable profiles never match each other.
+  let displayName: string | null = null;
   try {
     const client = createSlackClient(env);
     const res = await client.users.profile.get({ user: slackUserId });
-    displayName = res.profile?.display_name || res.profile?.real_name || displayName;
+    displayName = res.profile?.display_name || res.profile?.real_name || null;
   } catch {
-    // Keep the default; a missing display name shouldn't block registration.
+    // A missing display name shouldn't block registration.
   }
 
   // Mint the invite link and answer with the per-user ephemeral (☕ Join / Cancel).
@@ -138,14 +137,13 @@ export function buildJoinEphemeralAttachments(
     // The Code of Conduct sits above the buttons so it's read before joining.
     {
       type: "section",
-      text:
-        {
-          type: "mrkdwn",
-          text:
-            "By joining, you agree to follow our " +
-            "<https://virtualcoffee.io/code-of-conduct|Code of Conduct>. " +
-            "Be kind, keep it welcoming, and enjoy the company. :heart:",
-        },
+      text: {
+        type: "mrkdwn",
+        text:
+          "By joining, you agree to follow our " +
+          "<https://virtualcoffee.io/code-of-conduct|Code of Conduct>. " +
+          "Be kind, keep it welcoming, and enjoy the company. :heart:",
+      },
     },
     {
       type: "actions",
@@ -161,7 +159,7 @@ export function buildJoinEphemeralAttachments(
           type: "button",
           action_id: CANCEL_ACTION_ID,
           text: { type: "plain_text", text: "Cancel", emoji: true },
-          style: "danger"
+          style: "danger",
         },
       ],
     },

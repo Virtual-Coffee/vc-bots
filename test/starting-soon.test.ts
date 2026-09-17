@@ -183,9 +183,15 @@ describe("sendReminder — daily, host key in the event-admin mirror", () => {
     const alert = posts.find((f) => f.get("channel") === env.SLACK_BOTLOG_CHANNEL_ID);
     expect(alert?.get("text")).toContain("calendar.event_rejected");
     expect(alert?.get("text")).toContain("Event 2");
-    expect(posts.find((f) => f.get("channel") === env.SLACK_ANNOUNCEMENTS_CHANNEL_ID)?.get("text"))
-      .not.toContain("Event 2");
+    expect(
+      posts.find((f) => f.get("channel") === env.SLACK_ANNOUNCEMENTS_CHANNEL_ID)?.get("text"),
+    ).not.toContain("Event 2");
   });
+});
+
+// Scheduled "Starting Soon" messages already carry this id, so a rename orphans their buttons.
+it("JOIN_EVENT_ACTION_ID stays button-join-event", () => {
+  expect(JOIN_EVENT_ACTION_ID).toBe("button-join-event");
 });
 
 describe("buildStartingSoonMessage", () => {

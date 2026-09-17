@@ -32,10 +32,7 @@ export interface ZoomMeetingObject {
 }
 
 export type ZoomMeetingEventType =
-  | "meeting.started"
-  | "meeting.ended"
-  | "meeting.participant_joined"
-  | "meeting.participant_left";
+  "meeting.started" | "meeting.ended" | "meeting.participant_joined" | "meeting.participant_left";
 
 export interface ZoomMeetingEvent {
   event: ZoomMeetingEventType;

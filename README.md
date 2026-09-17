@@ -38,8 +38,8 @@ join redirect — the token itself is the credential, so there's no signature to
 
 **The co-working room is the one stateful piece.** `CoworkingRoom`
 (`src/bots/coworking/durable-object.ts`) is a SQLite-backed Durable Object, one instance per
-Zoom meeting ID. Routing all of a meeting's webhooks through a single instance serializes them,
-eliminating eventual-consistency races. The DO keeps the session state; the room message itself
+Zoom meeting ID. The DO queues its own handlers so a join can't interleave with the session start
+(`docs/adr/0003`). The DO keeps the session state; the room message itself
 lives in `RoomMessage` (`src/bots/coworking/room-message.ts`), behind a small Slack port. Zoom
 `meeting.started` **posts a new** open card — a fresh post is what makes Slack notify the channel
 that the room opened, where an edit would be silent; `participant_joined/left` edit its live
@@ -77,8 +77,7 @@ src/
                       + its Slack port), Zoom event helpers, join flow + ephemeral
     reminders/        cron dispatch, event-source registry, Block Kit builders,
                       the starting-soon.ts scheduled pair
-    welcome.ts        new-member welcome DM
-    app-home.ts       App Home tab
+    welcome.ts        new-member welcome DM + App Home tab
     admin/            /vc-bot-admin: actions.ts (the AdminAction union, gate + error handling),
                       slash.ts (the text command), panel.ts (the button panel + its modals)
   slack/
@@ -159,6 +158,8 @@ Config and secrets are split deliberately:
 pnpm dev          # wrangler dev — local server on workerd
 pnpm test         # vitest run (inside the real workerd runtime via Miniflare)
 pnpm typecheck    # tsc --noEmit
+pnpm check        # format:check + lint + typecheck + knip — what CI runs on every PR
+pnpm lint:fix     # eslint --fix;  pnpm format = prettier --write
 pnpm cf-types     # regenerate worker-configuration.d.ts after wrangler.jsonc changes
 
 pnpm vitest run test/coworking-do.test.ts   # a single test file

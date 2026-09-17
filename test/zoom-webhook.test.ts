@@ -1,4 +1,9 @@
-import { createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
+import {
+  createExecutionContext,
+  env,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { hmacSha256Hex } from "../src/crypto";
@@ -139,10 +144,14 @@ describe("POST /zoom/webhook — dispatch into the room", () => {
     expect((await sessions()).find((r) => r.instance_uuid === uuid)?.status).toBe("active");
 
     const ada = { user_id: "p1", user_name: "Ada" };
-    expect((await postJson(meetingEvent("meeting.participant_joined", MEETING, ada))).status).toBe(200);
+    expect((await postJson(meetingEvent("meeting.participant_joined", MEETING, ada))).status).toBe(
+      200,
+    );
     expect(fetched.lastBlocks("/api/chat.update")).toContain("Ada");
 
-    expect((await postJson(meetingEvent("meeting.participant_left", MEETING, ada))).status).toBe(200);
+    expect((await postJson(meetingEvent("meeting.participant_left", MEETING, ada))).status).toBe(
+      200,
+    );
     expect(fetched.lastBlocks("/api/chat.update")).not.toContain("Ada");
 
     expect((await postJson(meetingEvent("meeting.ended", MEETING))).status).toBe(200);
