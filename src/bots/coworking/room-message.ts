@@ -151,10 +151,20 @@ export class RoomMessage {
       roomClosedText(this.roomTitle),
       buildRoomClosedBlocks(this.roomTitle, stats),
     );
-    await this.storage.delete(OPEN_KEY);
-    if (result === "ok") {
-      await this.storage.put<LastClosed>(LAST_CLOSED_KEY, { ts: open.ts, stats });
-    }
+    await this.spendPointer(OPEN_KEY, result === "ok" ? { ts: open.ts, stats } : null);
+  }
+
+  /**
+   * Spend a card's pointer and, when its ended edit went through, remember it as the last closed
+   * card. Both writes are issued in the same tick so Durable Object write coalescing commits them
+   * together — an `await` between them would let a crash leave the card with its standing invite
+   * and no pointer to retire it by.
+   */
+  private async spendPointer(key: string, last: LastClosed | null): Promise<void> {
+    await Promise.all([
+      this.storage.delete(key),
+      last ? this.storage.put<LastClosed>(LAST_CLOSED_KEY, last) : undefined,
+    ]);
   }
 
   /**
@@ -280,11 +290,8 @@ export class RoomMessage {
       roomClosedText(this.roomTitle),
       buildRoomClosedBlocks(this.roomTitle, stats),
     );
-    await this.storage.delete(ANNOUNCEMENT_KEY);
     const closed = result === "ok";
-    if (closed) {
-      await this.storage.put<LastClosed>(LAST_CLOSED_KEY, { ts: announcement.ts, stats });
-    }
+    await this.spendPointer(ANNOUNCEMENT_KEY, closed ? { ts: announcement.ts, stats } : null);
     log.info("coworking.admin_announce", { action: "close", closed });
     return { closed };
   }
