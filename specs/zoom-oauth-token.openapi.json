@@ -1,0 +1,81 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Zoom OAuth token endpoint — Server-to-Server account credentials grant",
+    "version": "1",
+    "description": "Hand-written: Zoom publishes no OpenAPI document for the token endpoint. Mirrors https://developers.zoom.us/docs/internal-apps/s2s-oauth/ for the one grant the Worker uses."
+  },
+  "servers": [{ "url": "https://zoom.us" }],
+  "paths": {
+    "/oauth/token": {
+      "post": {
+        "operationId": "accountCredentialsToken",
+        "summary": "Mint an account-credentials access token",
+        "security": [{ "basic": [] }],
+        "parameters": [
+          {
+            "name": "grant_type",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "enum": ["account_credentials"] }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Access token",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/TokenResponse" } }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+            }
+          },
+          "401": {
+            "description": "Invalid client credentials",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "basic": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "client_id:client_secret"
+      }
+    },
+    "schemas": {
+      "TokenResponse": {
+        "type": "object",
+        "required": ["access_token", "token_type", "expires_in"],
+        "properties": {
+          "access_token": { "type": "string" },
+          "token_type": { "type": "string" },
+          "expires_in": { "type": "integer", "description": "Seconds until expiry." },
+          "scope": { "type": "string" },
+          "api_url": { "type": "string" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}

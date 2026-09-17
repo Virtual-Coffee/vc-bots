@@ -1,0 +1,70 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Google OAuth 2.0 token endpoint — service-account JWT bearer grant",
+    "version": "1",
+    "description": "Hand-written: Google publishes no OpenAPI document for the token endpoint. Mirrors https://developers.google.com/identity/protocols/oauth2/service-account#httprest for the one grant the Worker uses."
+  },
+  "servers": [{ "url": "https://oauth2.googleapis.com" }],
+  "paths": {
+    "/token": {
+      "post": {
+        "operationId": "exchangeJwtBearer",
+        "summary": "Exchange a signed service-account assertion for an access token",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": ["grant_type", "assertion"],
+                "properties": {
+                  "grant_type": {
+                    "type": "string",
+                    "enum": ["urn:ietf:params:oauth:grant-type:jwt-bearer"]
+                  },
+                  "assertion": { "type": "string", "description": "The signed JWT." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Access token",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/TokenResponse" } }
+            }
+          },
+          "400": {
+            "description": "OAuth error",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TokenResponse": {
+        "type": "object",
+        "required": ["access_token", "expires_in", "token_type"],
+        "properties": {
+          "access_token": { "type": "string" },
+          "expires_in": { "type": "integer", "description": "Seconds until expiry." },
+          "token_type": { "type": "string" },
+          "scope": { "type": "string" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "error_description": { "type": "string" }
+        }
+      }
+    }
+  }
+}

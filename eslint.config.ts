@@ -4,7 +4,14 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
-  globalIgnores(["node_modules/", ".wrangler/", "dist/", "worker-configuration.d.ts"]),
+  globalIgnores([
+    "node_modules/",
+    ".wrangler/",
+    "dist/",
+    "worker-configuration.d.ts",
+    // `pnpm gen:api-types` output (docs/adr/0012).
+    "src/generated/",
+  ]),
   {
     files: ["**/*.ts"],
     extends: [js.configs.recommended, tseslint.configs.recommendedTypeChecked, prettier],
@@ -61,11 +68,12 @@ export default defineConfig(
     extends: [tseslint.configs.disableTypeChecked],
   },
   {
-    // One-off CLIs (`pnpm fix-calendar`) run under plain `node`, sit outside tsconfig
-    // `include` like the root config files, and print to stdout by design.
+    // Local CLIs (`pnpm fix-calendar`, `pnpm gen:api-types`) run under plain `node`, sit outside
+    // tsconfig `include` like the root config files, print to stdout by design, and may use
+    // `node:*` — the workerd restriction is for the Worker.
     files: ["scripts/**/*.ts"],
     extends: [tseslint.configs.disableTypeChecked],
-    rules: { "no-console": "off" },
+    rules: { "no-console": "off", "no-restricted-imports": "off" },
   },
   {
     // The leveled logger is the one sanctioned console caller.
