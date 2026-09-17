@@ -10,10 +10,11 @@ import { dateToken } from "../../slack/date";
  * announcement) for its whole life: posted as an open card, edited in place into an ended card.
  *
  * `RoomMessage` owns everything Slack-message-shaped about the co-working room: the Block Kit
- * cards, the copy, the standing-invite hand-off between cards, and the cross-session pointers
- * that make the hand-off possible. The `CoworkingRoom` Durable Object keeps the session state
- * machine and tells this module *what* happened (`open` / `showPresence` / `close` /
- * `announceOpen` / `announceClose`); the module decides what the channel should look like.
+ * cards, the copy, the standing-invite hand-off between cards, and the message pointers that
+ * make both possible — which card is open right now, and which ended card carries the invite.
+ * The `CoworkingRoom` Durable Object keeps the session state machine and tells this module *what*
+ * happened (`open` / `showPresence` / `close` / `announceOpen` / `announceClose`); the module
+ * decides what the channel should look like, and no message ts ever crosses back to the DO.
  *
  * Slack itself sits behind `RoomChannelPort` — three calls (post / update / delete) against the
  * co-working channel — so the message lifecycle is testable against a fake port with no network.
@@ -40,7 +41,10 @@ export interface RoomChannelPort {
   delete(ts: string): Promise<void>;
 }
 
-/** The slice of Durable Object storage the room message keeps its pointers in. */
+/**
+ * The slice of Durable Object storage the room message keeps its pointers in (`room_message:open`,
+ * `last_closed_message`, `room_message:announcement`, plus the one-shot legacy `idle_invite_ts`).
+ */
 export type RoomMessageStorage = Pick<DurableObjectStorage, "get" | "put" | "delete">;
 
 /** A person currently in the room: a member (`slackUserId`) or a guest (`displayName`). */
@@ -61,6 +65,12 @@ export interface SessionStats {
 export const JOIN_ACTION_ID = "coworking_join";
 
 /**
+ * Storage key of the open card — the session's card while it's live, edited by `showPresence` and
+ * spent by `close`. Written by `open`, so the DO never has to remember a message ts itself.
+ */
+const OPEN_KEY = "room_message:open";
+
+/**
  * Storage key of the last closed card — the ended card carrying the standing invite until the
  * next room message retires it. The cached value is the `SessionStats` rather than rendered
  * blocks: `participant` rows are deleted at close, so the card can't be re-derived from SQL later,
@@ -75,6 +85,7 @@ const ANNOUNCEMENT_KEY = "room_message:announcement";
 /** Storage key of the retired lifecycle's standing-invite message, cleaned up once and forgotten. */
 const LEGACY_ROOM_MESSAGE_KEY = "idle_invite_ts";
 
+type OpenCard = { ts: string; startedAtMs: number };
 type LastClosed = { ts: string; stats: SessionStats };
 type Announcement = { ts: string; openedAtMs: number };
 
@@ -93,44 +104,68 @@ export class RoomMessage {
    * Post a fresh open card for a session that just started and take over as the newest room
    * message (the previous standing invite is retired). Always a NEW message, never an edit of the
    * previous card: a fresh post is what makes Slack notify the channel that the room just opened
-   * (an edit is silent). Resolves to the message ts, or null when Slack returned none.
+   * (an edit is silent). The posted card becomes the open card that `showPresence` / `close` edit;
+   * when Slack returned no ts there is no open card, and both will warn and skip.
    */
-  async open(startedAtMs: number): Promise<string | null> {
+  async open(startedAtMs: number): Promise<void> {
     log.debug("coworking.room_msg.open");
-    return this.takeOver(buildRoomOpenBlocks(this.roomTitle, [], startedAtMs));
+    const ts = await this.takeOver(buildRoomOpenBlocks(this.roomTitle, [], startedAtMs));
+    if (ts) await this.storage.put<OpenCard>(OPEN_KEY, { ts, startedAtMs });
   }
 
   /**
-   * Re-render the open card's presence list. A vanished message just warns (in the port) and
-   * skips — a join/leave webhook must never throw over it; `close` will report the same.
+   * Re-render the open card's presence list. No open card (Slack answered `open` without a ts)
+   * warns and skips; a vanished message just warns (in the port) and skips — a join/leave webhook
+   * must never throw over either; `close` will report the same.
    */
-  async showPresence(
-    ts: string,
-    present: PresenceUser[],
-    startedAtMs: number | null,
-  ): Promise<void> {
-    log.debug("coworking.presence.update", { ts, count: present.length });
+  async showPresence(present: PresenceUser[]): Promise<void> {
+    const open = await this.storage.get<OpenCard>(OPEN_KEY);
+    if (!open) {
+      log.warn("coworking.room_msg.no_open_card", { op: "presence" });
+      return;
+    }
+    log.debug("coworking.presence.update", { ts: open.ts, count: present.length });
     await this.port.update(
-      ts,
+      open.ts,
       roomOpenText(this.roomTitle),
-      buildRoomOpenBlocks(this.roomTitle, present, startedAtMs),
+      buildRoomOpenBlocks(this.roomTitle, present, open.startedAtMs),
     );
   }
 
   /**
-   * Edit the session's card into the ended card, standing invite included, and remember it as
-   * the last closed card so the next room message can retire it. If the card vanished
-   * mid-session there's simply nothing left to carry the invite: warn (in the port) and remember
-   * nothing.
+   * Edit the open card into the ended card, standing invite included, and remember it as the
+   * last closed card so the next room message can retire it. The open pointer is spent either
+   * way. With no open card there's nothing to edit and nothing to remember: warn and return. If
+   * the card vanished mid-session there's likewise nothing left to carry the invite: warn (in the
+   * port) and remember nothing.
    */
-  async close(ts: string, stats: SessionStats): Promise<void> {
-    log.debug("coworking.room_msg.close", { ts, peak: stats.peak });
+  async close(stats: SessionStats): Promise<void> {
+    const open = await this.storage.get<OpenCard>(OPEN_KEY);
+    if (!open) {
+      log.warn("coworking.room_msg.no_open_card", { op: "close" });
+      return;
+    }
+    log.debug("coworking.room_msg.close", { ts: open.ts, peak: stats.peak });
     const result = await this.port.update(
-      ts,
+      open.ts,
       roomClosedText(this.roomTitle),
       buildRoomClosedBlocks(this.roomTitle, stats),
     );
-    if (result === "ok") await this.storage.put<LastClosed>(LAST_CLOSED_KEY, { ts, stats });
+    await this.storage.delete(OPEN_KEY);
+    if (result === "ok") {
+      await this.storage.put<LastClosed>(LAST_CLOSED_KEY, { ts: open.ts, stats });
+    }
+  }
+
+  /**
+   * One-shot carry-over for a card opened before the open pointer existed: the ts used to live on
+   * the DO's session row (`slack_message_ts`), and the DO hands it over when it drops that column.
+   * A no-op when a card is already open. Can go once every deployed DO has booted past that
+   * migration.
+   */
+  async adoptOpenCard(ts: string, startedAtMs: number): Promise<void> {
+    if (await this.storage.get<OpenCard>(OPEN_KEY)) return;
+    await this.storage.put<OpenCard>(OPEN_KEY, { ts, startedAtMs });
   }
 
   /**

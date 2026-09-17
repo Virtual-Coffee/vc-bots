@@ -105,10 +105,12 @@ describe("CoworkingRoom — room message lifecycle", () => {
     // The open card carries the session start time, from the meeting.started event ts.
     expect(open).toContain("Session started at <!date^1700000000^{time}|");
 
-    // The new session tracks its own message, not the previous one.
-    const rows = await sessions(stub);
-    expect(rows.find((r) => r.instance_uuid === "uuid-2")?.slack_message_ts).toBe(SECOND_TS);
-    expect(rows.find((r) => r.instance_uuid === "uuid-1")?.slack_message_ts).toBe(STARTED_TS);
+    // The new session edits its own message, not the previous one.
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-2", { user_id: "p1", user_name: "Ada" }),
+    );
+    expect(lastUpdatedTs()).toBe(SECOND_TS);
+    expect(lastBlocks("/api/chat.update")).toContain("Ada");
   });
 
   it("hands the standing invite to the ended card, then retires it on the next start", async () => {
@@ -560,12 +562,12 @@ describe("CoworkingRoom — vanished room message self-healing", () => {
     await stub.handleZoomEvent(event("meeting.ended", "uuid-1")); // ended card holds the invite
 
     stubVanishedMessage();
-    // Retiring the vanished card 404s — the new session must still open normally.
+    // Retiring the vanished card 404s — the new session must still open normally, on its own card.
     await stub.handleZoomEvent(event("meeting.started", "uuid-2"));
-
-    expect((await sessions(stub)).find((r) => r.instance_uuid === "uuid-2")?.slack_message_ts).toBe(
-      FRESH_TS,
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-2", { user_id: "p1", user_name: "Ada" }),
     );
+    expect(lastUpdatedTs()).toBe(FRESH_TS);
   });
 
   it("a retire failure doesn't drop the joins that follow", async () => {
@@ -605,6 +607,55 @@ describe("CoworkingRoom — vanished room message self-healing", () => {
     expect(await stub.adminAnnounceClose()).toEqual({ closed: false });
     // The spent pointer is cleared — a repeat close doesn't retry the dead ts.
     expect(await stub.adminAnnounceClose()).toEqual({ closed: false });
+  });
+});
+
+describe("CoworkingRoom — schema migration", () => {
+  it("migrate adopts a pre-existing open card and drops the slack_message_ts column", async () => {
+    const stub = room("mig1");
+    const columns = (state: DurableObjectState) =>
+      state.storage.sql
+        .exec<{ name: string }>("PRAGMA table_info(session)")
+        .toArray()
+        .map((c) => c.name);
+
+    // The instance has already booted (and migrated) by the time the callback runs, so rebuild
+    // the pre-A2 schema by hand: the open card's ts on the session row, no open pointer.
+    await runInDurableObject(stub, async (instance, state) => {
+      state.storage.sql.exec(`
+        DROP TABLE session;
+        CREATE TABLE session (
+          instance_uuid     TEXT PRIMARY KEY,
+          slack_message_ts  TEXT,
+          started_at        INTEGER,
+          ended_at          INTEGER,
+          status            TEXT NOT NULL,
+          peak_participants INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO session (instance_uuid, slack_message_ts, started_at, status)
+          VALUES ('uuid-old', 'old-ts', 1700000000000, 'active');
+      `);
+      await state.storage.delete("room_message:open");
+      expect(columns(state)).toContain("slack_message_ts");
+
+      await (instance as CoworkingRoom)["migrate"]();
+
+      expect(columns(state)).not.toContain("slack_message_ts");
+      expect(await state.storage.get("room_message:open")).toEqual({
+        ts: "old-ts",
+        startedAtMs: 1700000000000,
+      });
+      await (instance as CoworkingRoom)["migrate"](); // idempotent once the column is gone
+    });
+
+    // The live session keeps editing the card it opened before the deploy — no fresh post.
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-old", { user_id: "p1", user_name: "Ada" }),
+    );
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
+    expect(lastUpdatedTs()).toBe("old-ts");
+    expect(lastBlocks("/api/chat.update")).toContain("Ada");
+    expect(lastBlocks("/api/chat.update")).toContain("Session started at <!date^1700000000^{time}|");
   });
 });
 

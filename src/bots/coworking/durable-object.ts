@@ -18,8 +18,8 @@ import {
  * The DO owns the session state machine (the `session` / `participant` / `member_link` /
  * `invite_link` tables, the stale-session alarm, and the join tokens) and mints per-user Zoom
  * invite links. Everything about the room message — the cards, the copy, the standing-invite
- * hand-off between sessions and announcements — is delegated to `RoomMessage`; the DO only
- * remembers each session's message ts and tells RoomMessage what happened.
+ * hand-off between sessions and announcements, which card is open — is delegated to
+ * `RoomMessage`; the DO never sees a message ts, it only tells RoomMessage what happened.
  */
 
 /** Force-end a session this long after it started if `meeting.ended` was never received. */
@@ -42,7 +42,6 @@ function randomToken(): string {
 // Type aliases (not interfaces) so they satisfy `exec<T>`'s `Record<string, SqlStorageValue>`.
 type SessionRow = {
   instance_uuid: string;
-  slack_message_ts: string | null;
   started_at: number | null;
   ended_at: number | null;
   status: string;
@@ -80,11 +79,10 @@ export class CoworkingRoom extends DurableObject<Env> {
     ctx.blockConcurrencyWhile(async () => this.migrate());
   }
 
-  private migrate(): void {
+  private async migrate(): Promise<void> {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS session (
         instance_uuid     TEXT PRIMARY KEY,
-        slack_message_ts  TEXT,
         started_at        INTEGER,
         ended_at          INTEGER,
         status            TEXT NOT NULL,
@@ -116,15 +114,37 @@ export class CoworkingRoom extends DurableObject<Env> {
     // column, so guard with table_info to keep migrate() idempotent under blockConcurrencyWhile.
     this.addColumnIfMissing("session", "peak_participants", "INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("participant", "left_at", "INTEGER");
+
+    // One-shot: the open card's ts used to live on the session row; RoomMessage keeps it now
+    // (`room_message:open`). Hand a live session's card over before dropping the column, so a
+    // deploy mid-session keeps editing the right message. Can go once every DO has booted past it.
+    if (this.hasColumn("session", "slack_message_ts")) {
+      const open = this.sql
+        .exec<{ slack_message_ts: string; started_at: number | null }>(
+          `SELECT slack_message_ts, started_at FROM session
+           WHERE status = 'active' AND slack_message_ts IS NOT NULL`,
+        )
+        .toArray()[0];
+      if (open) {
+        await this.roomMessage.adoptOpenCard(open.slack_message_ts, open.started_at ?? Date.now());
+      }
+      this.sql.exec("ALTER TABLE session DROP COLUMN slack_message_ts");
+      log.info("coworking.migrate.drop_message_ts", { adopted: Boolean(open) });
+    }
   }
 
   /** Add a column only if it's not already present (idempotent schema migration). */
   private addColumnIfMissing(table: string, column: string, definition: string): void {
-    const exists = this.sql
+    if (!this.hasColumn(table, column)) {
+      this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+
+  private hasColumn(table: string, column: string): boolean {
+    return this.sql
       .exec<{ name: string }>(`PRAGMA table_info(${table})`)
       .toArray()
       .some((c) => c.name === column);
-    if (!exists) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
   /** Work items queued or running — readable via `runInDurableObject` so tests can prove interleaving. */
@@ -297,17 +317,16 @@ export class CoworkingRoom extends DurableObject<Env> {
     }
 
     log.debug("coworking.started.post", { instance: uuid });
-    const messageTs = await this.roomMessage.open(startedAt);
+    await this.roomMessage.open(startedAt);
 
     log.debug("coworking.started.session_row", { instance: uuid });
     this.sql.exec(
-      `INSERT INTO session (instance_uuid, slack_message_ts, started_at, status)
-       VALUES (?, ?, ?, 'active')
+      `INSERT INTO session (instance_uuid, started_at, status)
+       VALUES (?, ?, 'active')
        ON CONFLICT(instance_uuid) DO UPDATE SET
-         status = 'active', slack_message_ts = excluded.slack_message_ts,
-         started_at = excluded.started_at, ended_at = NULL, peak_participants = 0`,
+         status = 'active', started_at = excluded.started_at, ended_at = NULL,
+         peak_participants = 0`,
       uuid,
-      messageTs,
       startedAt,
     );
 
@@ -407,18 +426,16 @@ export class CoworkingRoom extends DurableObject<Env> {
   // --- Helpers ---
 
   private async closeSession(session: SessionRow, endedAt: number): Promise<void> {
-    if (session.slack_message_ts) {
-      const stats: SessionStats = {
-        startedAtMs: session.started_at,
-        endedAtMs: endedAt,
-        durationMs: session.started_at ? Math.max(0, endedAt - session.started_at) : 0,
-        peak: session.peak_participants ?? 0,
-        attendees: this.buildRoster(session.instance_uuid),
-      };
-      // The ended card carries the standing invite. A vanished card is RoomMessage's problem to
-      // shrug at — the session must still flip to ended either way.
-      await this.roomMessage.close(session.slack_message_ts, stats);
-    }
+    const stats: SessionStats = {
+      startedAtMs: session.started_at,
+      endedAtMs: endedAt,
+      durationMs: session.started_at ? Math.max(0, endedAt - session.started_at) : 0,
+      peak: session.peak_participants ?? 0,
+      attendees: this.buildRoster(session.instance_uuid),
+    };
+    // The ended card carries the standing invite. A vanished card is RoomMessage's problem to
+    // shrug at — the session must still flip to ended either way.
+    await this.roomMessage.close(stats);
 
     this.sql.exec(
       "UPDATE session SET status = 'ended', ended_at = ? WHERE instance_uuid = ?",
@@ -432,10 +449,9 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   /**
    * Re-render the open card's presence from the live `participant` rows. Called after every
-   * join/leave; no-op if the session has no posted message to edit.
+   * join/leave; RoomMessage skips it when there's no open card to edit.
    */
   private async updatePresence(session: SessionRow): Promise<void> {
-    if (!session.slack_message_ts) return;
     const rows = this.sql
       .exec<ParticipantRow>(
         "SELECT * FROM participant WHERE instance_uuid = ? AND left_at IS NULL ORDER BY joined_at",
@@ -447,7 +463,7 @@ export class CoworkingRoom extends DurableObject<Env> {
         ? { slackUserId: r.slack_user_id }
         : { displayName: r.display_name ?? "A guest" },
     );
-    await this.roomMessage.showPresence(session.slack_message_ts, present, session.started_at);
+    await this.roomMessage.showPresence(present);
   }
 
   /**
