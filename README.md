@@ -140,6 +140,8 @@ Config and secrets are split deliberately:
 pnpm dev          # wrangler dev — local server on workerd
 pnpm test         # vitest run (inside the real workerd runtime via Miniflare)
 pnpm typecheck    # tsc --noEmit
+pnpm check        # format:check + lint + typecheck + knip — what CI runs on every PR
+pnpm lint:fix     # eslint --fix;  pnpm format = prettier --write
 pnpm cf-types     # regenerate worker-configuration.d.ts after wrangler.jsonc changes
 
 pnpm vitest run test/coworking-do.test.ts   # a single test file

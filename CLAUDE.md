@@ -14,7 +14,9 @@ runs on the edge runtime (`workerd`) — **no `node:*` modules**. Use Web APIs o
 ```bash
 pnpm dev          # wrangler dev — local server on workerd
 pnpm test         # vitest run (all tests, inside the real workerd runtime via Miniflare)
-pnpm typecheck    # tsc --noEmit
+pnpm typecheck    # tsc --noEmit (TS 7 / tsgo)
+pnpm check        # what CI runs: format:check + lint + typecheck + knip
+pnpm lint:fix     # eslint --fix;  pnpm format = prettier --write
 pnpm cf-types     # regenerate worker-configuration.d.ts from wrangler.jsonc after binding changes
 pnpm deploy       # wrangler deploy
 
@@ -162,6 +164,11 @@ client either way. `createSlackApp` uses a static `authorize` (fixed token, empt
   sets it in its own constructor since it runs in a separate isolate.
 - **TS is strict** with `noUncheckedIndexedAccess` and `verbatimModuleSyntax` — use
   `import type` for type-only imports.
+- **Lint enforces the invariants above** (`eslint.config.ts`): `node:*` imports,
+  `@slack/web-api` / `slack-web-api-client` / `slackify-html`, and bare `console.*` fail
+  `pnpm lint` with a message naming the rule here. Two `typescript` installs are deliberate —
+  `typescript` (TS 6 API, for ESLint/knip) and `@typescript/native` (TS 7, the `tsc` bin);
+  ADR 0008 says when to collapse them.
 - `slackify-html` is **edge-incompatible** (throws on workerd); a local `html-to-mrkdwn`
   converter replaces it. Don't re-add it.
 
