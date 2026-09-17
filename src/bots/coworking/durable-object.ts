@@ -357,7 +357,10 @@ export class CoworkingRoom extends DurableObject<Env> {
     const member = this.findMember(id.displayName);
     const slackUserId = member?.slack_user_id ?? null;
     const externalId = slackUserId ? null : id.zoomUserId;
-    log.debug("coworking.join.correlated", { instance: uuid, as: slackUserId ? "member" : "guest" });
+    log.debug("coworking.join.correlated", {
+      instance: uuid,
+      as: slackUserId ? "member" : "guest",
+    });
 
     this.sql.exec(
       `INSERT INTO participant
@@ -500,12 +503,14 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   /** Count people currently in the room (joined, not yet left). */
   private countPresent(uuid: string): number {
-    return this.sql
-      .exec<{ n: number }>(
-        "SELECT COUNT(*) AS n FROM participant WHERE instance_uuid = ? AND left_at IS NULL",
-        uuid,
-      )
-      .toArray()[0]?.n ?? 0;
+    return (
+      this.sql
+        .exec<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM participant WHERE instance_uuid = ? AND left_at IS NULL",
+          uuid,
+        )
+        .toArray()[0]?.n ?? 0
+    );
   }
 
   /**

@@ -13,17 +13,13 @@ import { buildZoomUrlValidationResponse, verifyZoomRequest } from "./zoom/verify
  * the Zoom route does it inline as its FIRST step; the Slack routes delegate to the
  * `SlackApp` (`src/slack/app.ts`), which does the same internally.
  */
-export async function route(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<Response> {
+export async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method;
 
   // Health check — handy for uptime pings and the deploy smoke test.
-  if ((method === "GET" && path === "/health") || (method === 'HEAD' && path === '/')) {
+  if ((method === "GET" && path === "/health") || (method === "HEAD" && path === "/")) {
     return new Response("ok", { status: 200 });
   }
 
@@ -83,11 +79,7 @@ async function handleJoinRedirect(token: string, env: Env): Promise<Response> {
 
 // --- Zoom webhooks → co-working room ---
 
-async function handleZoomWebhook(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<Response> {
+async function handleZoomWebhook(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const rawBody = await req.text();
   if (!(await verifyZoomRequest(req, rawBody, env.ZOOM_WEBHOOK_SECRET_TOKEN))) {
     log.warn("verify.failed", { path: "/zoom/webhook" });

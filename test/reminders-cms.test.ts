@@ -22,32 +22,30 @@ let cmsEvents: Array<Record<string, unknown>>;
 beforeEach(() => {
   recorded = [];
   cmsEvents = [];
-  const spy = vi.fn(
-    async (input: unknown, init?: { body?: unknown; headers?: HeadersInit }) => {
-      let url: string;
-      let body = "";
-      let authorization: string | null = null;
-      if (input instanceof Request) {
-        url = input.url;
-        body = new TextDecoder().decode(await input.clone().arrayBuffer());
-        authorization = input.headers.get("authorization");
-      } else {
-        url = String(input);
-        body = typeof init?.body === "string" ? init.body : "";
-        authorization = new Headers(init?.headers).get("authorization");
-      }
-      recorded.push({ url, body, authorization });
+  const spy = vi.fn(async (input: unknown, init?: { body?: unknown; headers?: HeadersInit }) => {
+    let url: string;
+    let body = "";
+    let authorization: string | null = null;
+    if (input instanceof Request) {
+      url = input.url;
+      body = new TextDecoder().decode(await input.clone().arrayBuffer());
+      authorization = input.headers.get("authorization");
+    } else {
+      url = String(input);
+      body = typeof init?.body === "string" ? init.body : "";
+      authorization = new Headers(init?.headers).get("authorization");
+    }
+    recorded.push({ url, body, authorization });
 
-      if (body.includes("getCalendars")) {
-        return Response.json({
-          data: {
-            solspace_calendar: { calendars: [{ handle: "officeHours" }, { handle: "vcEvents" }] },
-          },
-        });
-      }
-      return Response.json({ data: { solspace_calendar: { events: cmsEvents } } });
-    },
-  );
+    if (body.includes("getCalendars")) {
+      return Response.json({
+        data: {
+          solspace_calendar: { calendars: [{ handle: "officeHours" }, { handle: "vcEvents" }] },
+        },
+      });
+    }
+    return Response.json({ data: { solspace_calendar: { events: cmsEvents } } });
+  });
   vi.stubGlobal("fetch", spy);
 });
 afterEach(() => vi.unstubAllGlobals());

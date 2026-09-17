@@ -26,7 +26,9 @@ export async function notifyBotLog(
         })
         .join("\n")
     : "";
-  const text = detail ? `:rotating_light: *${event}*\n\`\`\`${detail}\`\`\`` : `:rotating_light: *${event}*`;
+  const text = detail
+    ? `:rotating_light: *${event}*\n\`\`\`${detail}\`\`\``
+    : `:rotating_light: *${event}*`;
 
   try {
     await createSlackClient(env).chat.postMessage({

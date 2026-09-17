@@ -8,10 +8,7 @@
 
 const encoder = new TextEncoder();
 
-async function importHmacKey(
-  secret: string,
-  usage: "sign" | "verify",
-): Promise<CryptoKey> {
+async function importHmacKey(secret: string, usage: "sign" | "verify"): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     "raw",
     encoder.encode(secret),

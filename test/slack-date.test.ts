@@ -15,7 +15,9 @@ describe("dateToken", () => {
 
   it("keeps the Slack format verbatim between the carets", () => {
     const dt = DateTime.fromMillis(INSTANT_MS, { zone: "utc" });
-    expect(dateToken(dt, "{date_long_pretty} {time}", "t")).toContain("^{date_long_pretty} {time}|");
+    expect(dateToken(dt, "{date_long_pretty} {time}", "t")).toContain(
+      "^{date_long_pretty} {time}|",
+    );
   });
 
   it("renders the fallback in the DateTime's own zone", () => {

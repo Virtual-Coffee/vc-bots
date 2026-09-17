@@ -428,9 +428,7 @@ function sessionTimeToken(ms: number): string {
 
 /** Render a roster as a comma-separated list — members as `<@id>` mentions, guests as plain names. */
 function formatRoster(attendees: PresenceUser[]): string {
-  const names = attendees.map((p) =>
-    "slackUserId" in p ? `<@${p.slackUserId}>` : p.displayName,
-  );
+  const names = attendees.map((p) => ("slackUserId" in p ? `<@${p.slackUserId}>` : p.displayName));
   return names.join(", ");
 }
 
@@ -451,7 +449,7 @@ function joinButton(label: string): AnyMessageBlock {
         style: "primary",
       },
     ],
-  } as AnyMessageBlock;
+  };
 }
 
 /**
@@ -481,7 +479,10 @@ function buildRoomOpenBlocks(
           {
             type: "context",
             elements: [
-              { type: "mrkdwn", text: `:clock3: Session started at ${sessionTimeToken(startedAtMs)}` },
+              {
+                type: "mrkdwn",
+                text: `:clock3: Session started at ${sessionTimeToken(startedAtMs)}`,
+              },
             ],
           },
         ] satisfies AnyMessageBlock[])
@@ -513,7 +514,10 @@ function buildRoomClosedBlocks(
 ): AnyMessageBlock[] {
   const fields: { type: "mrkdwn"; text: string }[] = [];
   if (stats.startedAtMs) {
-    fields.push({ type: "mrkdwn", text: `:clock3: *Started:* ${sessionTimeToken(stats.startedAtMs)}` });
+    fields.push({
+      type: "mrkdwn",
+      text: `:clock3: *Started:* ${sessionTimeToken(stats.startedAtMs)}`,
+    });
   }
   if (stats.endedAtMs) {
     fields.push({

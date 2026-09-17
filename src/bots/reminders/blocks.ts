@@ -64,9 +64,7 @@ export function buildDailyMessage(events: ReminderEvent[]): ReminderMessage {
 export function buildWeeklyMessage(events: ReminderEvent[]): ReminderMessage {
   const blocks: AnyMessageBlock[] = [
     header("📆 This Week's Events Are:"),
-    ...events.map((event) =>
-      section(`*${eventDateToken(event)}*\n${event.title}`),
-    ),
+    ...events.map((event) => section(`*${eventDateToken(event)}*\n${event.title}`)),
     context("ℹ️ Links to join will be posted about 10 minutes before the event starts."),
     { type: "divider" as const },
     context("See details and more events at <https://virtualcoffee.io/events|VirtualCoffee.IO>!"),

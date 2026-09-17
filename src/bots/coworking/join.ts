@@ -41,10 +41,7 @@ export interface JoinActionPayload {
  * Delete the join ephemeral after either of its buttons is clicked. For ☕ Join the browser is
  * already opening the url client-side; this just makes the message vanish behind it.
  */
-export async function handleJoinDismiss(
-  payload: JoinActionPayload,
-  _env: Env,
-): Promise<void> {
+export async function handleJoinDismiss(payload: JoinActionPayload, _env: Env): Promise<void> {
   const action = payload.actions[0]?.action_id ?? "unknown";
   log.info("join.dismiss", { user: payload.user.id, action });
   if (!payload.response_url) return;
@@ -140,14 +137,13 @@ export function buildJoinEphemeralAttachments(
     // The Code of Conduct sits above the buttons so it's read before joining.
     {
       type: "section",
-      text:
-        {
-          type: "mrkdwn",
-          text:
-            "By joining, you agree to follow our " +
-            "<https://virtualcoffee.io/code-of-conduct|Code of Conduct>. " +
-            "Be kind, keep it welcoming, and enjoy the company. :heart:",
-        },
+      text: {
+        type: "mrkdwn",
+        text:
+          "By joining, you agree to follow our " +
+          "<https://virtualcoffee.io/code-of-conduct|Code of Conduct>. " +
+          "Be kind, keep it welcoming, and enjoy the company. :heart:",
+      },
     },
     {
       type: "actions",
@@ -163,7 +159,7 @@ export function buildJoinEphemeralAttachments(
           type: "button",
           action_id: CANCEL_ACTION_ID,
           text: { type: "plain_text", text: "Cancel", emoji: true },
-          style: "danger"
+          style: "danger",
         },
       ],
     },

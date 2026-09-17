@@ -20,7 +20,6 @@
 
   // Non-secret config (single room). Secrets go via `wrangler secret put` / `.dev.vars`.
   "vars": {
-
     "ZOOM_MEETING_ID": "81323022832",
     // Netlify rewrites virtualcoffee.io/bots/* to this Worker (stripping the /bots prefix);
     // used only for the user-facing join link. Empty/unset falls back to the request origin.

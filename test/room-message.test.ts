@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  JOIN_ACTION_ID,
-  RoomMessage,
-  type SessionStats,
-} from "../src/bots/coworking/room-message";
+import { JOIN_ACTION_ID, RoomMessage, type SessionStats } from "../src/bots/coworking/room-message";
 import { JOIN_REDIRECT_ACTION_ID } from "../src/bots/coworking/join";
 import {
   createFakeRoomChannelPort,

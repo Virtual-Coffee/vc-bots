@@ -81,7 +81,9 @@ interface PanelMetadata {
 function parseMetadata(raw: string): PanelMetadata | undefined {
   try {
     const parsed = JSON.parse(raw) as Partial<PanelMetadata>;
-    return typeof parsed.response_url === "string" ? { response_url: parsed.response_url } : undefined;
+    return typeof parsed.response_url === "string"
+      ? { response_url: parsed.response_url }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -146,7 +148,9 @@ function welcomeModal(responseUrl: string, userId: string): ModalView {
     },
     {
       type: "context",
-      elements: [{ type: "mrkdwn", text: "Sends the welcome message as a DM to the chosen member." }],
+      elements: [
+        { type: "mrkdwn", text: "Sends the welcome message as a DM to the chosen member." },
+      ],
     },
   ];
   return {
@@ -236,10 +240,7 @@ export interface AdminViewSubmissionPayload {
  * Returns the response_url to use, or undefined when the click should be dropped (already
  * reported to the user where possible).
  */
-async function guardClick(
-  payload: AdminPanelActionPayload,
-  env: Env,
-): Promise<string | undefined> {
+async function guardClick(payload: AdminPanelActionPayload, env: Env): Promise<string | undefined> {
   const responseUrl = payload.response_url;
   if (!responseUrl) {
     log.warn("admin.panel.no_response_url", { user: payload.user.id });
@@ -351,7 +352,7 @@ export async function handleReminderSubmit(
     const nowMs = date
       ? DateTime.fromISO(date, { zone: EASTERN }).set({ hour: 12 }).toMillis()
       : undefined;
-    const result = await sendReminder(kind as ReminderName, env, nowMs);
+    const result = await sendReminder(kind, env, nowMs);
     await replaceEphemeral(responseUrl, reminderReply(kind, result));
   } catch (err) {
     log.error("admin.panel.reminder_failed", { user: payload.user.id, err: String(err) });
@@ -377,7 +378,10 @@ export async function handleWelcomeSubmit(
     if (target === payload.user.id) {
       await deleteOriginal(responseUrl);
     } else {
-      await replaceEphemeral(responseUrl, `:white_check_mark: Sent the welcome message to <@${target}>.`);
+      await replaceEphemeral(
+        responseUrl,
+        `:white_check_mark: Sent the welcome message to <@${target}>.`,
+      );
     }
   } catch (err) {
     log.error("admin.panel.welcome_failed", { user: payload.user.id, err: String(err) });
