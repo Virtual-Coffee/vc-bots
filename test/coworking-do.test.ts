@@ -1,5 +1,6 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CoworkingRoom } from "../src/bots/coworking/durable-object";
 import type { ZoomMeetingEventType } from "../src/zoom/types";
 import { installFetchRecorder, type FetchRecorder } from "./helpers/fetch-recorder";
 
@@ -334,7 +335,7 @@ describe("CoworkingRoom — participant correlation & presence", () => {
     expect(presence.toLowerCase()).toContain("nobody");
   });
 
-  it("drops a participant_joined with no active session (race-safe)", async () => {
+  it("drops a participant_joined with no active session", async () => {
     const stub = room("c5");
     await stub.handleZoomEvent(
       event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
@@ -514,5 +515,67 @@ describe("CoworkingRoom — stale-session alarm", () => {
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(lastBlocks("/api/chat.update")).toContain("session has ended");
     expect((await sessions(stub))[0]?.status).toBe("ended");
+  });
+});
+
+describe("CoworkingRoom — event serialization (ADR 0003)", () => {
+  /** Park the DO inside its next `fetch` to `fragment`; `release` lets it continue. */
+  function holdFetch(fragment: string) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    fetched.respondWith(async (call) => {
+      if (call.url.includes(fragment)) await gate;
+      return undefined;
+    });
+    return release;
+  }
+  /** Wait until the DO has reached its `n`th call to `fragment` (i.e. it's parked there). */
+  const parkedAt = (fragment: string, n: number) =>
+    vi.waitFor(() => expect(callsTo(fragment)).toHaveLength(n));
+  /** Wait until the DO holds `n` queued/running items — the RPC fired while parked has reached `enqueue`. */
+  const queued = (stub: ReturnType<typeof room>, n: number) =>
+    vi.waitFor(async () => expect(await runInDurableObject(stub, (i) => (i as CoworkingRoom).queueDepth)).toBe(n));
+
+  it("records a join that arrives while meeting.started is still posting the open card", async () => {
+    const stub = room("q1");
+    const release = holdFetch("/api/chat.postMessage");
+
+    // The host's join webhook lands ~40 ms after meeting.started — mid-post (2026-09-17 logs).
+    const started = stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+    await parkedAt("/api/chat.postMessage", 1);
+    const joined = stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
+    );
+    await queued(stub, 2);
+    expect(await participants(stub)).toHaveLength(0); // still parked — the join is queued, not dropped
+    release();
+    await Promise.all([started, joined]);
+
+    expect(await participants(stub)).toHaveLength(1);
+    expect(lastBlocks("/api/chat.update")).toContain("Ada");
+  });
+
+  it("does not let a join that arrives while meeting.ended is closing overwrite the ended card", async () => {
+    const stub = room("q2");
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
+    );
+
+    const release = holdFetch("/api/chat.update");
+    const ended = stub.handleZoomEvent(event("meeting.ended", "uuid-1"));
+    await parkedAt("/api/chat.update", 2); // #1 was Ada's presence edit; #2 is the ended card
+    const lateJoin = stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-1", { user_id: "p2", user_name: "Bob" }),
+    );
+    await queued(stub, 2);
+    release();
+    await Promise.all([ended, lateJoin]);
+
+    expect((await sessions(stub))[0]?.status).toBe("ended");
+    expect(await participants(stub)).toHaveLength(0);
+    // The ended card is the last edit — the late join was dropped, not rendered over it.
+    expect(lastBlocks("/api/chat.update")).toContain("session has ended");
+    expect(lastBlocks("/api/chat.update")).not.toContain("Bob");
   });
 });
