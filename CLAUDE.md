@@ -122,7 +122,8 @@ live in the DO's `invite_link` table and expire with the Zoom link, keeping the 
 Zoom url out of the Slack UI. ⚠️ Never `replace_original`/`delete_original` against the
 *channel* button's `response_url` — its "original" is the shared room message. Correlation is best-effort by
 display name via the `member_link` table (the webhook carries no registrant id for invite-link
-joiners); uncorrelated people show as external guests. Personal `join_url`s and the redirect
+joiners), only within the invite TTL, and a member whose Slack profile name couldn't be read
+never correlates; uncorrelated people show as external guests. Personal `join_url`s and the redirect
 tokens that resolve to them carry a join credential — **never log them**.
 
 **Event announcements** (`src/bots/reminders/`) run from the cron `scheduled()` handler and
