@@ -100,12 +100,13 @@ open announcement (without invite), and runs the one-shot legacy `idle_invite_ts
 exactly one standing invite exists at a time. Retiring is best-effort: each step is try/caught on
 its own, warns `coworking.room_msg.retire_failed`, and keeps its pointer for the next takeover to
 retry (the legacy delete stays one-shot) — it never blocks the session. Pointers live in DO
-storage under `last_closed_message` (the cached `SessionStats` — `participant` rows are deleted at
-close, so the roster can't be re-derived from SQL) and `room_message:announcement`; the DO never
-touches them.
+storage under `room_message:open` (the live session's card, `{ ts, startedAtMs }`),
+`last_closed_message` (the cached `SessionStats` — `participant` rows are deleted at close, so the
+roster can't be re-derived from SQL) and `room_message:announcement`; the DO never touches them.
 Announcements (`/vc-bot-admin coworking open|close`) join the same chain: `announceClose` renders
 the full ended card (peak 0, no roster) with the invite, and it becomes the last closed card.
-The session row keeps `slack_message_ts`; the DO passes it into `showPresence`/`close`.
+RoomMessage keeps the open card under `room_message:open` next to the other two pointers —
+`open` writes it, `showPresence`/`close` read it — so the DO never sees a message ts.
 Block Kit layouts are private to `room-message.ts` and hand-tuned — keep them byte-for-byte when
 moving code. Joining is per-user: the message's Join button mints a personal Zoom **invite link**
 (`src/zoom/invite-links.ts`, name pre-filled — no registration, requires the meeting to not
