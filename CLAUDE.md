@@ -17,6 +17,8 @@ is in `package.json` `scripts`; the non-obvious ones:
 pnpm vitest run test/coworking-do.test.ts   # one test file
 pnpm vitest -t "name of test"               # tests matching a name
 pnpm cf-types                               # after a wrangler.jsonc binding change
+pnpm gen:api-types                          # after editing specs/ or the operationId allow-list
+pnpm specs:update                           # refresh the vendored provider specs (network)
 ```
 
 Tests run inside `workerd` (`@cloudflare/vitest-pool-workers`), so Web Crypto, the Durable
@@ -83,6 +85,13 @@ match `wrangler.jsonc` byte-for-byte — `test/reminders-cron.test.ts` enforces 
 `docs/adr/0002-join-info-union-and-invalid-events.md` (the event model), and
 `docs/adr/0011-one-google-calendar-adapter-behind-calendarport.md` (the adapter and the
 watch).
+
+**Provider HTTP.** Every Google and Zoom REST call goes through `createApiClient` in
+`src/http/client.ts` — `openapi-fetch` typed by `src/generated/*.d.ts`, which
+`pnpm gen:api-types` produces from the vendored specs in `specs/` (never hand-edit either).
+Non-2xx answers are `ApiError` (`src/http/error.ts`). To call a new endpoint, add its
+`operationId` to `scripts/gen-api-types.ts` and regenerate —
+`docs/adr/0012-provider-wire-types-from-vendored-openapi-specs.md`.
 
 **Slack client.** `createSlackClient(env)` for outbound calls with no inbound Slack request
 (the DOs, the cron); inside `SlackApp` handlers it is the same client. Every Slack import
