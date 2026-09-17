@@ -1,5 +1,6 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CoworkingRoom } from "../src/bots/coworking/durable-object";
 import type { ZoomMeetingEventType } from "../src/zoom/types";
 import { installFetchRecorder, type FetchRecorder } from "./helpers/fetch-recorder";
 
@@ -531,8 +532,9 @@ describe("CoworkingRoom — event serialization (ADR 0003)", () => {
   /** Wait until the DO has reached its `n`th call to `fragment` (i.e. it's parked there). */
   const parkedAt = (fragment: string, n: number) =>
     vi.waitFor(() => expect(callsTo(fragment)).toHaveLength(n));
-  /** Let an RPC fired while the DO is parked actually reach it before the gate opens. */
-  const delivered = () => new Promise((resolve) => setTimeout(resolve, 50));
+  /** Wait until the DO holds `n` queued/running items — the RPC fired while parked has reached `enqueue`. */
+  const queued = (stub: ReturnType<typeof room>, n: number) =>
+    vi.waitFor(async () => expect(await runInDurableObject(stub, (i) => (i as CoworkingRoom).queueDepth)).toBe(n));
 
   it("records a join that arrives while meeting.started is still posting the open card", async () => {
     const stub = room("q1");
@@ -544,7 +546,7 @@ describe("CoworkingRoom — event serialization (ADR 0003)", () => {
     const joined = stub.handleZoomEvent(
       event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
     );
-    await delivered();
+    await queued(stub, 2);
     expect(await participants(stub)).toHaveLength(0); // still parked — the join is queued, not dropped
     release();
     await Promise.all([started, joined]);
@@ -566,7 +568,7 @@ describe("CoworkingRoom — event serialization (ADR 0003)", () => {
     const lateJoin = stub.handleZoomEvent(
       event("meeting.participant_joined", "uuid-1", { user_id: "p2", user_name: "Bob" }),
     );
-    await delivered();
+    await queued(stub, 2);
     release();
     await Promise.all([ended, lateJoin]);
 
