@@ -91,19 +91,21 @@ everything about the channel message is delegated to `RoomMessage`.
 **The room message** (`RoomMessage`, `src/bots/coworking/room-message.ts`) is the single
 self-managed channel message per session (no native Slack Call widget), and the module owns its
 cards, copy, and cross-session pointers. The DO calls `open` / `showPresence` / `close` /
-`retirePrevious` / `announceOpen` / `announceClose`; Slack sits behind the three-call
-`RoomChannelPort` (post / update / delete on the co-working channel — `createSlackRoomChannelPort`
-is the adapter, and it classifies `message_not_found` / `channel_not_found` as `"vanished"` so a
-hand-deleted card never wedges the room). Lifecycle: `meeting.started` → `open` **always posts**
-a fresh open card (never an edit — only a fresh post makes Slack notify the channel);
-`participant_joined/left` → `showPresence` edits the presence list; `meeting.ended` → `close`
-edits it into the ended card, which carries the **standing invite** and is remembered as the
-*last closed card*. The next room message (a session start or an announcement) calls
-`retirePrevious` last, which re-renders that card with `{ invite: false }`, closes any lingering
+`announceOpen` / `announceClose`; Slack sits behind the three-call `RoomChannelPort` (post /
+update / delete on the co-working channel — `createSlackRoomChannelPort` is the adapter, and it
+classifies `message_not_found` / `channel_not_found` as `"vanished"` so a hand-deleted card never
+wedges the room). Lifecycle: `meeting.started` → `open` **always posts** a fresh open card (never
+an edit — only a fresh post makes Slack notify the channel); `participant_joined/left` →
+`showPresence` edits the presence list; `meeting.ended` → `close` edits it into the ended card,
+which carries the **standing invite** and is remembered as the *last closed card*. The next room
+message (`open` for a session start, `announceOpen` for an announcement) retires the previous card
+itself, right after posting: it re-renders that card with `{ invite: false }`, closes any lingering
 open announcement (without invite), and runs the one-shot legacy `idle_invite_ts` delete — so
-exactly one standing invite exists at a time. Pointers live in DO storage under
-`last_closed_message` (the cached `SessionStats` — `participant` rows are deleted at close, so the
-roster can't be re-derived from SQL) and `room_message:announcement`; the DO never touches them.
+exactly one standing invite exists at a time. Retiring is best-effort: each step is try/caught on
+its own, warns `coworking.room_msg.retire_failed`, and keeps its pointer for the next takeover to
+retry — it never blocks the session. Pointers live in DO storage under `last_closed_message` (the
+cached `SessionStats` — `participant` rows are deleted at close, so the roster can't be re-derived
+from SQL) and `room_message:announcement`; the DO never touches them.
 Announcements (`/vc-bot-admin coworking open|close`) join the same chain: `announceClose` renders
 the full ended card (peak 0, no roster) with the invite, and it becomes the last closed card.
 The session row keeps `slack_message_ts`; the DO passes it into `showPresence`/`close`.
