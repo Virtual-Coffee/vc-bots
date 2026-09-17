@@ -12,15 +12,15 @@
  */
 
 import type { Env } from "../env";
+import type { paths } from "../generated/zoom-meetings";
+import { apiError, createApiClient } from "../http/client";
 import { log } from "../log";
 import { ZOOM_API_BASE, type TokenCacheStorage, getCachedZoomToken } from "./oauth";
 
 /** Link lifetime (seconds). Only needs to cover click→join; Zoom enforces `ttl` loosely. */
 const DEFAULT_TTL = 7200;
 
-interface InviteLinksResponse {
-  attendees?: Array<{ name?: string; join_url?: string }>;
-}
+const meetings = createApiClient<paths>({ baseUrl: ZOOM_API_BASE });
 
 /**
  * Mint a personalized invite link for `name`. Returns the attendee's unique `join_url`.
@@ -32,20 +32,17 @@ export async function createInviteLink(
   ttl: number = DEFAULT_TTL,
 ): Promise<{ joinUrl: string }> {
   log.debug("zoom.invite_link.create", { meeting: meetingId, name });
-  const res = await fetch(`${ZOOM_API_BASE}/meetings/${meetingId}/invite_links`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ attendees: [{ name }], ttl }),
+  const { data, error, response } = await meetings.POST("/meetings/{meetingId}/invite_links", {
+    // The spec types the id as an integer; ours is the string from `ZOOM_MEETING_ID`.
+    params: { path: { meetingId: Number(meetingId) } },
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: { attendees: [{ name }], ttl },
   });
 
-  if (!res.ok) {
-    throw new Error(`Zoom invite-links failed: ${res.status} ${await res.text()}`);
+  if (!response.ok) {
+    throw apiError("zoom", "Zoom invite-links failed", { response, error });
   }
-  const body = await res.json<InviteLinksResponse>();
-  const joinUrl = body.attendees?.[0]?.join_url;
+  const joinUrl = data?.attendees?.[0]?.join_url;
   if (!joinUrl) {
     throw new Error("Zoom invite-links returned no join_url");
   }

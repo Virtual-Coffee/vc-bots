@@ -22,7 +22,7 @@ beforeAll(async () => {
 });
 
 let fetchSpy: ReturnType<
-  typeof vi.fn<(input: unknown, init: { body?: unknown }) => Promise<Response>>
+  typeof vi.fn<(input: unknown, init?: { body?: unknown }) => Promise<Response>>
 >;
 let goodEnv: Env;
 beforeEach(() => {
@@ -32,8 +32,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-/** Pull the form-encoded `assertion` field out of a recorded fetch call. */
-async function recordedAssertion(call: unknown[]): Promise<string> {
+/** The form-encoded body of a recorded fetch call (the client sends a `Request`). */
+async function recordedForm(call: unknown[]): Promise<URLSearchParams> {
   const [input, init] = call as [unknown, { body?: unknown } | undefined];
   let bodyText: string;
   if (input instanceof Request) {
@@ -42,7 +42,12 @@ async function recordedAssertion(call: unknown[]): Promise<string> {
     const body = init?.body;
     bodyText = body instanceof URLSearchParams ? body.toString() : String(body);
   }
-  return new URLSearchParams(bodyText).get("assertion") ?? "";
+  return new URLSearchParams(bodyText);
+}
+
+/** Pull the `assertion` field out of a recorded fetch call. */
+async function recordedAssertion(call: unknown[]): Promise<string> {
+  return (await recordedForm(call)).get("assertion") ?? "";
 }
 
 describe("fetchGoogleAccessToken", () => {
@@ -54,12 +59,14 @@ describe("fetchGoogleAccessToken", () => {
     });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [input, init] = fetchSpy.mock.calls[0]!;
+    const [input] = fetchSpy.mock.calls[0]!;
     expect(input instanceof Request ? input.url : String(input)).toBe(TOKEN_URL);
+    if (input instanceof Request) {
+      expect(input.method).toBe("POST");
+      expect(input.headers.get("Content-Type")).toBe("application/x-www-form-urlencoded");
+    }
 
-    const bodyText =
-      init.body instanceof URLSearchParams ? init.body.toString() : String(init.body);
-    const params = new URLSearchParams(bodyText);
+    const params = await recordedForm(fetchSpy.mock.calls[0]!);
     expect(params.get("grant_type")).toBe("urn:ietf:params:oauth:grant-type:jwt-bearer");
 
     const assertion = params.get("assertion") ?? "";

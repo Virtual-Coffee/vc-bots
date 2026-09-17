@@ -1,5 +1,7 @@
 import { importPKCS8, SignJWT } from "jose";
 import type { Env } from "../env";
+import type { paths } from "../generated/google-oauth-token";
+import { apiError, createApiClient } from "../http/client";
 
 /**
  * Google service-account auth (JWT-bearer grant).
@@ -17,6 +19,8 @@ import type { Env } from "../env";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
+
+const oauth = createApiClient<paths>({ baseUrl: "https://oauth2.googleapis.com" });
 
 interface ServiceAccountKey {
   client_email: string;
@@ -62,23 +66,18 @@ export async function fetchGoogleAccessToken(
     .setExpirationTime(nowSec + 3600)
     .sign(key);
 
-  const res = await fetch(TOKEN_URL, {
-    method: "POST",
+  const { data, error, response } = await oauth.POST("/token", {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion,
-    }),
+    body: { grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion },
   });
 
-  if (!res.ok) {
+  if (!response.ok) {
     // Google's {error, error_description} body is safe to surface; the assertion is not.
-    throw new Error(`Google token exchange failed: ${res.status} ${await res.text()}`);
+    throw apiError("google", "Google token exchange failed", { response, error });
   }
 
-  const body = await res.json<{ access_token?: string; expires_in?: number }>();
-  if (typeof body.access_token !== "string" || typeof body.expires_in !== "number") {
+  if (typeof data?.access_token !== "string" || typeof data.expires_in !== "number") {
     throw new Error("Google token exchange returned an unexpected body shape");
   }
-  return { accessToken: body.access_token, expiresInSec: body.expires_in };
+  return { accessToken: data.access_token, expiresInSec: data.expires_in };
 }

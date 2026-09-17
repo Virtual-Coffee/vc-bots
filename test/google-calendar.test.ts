@@ -208,7 +208,7 @@ describe("listEvents — Join Link precedence", () => {
           private: { joinLink: "https://zoom.us/j/PRIVATE", hostCode: "111222" },
           shared: { joinLink: "https://zoom.us/j/SHARED", zoomHostCode: "999000" },
         },
-      } as GoogleCalendarEvent,
+      },
     ];
     const events = await port().listEvents(RANGE);
     expect(events[0]!.join).toEqual({ kind: "url", url: "https://meet.example/location" });

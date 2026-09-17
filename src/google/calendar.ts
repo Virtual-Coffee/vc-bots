@@ -1,6 +1,8 @@
 import { DateTime } from "luxon";
 import type { Env } from "../env";
 import type { EventRange, JoinInfo, ReminderEvent } from "../events";
+import type { components, paths } from "../generated/google-calendar-v3";
+import { apiError, createApiClient } from "../http/client";
 import { log } from "../log";
 import { notifyBotLog } from "../slack/notify";
 import { parseHttpUrl, parseZoomMeetingId } from "../zoom/join-link";
@@ -27,8 +29,7 @@ import { fetchGoogleAccessToken } from "./auth";
  * credentials — never log them. Channel ids are random uuids, safe to log.
  */
 
-const CALENDAR_BASE = "https://www.googleapis.com/calendar/v3/calendars";
-const CHANNELS_STOP_URL = "https://www.googleapis.com/calendar/v3/channels/stop";
+const CALENDAR_BASE_URL = "https://www.googleapis.com/calendar/v3";
 /** Google's default (and max) TTL for a calendar push channel: 7 days. */
 const WATCH_TTL_SECONDS = 604800;
 /** Re-fetch this far ahead of expiry to avoid using a token mid-flight as it lapses. */
@@ -83,17 +84,16 @@ export interface CalendarWatch {
 
 export type StopChannelResult = "stopped" | "gone" | "failed";
 
-/** Raw shape of a Google Calendar Events resource (list item / get body). */
-export interface GoogleCalendarEvent {
-  id: string;
-  status?: string;
-  summary?: string;
-  description?: string; // Markdown; rendered downstream with slackify-markdown
-  location?: string;
-  start?: { dateTime?: string; date?: string; timeZone?: string };
-  end?: { dateTime?: string; date?: string; timeZone?: string };
-  conferenceData?: { entryPoints?: Array<{ entryPointType?: string; uri?: string }> };
-  extendedProperties?: { private?: Record<string, string> };
+/**
+ * Raw shape of a Google Calendar Events resource (list item / get body), as the vendored spec
+ * declares it (`docs/adr/0012`) except that `id` is required: Google always sends one, and the
+ * adapter treats a body without it as malformed. `description` is Markdown, rendered downstream
+ * with slackify-markdown.
+ */
+export type GoogleCalendarEvent = components["schemas"]["Event"] & { id: string };
+
+function hasId(e: components["schemas"]["Event"]): e is GoogleCalendarEvent {
+  return typeof e.id === "string";
 }
 
 interface CachedToken {
@@ -102,8 +102,7 @@ interface CachedToken {
 }
 
 export function createGoogleCalendarPort(env: Env): CalendarPort {
-  const calendarId = encodeURIComponent(env.GOOGLE_CALENDAR_ID);
-  const eventsUrl = `${CALENDAR_BASE}/${calendarId}/events`;
+  const calendarId = env.GOOGLE_CALENDAR_ID;
   let cache: CachedToken | undefined;
 
   /** A valid access token, reusing the cached one until it nears expiry. */
@@ -120,11 +119,7 @@ export function createGoogleCalendarPort(env: Env): CalendarPort {
     return accessToken;
   }
 
-  async function authHeaders(json = false): Promise<Record<string, string>> {
-    const headers: Record<string, string> = { Authorization: `Bearer ${await accessToken()}` };
-    if (json) headers["Content-Type"] = "application/json";
-    return headers;
-  }
+  const api = createApiClient<paths>({ baseUrl: CALENDAR_BASE_URL, bearer: accessToken });
 
   return {
     async listEvents(range) {
@@ -132,35 +127,31 @@ export function createGoogleCalendarPort(env: Env): CalendarPort {
       let pageToken: string | undefined;
 
       do {
-        const params = new URLSearchParams({
-          timeMin: range.rangeStart,
-          timeMax: range.rangeEnd,
-          singleEvents: "true",
-          orderBy: "startTime",
-          maxResults: "250",
+        const { data, error, response } = await api.GET("/calendars/{calendarId}/events", {
+          params: {
+            path: { calendarId },
+            query: {
+              timeMin: range.rangeStart,
+              timeMax: range.rangeEnd,
+              singleEvents: true,
+              orderBy: "startTime",
+              maxResults: 250,
+              pageToken,
+            },
+          },
         });
-        if (pageToken !== undefined) {
-          params.set("pageToken", pageToken);
+
+        if (!response.ok) {
+          throw apiError("google", "Google Calendar API error", { response, error });
         }
 
-        const res = await fetch(`${eventsUrl}?${params.toString()}`, {
-          headers: await authHeaders(),
-        });
-
-        if (!res.ok) {
-          const body = await res.text();
-          throw new Error(`Google Calendar API error: ${res.status} ${body}`);
-        }
-
-        const page = await res.json<{
-          items?: GoogleCalendarEvent[];
-          nextPageToken?: string;
-        }>();
-
-        for (const item of page.items ?? []) {
+        for (const item of data?.items ?? []) {
+          if (!hasId(item)) {
+            throw new Error("Google Calendar events list returned an unexpected body shape");
+          }
           items.push(item);
         }
-        pageToken = page.nextPageToken;
+        pageToken = data?.nextPageToken;
       } while (pageToken !== undefined);
 
       log.debug("google.fetched", { count: items.length });
@@ -186,14 +177,17 @@ export function createGoogleCalendarPort(env: Env): CalendarPort {
     },
 
     async getEvent(id) {
-      const res = await fetch(`${eventsUrl}/${encodeURIComponent(id)}`, {
-        headers: await authHeaders(),
+      const { data, error, response } = await api.GET("/calendars/{calendarId}/events/{eventId}", {
+        params: { path: { calendarId, eventId: id } },
       });
-      if (res.status === 404 || res.status === 410) return { kind: "cancelled" };
-      if (!res.ok) {
-        throw new Error(`Google Calendar get event failed: ${res.status} ${await res.text()}`);
+      if (response.status === 404 || response.status === 410) return { kind: "cancelled" };
+      if (!response.ok) {
+        throw apiError("google", "Google Calendar get event failed", { response, error });
       }
-      const e = await res.json<GoogleCalendarEvent>();
+      if (data === undefined || !hasId(data)) {
+        throw new Error("Google Calendar get event returned an unexpected body shape");
+      }
+      const e = data;
       if (e.status === "cancelled") return { kind: "cancelled" };
       const startDateTime = e.start?.dateTime;
       if (startDateTime === undefined) return { kind: "all-day" };
@@ -209,39 +203,35 @@ export function createGoogleCalendarPort(env: Env): CalendarPort {
 
     async watch(address) {
       const channelId = crypto.randomUUID();
-      const res = await fetch(`${eventsUrl}/watch`, {
-        method: "POST",
-        headers: await authHeaders(true),
-        body: JSON.stringify({
+      const { data, error, response } = await api.POST("/calendars/{calendarId}/events/watch", {
+        params: { path: { calendarId } },
+        body: {
           id: channelId,
           type: "web_hook",
           address,
           token: env.GOOGLE_WATCH_TOKEN,
           params: { ttl: String(WATCH_TTL_SECONDS) },
-        }),
+        },
       });
-      if (!res.ok) {
+      if (!response.ok) {
         // Google's error body may be useful; the request body (carrying address/token) is not echoed.
-        throw new Error(`Google Calendar watch failed: ${res.status} ${await res.text()}`);
+        throw apiError("google", "Google Calendar watch failed", { response, error });
       }
-      const body = await res.json<{ resourceId?: string; expiration?: string }>();
-      if (typeof body.resourceId !== "string" || typeof body.expiration !== "string") {
+      if (typeof data?.resourceId !== "string" || typeof data.expiration !== "string") {
         throw new Error("Google Calendar watch returned an unexpected body shape");
       }
-      return { channelId, resourceId: body.resourceId, expirationMs: Number(body.expiration) };
+      return { channelId, resourceId: data.resourceId, expirationMs: Number(data.expiration) };
     },
 
     async stopChannel(channelId, resourceId) {
       if (!resourceId) return "gone";
       try {
-        const res = await fetch(CHANNELS_STOP_URL, {
-          method: "POST",
-          headers: await authHeaders(true),
-          body: JSON.stringify({ id: channelId, resourceId }),
+        const { response } = await api.POST("/channels/stop", {
+          body: { id: channelId, resourceId },
         });
-        if (res.ok) return "stopped";
-        if (res.status === 404 || res.status === 410) return "gone";
-        log.warn("calendar_sync.stop_channel_failed", { channelId, status: res.status });
+        if (response.ok) return "stopped";
+        if (response.status === 404 || response.status === 410) return "gone";
+        log.warn("calendar_sync.stop_channel_failed", { channelId, status: response.status });
         return "failed";
       } catch (error) {
         log.warn("calendar_sync.stop_channel_failed", { channelId, error: String(error) });
