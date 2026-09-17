@@ -16,7 +16,6 @@ import {
   REMINDER_MODAL_CALLBACK_ID,
   WELCOME_MODAL_CALLBACK_ID,
 } from "../bots/admin-panel";
-import { handleAppHomeOpened } from "../bots/app-home";
 import {
   CANCEL_ACTION_ID,
   JOIN_REDIRECT_ACTION_ID,
@@ -25,7 +24,7 @@ import {
 } from "../bots/coworking/join";
 import { JOIN_ACTION_ID } from "../bots/coworking/room-message";
 import { JOIN_EVENT_ACTION_ID } from "../bots/reminders/blocks";
-import { handleTeamJoin } from "../bots/welcome";
+import { handleAppHomeOpened, handleTeamJoin } from "../bots/welcome";
 import type { Env } from "../env";
 
 /** ACK inside Slack's 3s window with an empty 200; the lazy handler does the real work. */

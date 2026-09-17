@@ -4,9 +4,8 @@ import { log } from "../log";
 import { createSlackClient } from "../slack/client";
 import { respondEphemeral } from "../slack/response";
 import { adminPanelBlocks, PANEL_TEXT } from "./admin-panel";
-import { homeView } from "./app-home";
 import { type ReminderName, type SendResult, sendReminder } from "./reminders";
-import { welcomeBlocks } from "./welcome";
+import { publishHomeTab, sendWelcomeDm } from "./welcome";
 
 /**
  * `/vc-bot-admin <type>` — manually fire auto messages. Restricted to workspace admins.
@@ -64,7 +63,7 @@ export async function handleAdminCommand(cmd: AdminCommandPayload, env: Env): Pr
   const [sub, arg] = cmd.text.trim().split(/\s+/);
 
   try {
-    await runAdminCommand(client, cmd, env, sub, arg);
+    await runAdminCommand(cmd, env, sub, arg);
   } catch (err) {
     // We're past the app's ACK (ctx.waitUntil) — an escaped rejection would be an uncaught
     // error and the admin would just see silence. Report back instead.
@@ -92,7 +91,6 @@ export function reminderReply(sub: string, result: SendResult): string {
 }
 
 async function runAdminCommand(
-  client: SlackAPIClient,
   cmd: AdminCommandPayload,
   env: Env,
   sub: string | undefined,
@@ -114,21 +112,14 @@ async function runAdminCommand(
     }
 
     case "welcome": {
-      await client.chat.postMessage({
-        channel: cmd.user_id,
-        text: "Welcome message preview",
-        blocks: welcomeBlocks(env, cmd.user_id),
-        link_names: true,
-        unfurl_links: false,
-        unfurl_media: false,
-      });
+      await sendWelcomeDm(env, cmd.user_id);
       await respondEphemeral(cmd.response_url, ":white_check_mark: Sent you the welcome message.");
       return;
     }
 
     case "home":
     case "app-home": {
-      await client.views.publish({ user_id: cmd.user_id, view: homeView(env) });
+      await publishHomeTab(env, cmd.user_id);
       await respondEphemeral(cmd.response_url, ":white_check_mark: Published your App Home.");
       return;
     }
