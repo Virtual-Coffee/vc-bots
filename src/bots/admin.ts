@@ -4,7 +4,7 @@ import { log } from "../log";
 import { createSlackClient } from "../slack/client";
 import { respondEphemeral } from "../slack/response";
 import { adminPanelBlocks, PANEL_TEXT } from "./admin-panel";
-import { type ReminderName, type SendResult, sendReminder } from "./reminders";
+import { type SendResult, sendReminder } from "./reminders";
 import { publishHomeTab, sendWelcomeDm } from "./welcome";
 
 /**
@@ -56,7 +56,10 @@ export async function handleAdminCommand(cmd: AdminCommandPayload, env: Env): Pr
 
   if (!(await isWorkspaceAdmin(client, cmd.user_id))) {
     log.warn("admin.denied", { user: cmd.user_id, text: cmd.text });
-    await respondEphemeral(cmd.response_url, ":no_entry: This command is for workspace admins only.");
+    await respondEphemeral(
+      cmd.response_url,
+      ":no_entry: This command is for workspace admins only.",
+    );
     return;
   }
 
@@ -106,7 +109,7 @@ async function runAdminCommand(
   switch (sub) {
     case "daily":
     case "weekly": {
-      const result = await sendReminder(sub as ReminderName, env);
+      const result = await sendReminder(sub, env);
       await respondEphemeral(cmd.response_url, reminderReply(sub, result));
       return;
     }
@@ -128,7 +131,10 @@ async function runAdminCommand(
       const stub = env.COWORKING_ROOM.getByName(env.ZOOM_MEETING_ID);
       if (arg === "open") {
         await stub.adminAnnounceOpen();
-        await respondEphemeral(cmd.response_url, ":white_check_mark: Posted the co-working room-open announcement.");
+        await respondEphemeral(
+          cmd.response_url,
+          ":white_check_mark: Posted the co-working room-open announcement.",
+        );
         return;
       }
       if (arg === "close") {

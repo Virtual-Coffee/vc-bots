@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // src/index.ts is picked up from package.json `main`.
+  "entry": ["vitest.config.ts", "test/**/*.test.ts"],
+  "project": ["src/**/*.ts", "test/**/*.ts"],
+  // `cloudflare:workers` / `cloudflare:test` are workerd virtual modules, not an npm package.
+  "ignoreDependencies": ["cloudflare"],
+  "ignoreExportsUsedInFile": true,
+  // The vitest plugin evaluates vitest.config.ts, which reads wrangler.jsonc and fails under
+  // knip's loader; the test entries above cover what the plugin would add.
+  "vitest": false
+}

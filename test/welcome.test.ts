@@ -88,18 +88,20 @@ describe("sendWelcomeDm", () => {
     await sendWelcomeDm(maintainersEnv, "U123");
     const text = allText(dmBlocks());
     expect(text).toContain("community maintainers");
-    expect(text).toContain("<@U014HT3RNCU>, <@U0157K5MUPJ>, <@U01577R42TS>, <@U01JXQGMSUC>, or <@U01B9NQF2PR>");
+    expect(text).toContain(
+      "<@U014HT3RNCU>, <@U0157K5MUPJ>, <@U01577R42TS>, <@U01JXQGMSUC>, or <@U01B9NQF2PR>",
+    );
   });
 
   it("names a lone maintainer without list punctuation", async () => {
-    await sendWelcomeDm({ ...env, WELCOME_MAINTAINER_IDS: "U014HT3RNCU" } as Env, "U123");
+    await sendWelcomeDm({ ...env, WELCOME_MAINTAINER_IDS: "U014HT3RNCU" }, "U123");
     const text = allText(dmBlocks());
     expect(text).toContain("community maintainers, <@U014HT3RNCU>, for any help");
     expect(text).not.toContain(", or <@");
   });
 
   it("omits the maintainer section when the var is empty", async () => {
-    await sendWelcomeDm({ ...env, WELCOME_MAINTAINER_IDS: "" } as Env, "U123");
+    await sendWelcomeDm({ ...env, WELCOME_MAINTAINER_IDS: "" }, "U123");
     expect(allText(dmBlocks())).not.toContain("community maintainers");
   });
 });
@@ -119,7 +121,13 @@ describe("publishHomeTab", () => {
     expect(allText(view.blocks)).toContain(":wave: Hey there, welcome to Virtual Coffee");
     // Same content as the DM apart from the greeting: swap it in and the two are identical.
     expect(view.blocks).toEqual([
-      { ...dm[0], text: { type: "mrkdwn", text: (dm[0]!.text as { text: string }).text.replace("<@U123>", "there") } },
+      {
+        ...dm[0],
+        text: {
+          type: "mrkdwn",
+          text: (dm[0]!.text as { text: string }).text.replace("<@U123>", "there"),
+        },
+      },
       ...dm.slice(1),
     ]);
   });

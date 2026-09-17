@@ -40,7 +40,11 @@ describe("response_url helpers pin their guardrails", () => {
   it("respondEphemeral posts a new ephemeral (replace_original: false)", async () => {
     const body = captureBody();
     await respondEphemeral("https://hooks.slack.test/x", "hi");
-    expect(body()).toMatchObject({ response_type: "ephemeral", replace_original: false, text: "hi" });
+    expect(body()).toMatchObject({
+      response_type: "ephemeral",
+      replace_original: false,
+      text: "hi",
+    });
   });
 
   it("replaceEphemeral posts an ephemeral that replaces the original", async () => {
@@ -48,7 +52,11 @@ describe("response_url helpers pin their guardrails", () => {
     await replaceEphemeral("https://hooks.slack.test/x", "done", [
       { type: "section", text: { type: "mrkdwn", text: "done" } },
     ]);
-    expect(body()).toMatchObject({ response_type: "ephemeral", replace_original: true, text: "done" });
+    expect(body()).toMatchObject({
+      response_type: "ephemeral",
+      replace_original: true,
+      text: "done",
+    });
     expect(body().blocks).toHaveLength(1);
   });
 });
@@ -69,13 +77,17 @@ describe("response_url helpers fail soft", () => {
     answerWith(500);
 
     await expect(deleteOriginal("https://hooks.slack.test/x")).resolves.toBeUndefined();
-    expect(warnLines().join("\n")).toContain("slack.response_url.not_ok action=deleteOriginal status=500");
+    expect(warnLines().join("\n")).toContain(
+      "slack.response_url.not_ok action=deleteOriginal status=500",
+    );
   });
 
   it("replaceEphemeral fails soft too, tagged with its own action", async () => {
     answerWith(500);
 
     await expect(replaceEphemeral("https://hooks.slack.test/x", "hi")).resolves.toBeUndefined();
-    expect(warnLines().join("\n")).toContain("slack.response_url.not_ok action=replaceEphemeral status=500");
+    expect(warnLines().join("\n")).toContain(
+      "slack.response_url.not_ok action=replaceEphemeral status=500",
+    );
   });
 });

@@ -41,7 +41,7 @@ describe("notifyBotLog", () => {
     const fetchMock = vi.fn(async () => Response.json({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await notifyBotLog({ ...baseEnv, SLACK_BOTLOG_CHANNEL_ID: "" } as Env, "x.failed", { a: 1 });
+    await notifyBotLog({ ...baseEnv, SLACK_BOTLOG_CHANNEL_ID: "" }, "x.failed", { a: 1 });
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

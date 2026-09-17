@@ -49,10 +49,6 @@ export type SlackDateFormat = `${string}${SlackDateToken}${string}`;
  * @param format Slack date format, e.g. `{time}` or `{date_long_pretty} {time}`.
  * @param fallbackFormat Luxon format for the plain-text fallback, e.g. `t ZZZZ`.
  */
-export function dateToken(
-  dt: DateTime,
-  format: SlackDateFormat,
-  fallbackFormat: string,
-): string {
+export function dateToken(dt: DateTime, format: SlackDateFormat, fallbackFormat: string): string {
   return `<!date^${Math.floor(dt.toSeconds())}^${format}|${dt.toFormat(fallbackFormat)}>`;
 }

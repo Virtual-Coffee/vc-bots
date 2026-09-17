@@ -1,4 +1,9 @@
-import { createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
+import {
+  createExecutionContext,
+  env,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CANCEL_ACTION_ID,
@@ -10,7 +15,11 @@ import {
 } from "../src/bots/coworking/join";
 import { setLogLevel } from "../src/log";
 import { route } from "../src/router";
-import { installFetchRecorder, type FetchRecorder, type RecordedCall } from "./helpers/fetch-recorder";
+import {
+  installFetchRecorder,
+  type FetchRecorder,
+  type RecordedCall,
+} from "./helpers/fetch-recorder";
 
 let fetched: FetchRecorder;
 
@@ -94,7 +103,9 @@ describe("handleJoinClick", () => {
   it("answers with an error ephemeral when registration fails", async () => {
     // Same routes, but the Zoom invite-link call now fails.
     fetched.respondWith((call) =>
-      call.url.includes("api.zoom.us/v2/meetings/") ? new Response("nope", { status: 400 }) : undefined,
+      call.url.includes("api.zoom.us/v2/meetings/")
+        ? new Response("nope", { status: 400 })
+        : undefined,
     );
 
     await handleJoinClick(payload(), env, ORIGIN);
@@ -118,8 +129,8 @@ describe("the join flow's logs", () => {
 
     // The click mints the token…
     await handleJoinClick(payload(), env, ORIGIN);
-    const token = JSON.parse(responseUrlCalls()[0]!.body).attachments[0].blocks
-      .flatMap((b: { elements?: { url?: string }[] }) => b.elements ?? [])
+    const token = JSON.parse(responseUrlCalls()[0]!.body)
+      .attachments[0].blocks.flatMap((b: { elements?: { url?: string }[] }) => b.elements ?? [])
       .map((e: { url?: string }) => e.url?.match(/\/join\/([0-9a-f]{32})$/)?.[1])
       .find(Boolean) as string;
     expect(token).toBeTruthy();
@@ -130,7 +141,9 @@ describe("the join flow's logs", () => {
     await waitOnExecutionContext(ctx);
     expect(res.headers.get("Location")).toBe("https://zoom.us/w/personal-9");
 
-    const logged = spies.flatMap((s) => s.mock.calls.map((c: unknown[]) => String(c[0]))).join("\n");
+    const logged = spies
+      .flatMap((s) => s.mock.calls.map((c: unknown[]) => String(c[0])))
+      .join("\n");
     expect(logged).toContain("coworking.join.token"); // the DO's debug lines were captured
     expect(logged).toContain("join.redirect found=true");
     expect(logged).not.toContain(token);

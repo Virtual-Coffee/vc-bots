@@ -205,13 +205,22 @@ describe("CoworkingRoom — room message lifecycle", () => {
     await stub.handleZoomEvent(eventAt("meeting.started", "uuid-1", t0));
     // Ada (member) and Bob (guest) overlap → peak 2.
     await stub.handleZoomEvent(
-      eventAt("meeting.participant_joined", "uuid-1", t0 + 60_000, { user_id: "p1", user_name: "Ada" }),
+      eventAt("meeting.participant_joined", "uuid-1", t0 + 60_000, {
+        user_id: "p1",
+        user_name: "Ada",
+      }),
     );
     await stub.handleZoomEvent(
-      eventAt("meeting.participant_joined", "uuid-1", t0 + 120_000, { user_id: "p2", user_name: "Bob" }),
+      eventAt("meeting.participant_joined", "uuid-1", t0 + 120_000, {
+        user_id: "p2",
+        user_name: "Bob",
+      }),
     );
     await stub.handleZoomEvent(
-      eventAt("meeting.participant_left", "uuid-1", t0 + 180_000, { user_id: "p1", user_name: "Ada" }),
+      eventAt("meeting.participant_left", "uuid-1", t0 + 180_000, {
+        user_id: "p1",
+        user_name: "Ada",
+      }),
     );
     // Ends 90 minutes after it started.
     await stub.handleZoomEvent(eventAt("meeting.ended", "uuid-1", t0 + 90 * 60_000));
@@ -362,7 +371,10 @@ describe("CoworkingRoom — participant correlation & presence", () => {
   it("is idempotent for duplicate participant_joined", async () => {
     const stub = room("c3");
     await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
-    const joined = event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" });
+    const joined = event("meeting.participant_joined", "uuid-1", {
+      user_id: "p1",
+      user_name: "Ada",
+    });
     await stub.handleZoomEvent(joined);
     await stub.handleZoomEvent(joined);
 
@@ -657,7 +669,9 @@ describe("CoworkingRoom — schema migration", () => {
     expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
     expect(lastUpdatedTs()).toBe("old-ts");
     expect(lastBlocks("/api/chat.update")).toContain("Ada");
-    expect(lastBlocks("/api/chat.update")).toContain("Session started at <!date^1700000000^{time}|");
+    expect(lastBlocks("/api/chat.update")).toContain(
+      "Session started at <!date^1700000000^{time}|",
+    );
   });
 });
 
@@ -688,7 +702,9 @@ describe("CoworkingRoom — event serialization (ADR 0003)", () => {
     vi.waitFor(() => expect(callsTo(fragment)).toHaveLength(n));
   /** Wait until the DO holds `n` queued/running items — the RPC fired while parked has reached `enqueue`. */
   const queued = (stub: ReturnType<typeof room>, n: number) =>
-    vi.waitFor(async () => expect(await runInDurableObject(stub, (i) => (i as CoworkingRoom).queueDepth)).toBe(n));
+    vi.waitFor(async () =>
+      expect(await runInDurableObject(stub, (i) => (i as CoworkingRoom).queueDepth)).toBe(n),
+    );
 
   it("records a join that arrives while meeting.started is still posting the open card", async () => {
     const stub = room("q1");

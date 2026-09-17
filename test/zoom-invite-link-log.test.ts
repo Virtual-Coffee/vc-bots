@@ -10,7 +10,9 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async () =>
-      Response.json({ attendees: [{ name: "Ada", join_url: "https://zoom.us/w/SECRET-TOKEN-123" }] }),
+      Response.json({
+        attendees: [{ name: "Ada", join_url: "https://zoom.us/w/SECRET-TOKEN-123" }],
+      }),
     ),
   );
 });

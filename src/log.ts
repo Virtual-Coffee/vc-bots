@@ -19,15 +19,27 @@ export function setLogLevel(level: string | undefined): void {
   if (level && level in ORDER) threshold = level as LogLevel;
 }
 
-function format(event: string, fields?: Record<string, unknown>): string {
-  if (!fields) return event;
+/**
+ * Render structured fields as `key=val` parts; `undefined` values are dropped, objects are
+ * JSON. Shared with `notifyBotLog` so console lines and #bot-log alerts read alike.
+ */
+export function renderFields(fields: Record<string, unknown>): string[] {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) continue;
     const rendered =
-      value === null || typeof value === "object" ? JSON.stringify(value) : String(value);
+      value === null || typeof value === "object"
+        ? JSON.stringify(value)
+        : // eslint-disable-next-line @typescript-eslint/no-base-to-string -- primitives only here
+          String(value);
     parts.push(`${key}=${rendered}`);
   }
+  return parts;
+}
+
+function format(event: string, fields?: Record<string, unknown>): string {
+  if (!fields) return event;
+  const parts = renderFields(fields);
   return parts.length ? `${event} ${parts.join(" ")}` : event;
 }
 

@@ -9,7 +9,13 @@
     "deploy": "wrangler deploy",
     "cf-types": "wrangler types",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "knip": "knip",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm knip"
   },
   "keywords": [],
   "author": "Joe Karow",
@@ -29,8 +35,15 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@eslint/js": "^10.0.1",
     "@types/luxon": "^3.7.5",
-    "typescript": "^7.0.2",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "eslint": "^10.10.0",
+    "eslint-config-prettier": "^10.1.8",
+    "knip": "^6.36.0",
+    "prettier": "^3.9.7",
+    "typescript": "npm:@typescript/typescript6@^6",
+    "typescript-eslint": "^8.70.0",
     "vitest": "^4.1.11",
     "wrangler": "^4.131.0"
   },

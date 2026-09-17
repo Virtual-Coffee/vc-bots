@@ -23,7 +23,13 @@ describe("verifyZoomSignature", () => {
   it("rejects a tampered body", async () => {
     const signature = await sign(rawBody, timestamp);
     expect(
-      await verifyZoomSignature({ secretToken: SECRET, rawBody: "{}", timestamp, signature, nowMs }),
+      await verifyZoomSignature({
+        secretToken: SECRET,
+        rawBody: "{}",
+        timestamp,
+        signature,
+        nowMs,
+      }),
     ).toBe(false);
   });
 
@@ -31,7 +37,13 @@ describe("verifyZoomSignature", () => {
     const oldTs = String(Math.floor(nowMs / 1000) - 600);
     const signature = await sign(rawBody, oldTs);
     expect(
-      await verifyZoomSignature({ secretToken: SECRET, rawBody, timestamp: oldTs, signature, nowMs }),
+      await verifyZoomSignature({
+        secretToken: SECRET,
+        rawBody,
+        timestamp: oldTs,
+        signature,
+        nowMs,
+      }),
     ).toBe(false);
   });
 });
