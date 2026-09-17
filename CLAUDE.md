@@ -35,7 +35,7 @@ room message has its own unit suite (`test/room-message.test.ts`) against the fa
 **Request flow.** `src/index.ts` is the Worker entrypoint (`fetch` + `scheduled` cron). `fetch`
 delegates to `src/router.ts`, a plain `method + path` switch (no router lib) over the provider
 routes `/zoom/webhook`, `/slack/events`, `/slack/interactivity`, `/slack/commands`, plus
-`GET /join/<token>` (the co-working join redirect) and `/health`.
+`GET /join/<token>` (the co-working join redirect), `/health` and `HEAD /`.
 All three `POST /slack/*` routes delegate to one path-agnostic `SlackApp`
 (`slack-cloudflare-workers`), built per request by `createSlackApp(env, publicBaseUrl)` in
 `src/slack/app.ts` — handler registrations (`.event()` / `.action()` / `.command()`) live there.
