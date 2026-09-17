@@ -123,8 +123,26 @@ function planPatch(event: CalendarEvent): { patch: Patch; skipped?: string } {
 
 function label(event: CalendarEvent): string {
   const start = event.start?.dateTime ?? event.start?.date ?? "?";
-  const kind = event.recurrence ? "series" : "single";
-  return `${event.summary ?? "(untitled)"} | ${event.id} | ${kind} from ${start}`;
+  const kind = event.recurrence ? "series from" : "single on";
+  return `${kind} ${start} · id ${event.id}`;
+}
+
+/** Word-wraps `text` for the report; each paragraph keeps its own lines. */
+function wrap(text: string, width: number): string[] {
+  const out: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    let line = "";
+    for (const word of paragraph.split(" ")) {
+      if (line && line.length + 1 + word.length > width) {
+        out.push(line);
+        line = word;
+      } else {
+        line = line ? `${line} ${word}` : word;
+      }
+    }
+    out.push(line);
+  }
+  return out;
 }
 
 async function main(): Promise<void> {
@@ -137,45 +155,57 @@ async function main(): Promise<void> {
     timeMin: new Date(now - 90 * DAY_MS).toISOString(),
   });
 
-  console.log(`${apply ? "APPLY" : "DRY RUN"} — ${masters.length} live series/standalone events\n`);
+  console.log(`${apply ? "APPLY" : "DRY RUN"} — ${masters.length} live series/standalone events`);
 
   const patches: { event: CalendarEvent; patch: Patch }[] = [];
-  let noops = 0;
-  let skips = 0;
+  const noops: CalendarEvent[] = [];
+  const skipped: string[] = [];
+  // Identical descriptions convert identically; print the conversion once and point back.
+  const seenDescriptions = new Map<string, string>();
   for (const event of masters) {
-    const { patch, skipped } = planPatch(event);
-    const lines: string[] = [];
-    if (patch.location !== undefined) {
-      lines.push(`  location:    ${event.location ?? "(none)"}`);
-      lines.push(`            → ${patch.location}`);
-    }
-    if (patch.description !== undefined) {
-      lines.push(`  description: ${JSON.stringify(event.description)}`);
-      lines.push(`            → ${JSON.stringify(patch.description)}`);
-    }
-    if (patch.extendedProperties) {
-      lines.push(`  joinLink:    ${event.extendedProperties?.private?.joinLink} → (deleted)`);
-    }
-    if (skipped) {
-      skips++;
-      lines.push(`  SKIP ${skipped}`);
-    }
-    if (lines.length === 0) {
-      noops++;
-      console.log(`no-op  ${label(event)}`);
+    const { patch, skipped: skipReason } = planPatch(event);
+    if (skipReason) skipped.push(`${event.summary ?? "(untitled)"} — ${skipReason}`);
+    if (Object.keys(patch).length === 0) {
+      noops.push(event);
       continue;
     }
-    console.log(`${Object.keys(patch).length ? "PATCH " : "      "} ${label(event)}`);
-    for (const line of lines) console.log(line);
-    if (Object.keys(patch).length) patches.push({ event, patch });
+    patches.push({ event, patch });
+
+    console.log(`\n▸ ${event.summary ?? "(untitled)"}`);
+    console.log(`  ${label(event)}`);
+    if (patch.location !== undefined) {
+      console.log(`  location     ${event.location ?? "(none)"}`);
+      console.log(`             → ${patch.location}`);
+    }
+    if (patch.description !== undefined) {
+      const before = event.description ?? "";
+      const seen = seenDescriptions.get(before);
+      if (seen) {
+        console.log(`  description  same conversion as ${seen}`);
+      } else {
+        seenDescriptions.set(before, `"${event.summary ?? "(untitled)"}" above`);
+        console.log("  description");
+        for (const line of wrap(before, 92)) console.log(`    - ${line}`);
+        for (const line of wrap(patch.description, 92)) console.log(`    + ${line}`);
+      }
+    }
+    if (patch.extendedProperties) {
+      console.log(`  joinLink     deleted (was ${event.extendedProperties?.private?.joinLink})`);
+    }
+    if (skipReason) console.log(`  SKIP         ${skipReason}`);
+  }
+
+  if (noops.length) {
+    console.log("\nNo change needed:");
+    for (const event of noops) console.log(`  ${event.summary ?? "(untitled)"} — ${label(event)}`);
   }
 
   // Warnings: things the script won't fix but someone should know about.
-  console.log("");
+  const warnings: string[] = [];
   for (const event of masters) {
     const location = event.location ?? event.extendedProperties?.private?.joinLink;
     if (location && parseZoomMeetingId(location) && !event.extendedProperties?.private?.hostCode) {
-      console.log(`WARN Zoom Join Link with no hostCode: ${label(event)}`);
+      warnings.push(`Zoom Join Link with no hostCode: ${event.summary} — ${label(event)}`);
     }
   }
   const byId = new Map(masters.map((e) => [e.id, e]));
@@ -194,12 +224,18 @@ async function main(): Promise<void> {
     ].filter((d) => d !== null);
     if (diffs.length) {
       exceptions++;
-      console.log(`WARN instance overrides ${diffs.join(", ")} (not patched): ${label(instance)}`);
+      warnings.push(
+        `instance overrides ${diffs.join(", ")} (not patched): ${instance.summary} — ${label(instance)}`,
+      );
     }
+  }
+  if (warnings.length) {
+    console.log("\nWarnings:");
+    for (const warning of warnings) console.log(`  ${warning}`);
   }
 
   console.log(
-    `\n${patches.length} to patch, ${noops} no-op, ${skips} skipped, ${exceptions} instance exception(s) in the next 90 days`,
+    `\n${patches.length} to patch · ${noops.length} unchanged · ${skipped.length} skipped · ${exceptions} instance exception(s) in the next 90 days`,
   );
 
   if (!apply) {
@@ -215,10 +251,12 @@ async function main(): Promise<void> {
       body: JSON.stringify(patch),
     });
     if (res.ok) {
-      console.log(`ok     ${label(event)}`);
+      console.log(`ok      ${event.summary} — ${label(event)}`);
     } else {
       failed++;
-      console.log(`FAILED ${label(event)}: HTTP ${res.status} ${await res.text()}`);
+      console.log(
+        `FAILED  ${event.summary} — ${label(event)}: HTTP ${res.status} ${await res.text()}`,
+      );
     }
   }
   console.log(`\n${patches.length - failed} patched, ${failed} failed`);
