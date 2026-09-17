@@ -30,6 +30,10 @@ const STALE_SESSION_MS = 18 * 60 * 60 * 1000;
  *  (`DEFAULT_TTL` in zoom/invite-links.ts), past which the link is dead anyway. */
 const INVITE_LINK_TTL_MS = 7200 * 1000;
 
+/** Zoom pre-fill name when the member's Slack profile couldn't be read. Only ever sent to Zoom —
+ *  it is never stored in `member_link`, so it can't correlate anyone. */
+const FALLBACK_DISPLAY_NAME = "VirtualCoffee member";
+
 /** 128-bit random, url-safe token for the `/join/<token>` redirect (Web Crypto only). */
 function randomToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -169,10 +173,13 @@ export class CoworkingRoom extends DurableObject<Env> {
    * best-effort: an invite-link joiner's `participant_joined` carries no registrant id, only the
    * `user_name` we baked in here — so we match on that name (and fall back to a plain guest when a
    * signed-in member's own Zoom name overrides the pre-fill). No member PII is sent to Zoom.
+   *
+   * `displayName` is null when the caller couldn't read the member's Slack profile: Zoom gets a
+   * generic pre-fill and no `member_link` row is written.
    */
   async handleJoinRequest(input: {
     slackUserId: string;
-    displayName: string;
+    displayName: string | null;
   }): Promise<{ token: string }> {
     log.debug("coworking.join.token", { user: input.slackUserId });
     const accessToken = await getCachedZoomToken(this.env, this.ctx.storage);
@@ -180,19 +187,23 @@ export class CoworkingRoom extends DurableObject<Env> {
     const { joinUrl } = await createInviteLink(
       accessToken,
       this.env.ZOOM_MEETING_ID,
-      input.displayName,
+      input.displayName ?? FALLBACK_DISPLAY_NAME,
     );
 
-    log.debug("coworking.join.store", { user: input.slackUserId });
-    this.sql.exec(
-      `INSERT INTO member_link (slack_user_id, display_name, created_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(slack_user_id) DO UPDATE SET
-         display_name = excluded.display_name, created_at = excluded.created_at`,
-      input.slackUserId,
-      input.displayName,
-      Date.now(),
-    );
+    // No display name → nothing to correlate on. Storing the generic pre-fill instead would match
+    // every Zoom joiner who shows up under it to whichever member clicked Join last.
+    if (input.displayName !== null) {
+      log.debug("coworking.join.store", { user: input.slackUserId });
+      this.sql.exec(
+        `INSERT INTO member_link (slack_user_id, display_name, created_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(slack_user_id) DO UPDATE SET
+           display_name = excluded.display_name, created_at = excluded.created_at`,
+        input.slackUserId,
+        input.displayName,
+        Date.now(),
+      );
+    }
 
     // Opaque redirect token, expiring with the Zoom link itself (see DEFAULT_TTL in
     // invite-links.ts). Sweep expired rows while we're here so the table stays small.
@@ -478,14 +489,19 @@ export class CoworkingRoom extends DurableObject<Env> {
   }
 
   /**
-   * Best-effort correlation: find the member who minted an invite link with this name. Invite-link
-   * joiners carry no registrant id, so the baked-in name is all we have to match on.
+   * Best-effort correlation: find the member who minted a *recent* invite link with this name.
+   * Invite-link joiners carry no registrant id, so the baked-in name is all we have to match on.
+   * The invite is the contract, so the match is bounded by its TTL: a member who joins Zoom
+   * directly more than a TTL after their last Join click shows as a guest, and a same-named
+   * joiner months later can't inherit their mention.
    */
   private findMember(name: string): MemberLinkRow | undefined {
     return this.sql
       .exec<MemberLinkRow>(
-        "SELECT * FROM member_link WHERE display_name = ? ORDER BY created_at DESC LIMIT 1",
+        `SELECT * FROM member_link WHERE display_name = ? AND created_at >= ?
+         ORDER BY created_at DESC LIMIT 1`,
         name,
+        Date.now() - INVITE_LINK_TTL_MS,
       )
       .toArray()[0];
   }

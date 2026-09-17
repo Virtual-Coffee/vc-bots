@@ -302,6 +302,60 @@ describe("CoworkingRoom — participant correlation & presence", () => {
     expect((await participants(stub))[0]?.slack_user_id).toBeNull();
   });
 
+  it("a join request with no display name stores no member_link; a Zoom joiner named like the fallback is a guest", async () => {
+    const stub = room("c2c");
+    // Profile lookup failed upstream → the DO pre-fills a generic name but records nothing.
+    const { token } = await stub.handleJoinRequest({ slackUserId: "U777", displayName: null });
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
+    const links = await runInDurableObject(stub, (_i, state) =>
+      state.storage.sql.exec("SELECT COUNT(*) AS n FROM member_link").toArray(),
+    );
+    expect(links[0]?.n).toBe(0);
+
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-1", {
+        user_id: "p1",
+        user_name: "VirtualCoffee member",
+      }),
+    );
+
+    // Nobody owns the fallback name, so whoever joins under it is a plain guest.
+    const presence = lastBlocks("/api/chat.update");
+    expect(presence).toContain("VirtualCoffee member");
+    expect(presence).not.toContain("U777");
+    expect(presence).not.toContain('"user_id"');
+    expect((await participants(stub))[0]?.slack_user_id).toBeNull();
+  });
+
+  it("a member_link older than the invite TTL no longer correlates; a fresh one does", async () => {
+    const stub = room("c2d");
+    await stub.handleJoinRequest({ slackUserId: "U777", displayName: "Ada" });
+    // Age the link past the invite TTL (2h) — the invite it was minted with is dead by now.
+    await runInDurableObject(stub, (_i, state) =>
+      state.storage.sql.exec(
+        "UPDATE member_link SET created_at = ?",
+        Date.now() - 7200 * 1000 - 1000,
+      ),
+    );
+
+    await stub.handleZoomEvent(event("meeting.started", "uuid-1"));
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
+    );
+    expect(lastBlocks("/api/chat.update")).not.toContain("U777");
+    expect((await participants(stub))[0]?.slack_user_id).toBeNull();
+
+    // A fresh Join click renews the link, and the next joiner by that name is the member again.
+    await stub.handleJoinRequest({ slackUserId: "U777", displayName: "Ada" });
+    await stub.handleZoomEvent(
+      event("meeting.participant_joined", "uuid-1", { user_id: "p2", user_name: "Ada" }),
+    );
+    expect(lastBlocks("/api/chat.update")).toContain('"user_id":"U777"');
+    const parts = await participants(stub);
+    expect(parts.find((p) => p.zoom_user_id === "p2")?.slack_user_id).toBe("U777");
+  });
+
   it("is idempotent for duplicate participant_joined", async () => {
     const stub = room("c3");
     await stub.handleZoomEvent(event("meeting.started", "uuid-1"));

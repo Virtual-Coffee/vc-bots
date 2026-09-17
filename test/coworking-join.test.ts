@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CANCEL_ACTION_ID,
@@ -53,6 +53,36 @@ describe("handleJoinClick", () => {
     // reaches the Slack UI, so the hover tooltip shows a clean url.
     expect(attachments).toMatch(new RegExp(`${ORIGIN}/join/[0-9a-f]{32}`));
     expect(attachments).not.toContain("personal-9");
+  });
+
+  it("profile lookup fails → the DO gets displayName: null and the ephemeral is still sent", async () => {
+    fetched.respondWith((call) =>
+      call.url.includes("/api/users.profile.get")
+        ? Response.json({ ok: false, error: "user_not_found" })
+        : undefined,
+    );
+
+    const before = Date.now();
+    await handleJoinClick(payload(), env, ORIGIN);
+
+    // The DO saw no name: Zoom got its generic pre-fill, and this click stored nothing to
+    // correlate on (the DO is shared across this file, so only rows from this call count).
+    const zoom = fetched.callsTo("api.zoom.us/v2/meetings/").at(-1)!;
+    expect(JSON.parse(zoom.body).attendees).toEqual([{ name: "VirtualCoffee member" }]);
+    const stub = env.COWORKING_ROOM.getByName(env.ZOOM_MEETING_ID);
+    const links = await runInDurableObject(stub, (_i, state) =>
+      state.storage.sql
+        .exec("SELECT COUNT(*) AS n FROM member_link WHERE created_at >= ?", before)
+        .toArray(),
+    );
+    expect(links[0]?.n).toBe(0);
+
+    // The click still gets its join ephemeral.
+    const replies = responseUrlCalls();
+    expect(replies).toHaveLength(1);
+    const sent = JSON.parse(replies[0]!.body);
+    expect(sent.response_type).toBe("ephemeral");
+    expect(JSON.stringify(sent.attachments)).toMatch(new RegExp(`${ORIGIN}/join/[0-9a-f]{32}`));
   });
 
   it("answers with an error ephemeral when registration fails", async () => {
