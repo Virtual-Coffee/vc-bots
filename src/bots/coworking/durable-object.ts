@@ -67,6 +67,7 @@ export class CoworkingRoom extends DurableObject<Env> {
   private readonly roomMessage: RoomMessage;
   /** Tail of the serialized work queue — see `enqueue`. */
   private queue: Promise<unknown> = Promise.resolve();
+  private pending = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -123,12 +124,35 @@ export class CoworkingRoom extends DurableObject<Env> {
     if (!exists) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
+  /** Work items queued or running — readable via `runInDurableObject` so tests can prove interleaving. */
+  get queueDepth(): number {
+    return this.pending;
+  }
+
   /**
    * Run `work` after every previously queued piece of work has finished (ADR 0003). The tail
    * never rejects, so one failing handler can't wedge the room; the caller still sees its own failure.
+   * `label` names the work in the queue logs — `coworking.queue.wait` at `info` is the signal that
+   * the interleaving the queue exists for actually happened.
    */
-  private enqueue<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(work);
+  private enqueue<T>(label: string, work: () => Promise<T>): Promise<T> {
+    const depth = ++this.pending;
+    const queuedAt = Date.now();
+    if (depth > 1) log.info("coworking.queue.wait", { work: label, depth });
+    const run = this.queue.then(async () => {
+      log.debug("coworking.queue.run", { work: label, waitedMs: Date.now() - queuedAt });
+      const startedAt = Date.now();
+      try {
+        return await work();
+      } finally {
+        this.pending--;
+        log.debug("coworking.queue.done", {
+          work: label,
+          ranMs: Date.now() - startedAt,
+          depth: this.pending,
+        });
+      }
+    });
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -205,16 +229,16 @@ export class CoworkingRoom extends DurableObject<Env> {
    * session behind it, so it never collides with the Zoom-driven flow.
    */
   async adminAnnounceOpen(): Promise<void> {
-    await this.enqueue(() => this.roomMessage.announceOpen());
+    await this.enqueue("admin.announce_open", () => this.roomMessage.announceOpen());
   }
 
   /** Admin (`/vc-bot-admin coworking close`): turn the open announcement into an ended card. */
   async adminAnnounceClose(): Promise<{ closed: boolean }> {
-    return this.enqueue(() => this.roomMessage.announceClose());
+    return this.enqueue("admin.announce_close", () => this.roomMessage.announceClose());
   }
 
   async handleZoomEvent(event: ZoomMeetingEvent): Promise<void> {
-    return this.enqueue(() => {
+    return this.enqueue(event.event, () => {
       switch (event.event) {
         case "meeting.started":
           return this.onMeetingStarted(event);
@@ -230,7 +254,7 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   /** Stale-session safety net: force-end any session still active hours after it started. */
   override async alarm(): Promise<void> {
-    await this.enqueue(async () => {
+    await this.enqueue("alarm", async () => {
       const active = this.sql
         .exec<SessionRow>("SELECT * FROM session WHERE status = 'active'")
         .toArray();

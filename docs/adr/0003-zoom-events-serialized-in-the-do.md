@@ -35,6 +35,9 @@ as a presence card.
   independent) and, with a queue, would only risk Zoom's ~3 s timeout and a retry storm.
 - **A dropped join logs at `warn`.** `coworking.joined.drop_no_session` is data loss, not
   chatter.
+- **The queue logs when it actually queues.** `coworking.queue.wait` (`info`, with the work's
+  label and depth) fires only when an item lands behind in-flight work — the interleaving this
+  ADR exists for. Per-item `coworking.queue.run` / `.done` (wait and run ms) are `debug`.
 
 ## Consequences
 
