@@ -1,4 +1,4 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CANCEL_ACTION_ID,
@@ -8,6 +8,8 @@ import {
   handleJoinDismiss,
   type JoinActionPayload,
 } from "../src/bots/coworking/join";
+import { setLogLevel } from "../src/log";
+import { route } from "../src/router";
 import { installFetchRecorder, type FetchRecorder, type RecordedCall } from "./helpers/fetch-recorder";
 
 let fetched: FetchRecorder;
@@ -15,7 +17,11 @@ let fetched: FetchRecorder;
 beforeEach(() => {
   fetched = installFetchRecorder({ zoomJoinUrl: "https://zoom.us/w/personal-9" });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  setLogLevel("warn");
+});
 
 const RESPONSE_URL = "https://hooks.slack.com/actions/resp-123";
 const ORIGIN = "https://bots.example";
@@ -99,6 +105,36 @@ describe("handleJoinClick", () => {
     expect(sent.response_type).toBe("ephemeral");
     expect(sent.text).toContain("couldn");
     expect(replies[0]!.body).not.toContain("personal-9");
+  });
+});
+
+describe("the join flow's logs", () => {
+  it("never carries the token or the personal Zoom url, even at debug", async () => {
+    // Every level: the token and the url it resolves to are both join credentials.
+    setLogLevel("debug");
+    const spies = (["debug", "info", "warn", "error"] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => {}),
+    );
+
+    // The click mints the token…
+    await handleJoinClick(payload(), env, ORIGIN);
+    const token = JSON.parse(responseUrlCalls()[0]!.body).attachments[0].blocks
+      .flatMap((b: { elements?: { url?: string }[] }) => b.elements ?? [])
+      .map((e: { url?: string }) => e.url?.match(/\/join\/([0-9a-f]{32})$/)?.[1])
+      .find(Boolean) as string;
+    expect(token).toBeTruthy();
+
+    // …and the redirect spends it.
+    const ctx = createExecutionContext();
+    const res = await route(new Request(`${ORIGIN}/join/${token}`), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.headers.get("Location")).toBe("https://zoom.us/w/personal-9");
+
+    const logged = spies.flatMap((s) => s.mock.calls.map((c: unknown[]) => String(c[0]))).join("\n");
+    expect(logged).toContain("coworking.join.token"); // the DO's debug lines were captured
+    expect(logged).toContain("join.redirect found=true");
+    expect(logged).not.toContain(token);
+    expect(logged).not.toContain("zoom.us/w/");
   });
 });
 
