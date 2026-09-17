@@ -19,9 +19,10 @@ outage would make every failed alert log an error that posts another alert.
 - **`notifyBotLog(env, event, fields)`** (`src/slack/notify.ts`) posts one message to the
   private `#bot-log` channel (`SLACK_BOTLOG_CHANNEL_ID`).
 - **It is called explicitly**, at the few catch sites with no other surface: `reminder.run_failed`
-  (the cron run), `zoom.webhook.failed` (the router's DO dispatch), `join.failed` (the join
-  flow). Adding an alert is a deliberate call at a new catch site, not a side effect of
-  logging.
+  (the cron run), `zoom.webhook.failed` (the router's DO dispatch), `google.notify.failed`
+  (the router's calendar-sync dispatch), `join.failed` (the join flow), and
+  `slack.lazy_failed` (the `lazy()` wrapper around every Slack handler, ADR 0004). Adding an
+  alert is a deliberate call at a new catch site, not a side effect of logging.
 - **Three guarantees**, because it runs on the failure path:
   - **No-op when unconfigured** — empty channel id returns immediately (tests, dev, before the
     bot is invited to the channel).
