@@ -20,8 +20,7 @@ Note that `CLAUDE.md` at the repo root already carries the architectural orienta
 ├── CONTEXT.md
 ├── docs/
 │   ├── adr/
-│   │   ├── 0001-....md
-│   │   └── 0002-....md
+│   │   └── NNNN-<slug>.md
 │   └── agents/          ← this file, plus issue-tracker.md and triage-labels.md
 └── src/
 ```

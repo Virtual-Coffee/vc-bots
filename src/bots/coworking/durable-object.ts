@@ -3,14 +3,13 @@ import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
 import { getCachedZoomToken } from "../../zoom/oauth";
 import { createInviteLink } from "../../zoom/invite-links";
-import type { ZoomMeetingEvent } from "../../zoom/types";
+import type { ZoomMeetingEvent, ZoomParticipant } from "../../zoom/types";
 import {
   type PresenceUser,
   RoomMessage,
   type SessionStats,
   createSlackRoomChannelPort,
 } from "./room-message";
-import { eventTimeMs, instanceUuid, participantIdentity } from "./zoom-events";
 
 /**
  * Co-working room — one Durable Object instance per Zoom meeting ID. The instance alone does not
@@ -19,8 +18,8 @@ import { eventTimeMs, instanceUuid, participantIdentity } from "./zoom-events";
  * The DO owns the session state machine (the `session` / `participant` / `member_link` /
  * `invite_link` tables, the stale-session alarm, and the join tokens) and mints per-user Zoom
  * invite links. Everything about the room message — the cards, the copy, the standing-invite
- * hand-off between sessions and announcements — is delegated to `RoomMessage`; the DO only
- * remembers each session's message ts and tells RoomMessage what happened.
+ * hand-off between sessions and announcements, which card is open — is delegated to
+ * `RoomMessage`; the DO never sees a message ts, it only tells RoomMessage what happened.
  */
 
 /** Force-end a session this long after it started if `meeting.ended` was never received. */
@@ -29,6 +28,10 @@ const STALE_SESSION_MS = 18 * 60 * 60 * 1000;
 /** Lifetime of a `/join/<token>` redirect — matches the Zoom invite link's own TTL
  *  (`DEFAULT_TTL` in zoom/invite-links.ts), past which the link is dead anyway. */
 const INVITE_LINK_TTL_MS = 7200 * 1000;
+
+/** Zoom pre-fill name when the member's Slack profile couldn't be read. Only ever sent to Zoom —
+ *  it is never stored in `member_link`, so it can't correlate anyone. */
+const FALLBACK_DISPLAY_NAME = "VirtualCoffee member";
 
 /** 128-bit random, url-safe token for the `/join/<token>` redirect (Web Crypto only). */
 function randomToken(): string {
@@ -39,7 +42,6 @@ function randomToken(): string {
 // Type aliases (not interfaces) so they satisfy `exec<T>`'s `Record<string, SqlStorageValue>`.
 type SessionRow = {
   instance_uuid: string;
-  slack_message_ts: string | null;
   started_at: number | null;
   ended_at: number | null;
   status: string;
@@ -77,11 +79,10 @@ export class CoworkingRoom extends DurableObject<Env> {
     ctx.blockConcurrencyWhile(async () => this.migrate());
   }
 
-  private migrate(): void {
+  private async migrate(): Promise<void> {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS session (
         instance_uuid     TEXT PRIMARY KEY,
-        slack_message_ts  TEXT,
         started_at        INTEGER,
         ended_at          INTEGER,
         status            TEXT NOT NULL,
@@ -113,15 +114,39 @@ export class CoworkingRoom extends DurableObject<Env> {
     // column, so guard with table_info to keep migrate() idempotent under blockConcurrencyWhile.
     this.addColumnIfMissing("session", "peak_participants", "INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("participant", "left_at", "INTEGER");
+
+    // One-shot: the open card's ts used to live on the session row; RoomMessage keeps it now
+    // (`room_message:open`). Hand a live session's card over before dropping the column, so a
+    // deploy mid-session keeps editing the right message. Can go once every DO has booted past it.
+    if (this.hasColumn("session", "slack_message_ts")) {
+      const open = this.sql
+        .exec<{ slack_message_ts: string; started_at: number | null }>(
+          `SELECT slack_message_ts, started_at FROM session
+           WHERE status = 'active' AND slack_message_ts IS NOT NULL
+           ORDER BY started_at DESC
+           LIMIT 1`,
+        )
+        .toArray()[0];
+      if (open) {
+        await this.roomMessage.adoptOpenCard(open.slack_message_ts, open.started_at ?? Date.now());
+      }
+      this.sql.exec("ALTER TABLE session DROP COLUMN slack_message_ts");
+      log.info("coworking.migrate.drop_message_ts", { adopted: Boolean(open) });
+    }
   }
 
   /** Add a column only if it's not already present (idempotent schema migration). */
   private addColumnIfMissing(table: string, column: string, definition: string): void {
-    const exists = this.sql
+    if (!this.hasColumn(table, column)) {
+      this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+
+  private hasColumn(table: string, column: string): boolean {
+    return this.sql
       .exec<{ name: string }>(`PRAGMA table_info(${table})`)
       .toArray()
       .some((c) => c.name === column);
-    if (!exists) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
   /** Work items queued or running — readable via `runInDurableObject` so tests can prove interleaving. */
@@ -169,10 +194,13 @@ export class CoworkingRoom extends DurableObject<Env> {
    * best-effort: an invite-link joiner's `participant_joined` carries no registrant id, only the
    * `user_name` we baked in here — so we match on that name (and fall back to a plain guest when a
    * signed-in member's own Zoom name overrides the pre-fill). No member PII is sent to Zoom.
+   *
+   * `displayName` is null when the caller couldn't read the member's Slack profile: Zoom gets a
+   * generic pre-fill and no `member_link` row is written.
    */
   async handleJoinRequest(input: {
     slackUserId: string;
-    displayName: string;
+    displayName: string | null;
   }): Promise<{ token: string }> {
     log.debug("coworking.join.token", { user: input.slackUserId });
     const accessToken = await getCachedZoomToken(this.env, this.ctx.storage);
@@ -180,19 +208,23 @@ export class CoworkingRoom extends DurableObject<Env> {
     const { joinUrl } = await createInviteLink(
       accessToken,
       this.env.ZOOM_MEETING_ID,
-      input.displayName,
+      input.displayName ?? FALLBACK_DISPLAY_NAME,
     );
 
-    log.debug("coworking.join.store", { user: input.slackUserId });
-    this.sql.exec(
-      `INSERT INTO member_link (slack_user_id, display_name, created_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(slack_user_id) DO UPDATE SET
-         display_name = excluded.display_name, created_at = excluded.created_at`,
-      input.slackUserId,
-      input.displayName,
-      Date.now(),
-    );
+    // No display name → nothing to correlate on. Storing the generic pre-fill instead would match
+    // every Zoom joiner who shows up under it to whichever member clicked Join last.
+    if (input.displayName !== null) {
+      log.debug("coworking.join.store", { user: input.slackUserId });
+      this.sql.exec(
+        `INSERT INTO member_link (slack_user_id, display_name, created_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(slack_user_id) DO UPDATE SET
+           display_name = excluded.display_name, created_at = excluded.created_at`,
+        input.slackUserId,
+        input.displayName,
+        Date.now(),
+      );
+    }
 
     // Opaque redirect token, expiring with the Zoom link itself (see DEFAULT_TTL in
     // invite-links.ts). Sweep expired rows while we're here so the table stays small.
@@ -277,7 +309,7 @@ export class CoworkingRoom extends DurableObject<Env> {
     // worker wasn't reachable). One Zoom meeting ID has at most one live instance, and duplicate
     // start webhooks reuse the same uuid (deduped above), so a start with a NEW uuid proves the
     // old session is stale. Close it now (ended card) instead of leaving the room wedged until
-    // the 18h stale-session alarm; its standing invite is retired below like any previous card's.
+    // the 18h stale-session alarm; its standing invite is retired by `open` like any previous card's.
     const staleSessions = this.sql
       .exec<SessionRow>("SELECT * FROM session WHERE status = 'active'")
       .toArray();
@@ -287,27 +319,21 @@ export class CoworkingRoom extends DurableObject<Env> {
     }
 
     log.debug("coworking.started.post", { instance: uuid });
-    const messageTs = await this.roomMessage.open(startedAt);
+    await this.roomMessage.open(startedAt);
 
     log.debug("coworking.started.session_row", { instance: uuid });
     this.sql.exec(
-      `INSERT INTO session (instance_uuid, slack_message_ts, started_at, status)
-       VALUES (?, ?, ?, 'active')
+      `INSERT INTO session (instance_uuid, started_at, status)
+       VALUES (?, ?, 'active')
        ON CONFLICT(instance_uuid) DO UPDATE SET
-         status = 'active', slack_message_ts = excluded.slack_message_ts,
-         started_at = excluded.started_at, ended_at = NULL, peak_participants = 0`,
+         status = 'active', started_at = excluded.started_at, ended_at = NULL,
+         peak_participants = 0`,
       uuid,
-      messageTs,
       startedAt,
     );
 
     await this.ctx.storage.setAlarm(Date.now() + STALE_SESSION_MS);
     log.info("coworking.started", { instance: uuid });
-
-    // Retire the previous standing invite last: after the new message is up (so a failed post
-    // never leaves the channel with no way in) and after the session is recorded (so a failure
-    // here can't wedge the room by dropping the joins that follow).
-    await this.roomMessage.retirePrevious();
   }
 
   private async onParticipantJoined(event: ZoomMeetingEvent): Promise<void> {
@@ -321,7 +347,10 @@ export class CoworkingRoom extends DurableObject<Env> {
     const participant = event.payload.object.participant;
     if (!participant) return;
     const id = participantIdentity(participant);
-    if (!id.zoomUserId) return;
+    if (!id.zoomUserId) {
+      log.debug("coworking.joined.drop_no_id", { instance: uuid });
+      return;
+    }
 
     log.debug("coworking.join.correlate", { instance: uuid });
     // Best-effort: match the Zoom display name to a member who minted an invite link.
@@ -399,18 +428,16 @@ export class CoworkingRoom extends DurableObject<Env> {
   // --- Helpers ---
 
   private async closeSession(session: SessionRow, endedAt: number): Promise<void> {
-    if (session.slack_message_ts) {
-      const stats: SessionStats = {
-        startedAtMs: session.started_at,
-        endedAtMs: endedAt,
-        durationMs: session.started_at ? Math.max(0, endedAt - session.started_at) : 0,
-        peak: session.peak_participants ?? 0,
-        attendees: this.buildRoster(session.instance_uuid),
-      };
-      // The ended card carries the standing invite. A vanished card is RoomMessage's problem to
-      // shrug at — the session must still flip to ended either way.
-      await this.roomMessage.close(session.slack_message_ts, stats);
-    }
+    const stats: SessionStats = {
+      startedAtMs: session.started_at,
+      endedAtMs: endedAt,
+      durationMs: session.started_at ? Math.max(0, endedAt - session.started_at) : 0,
+      peak: session.peak_participants ?? 0,
+      attendees: this.buildRoster(session.instance_uuid),
+    };
+    // The ended card carries the standing invite. A vanished card is RoomMessage's problem to
+    // shrug at — the session must still flip to ended either way.
+    await this.roomMessage.close(stats);
 
     this.sql.exec(
       "UPDATE session SET status = 'ended', ended_at = ? WHERE instance_uuid = ?",
@@ -424,10 +451,9 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   /**
    * Re-render the open card's presence from the live `participant` rows. Called after every
-   * join/leave; no-op if the session has no posted message to edit.
+   * join/leave; RoomMessage skips it when there's no open card to edit.
    */
   private async updatePresence(session: SessionRow): Promise<void> {
-    if (!session.slack_message_ts) return;
     const rows = this.sql
       .exec<ParticipantRow>(
         "SELECT * FROM participant WHERE instance_uuid = ? AND left_at IS NULL ORDER BY joined_at",
@@ -439,7 +465,7 @@ export class CoworkingRoom extends DurableObject<Env> {
         ? { slackUserId: r.slack_user_id }
         : { displayName: r.display_name ?? "A guest" },
     );
-    await this.roomMessage.showPresence(session.slack_message_ts, present, session.started_at);
+    await this.roomMessage.showPresence(present);
   }
 
   /**
@@ -483,14 +509,19 @@ export class CoworkingRoom extends DurableObject<Env> {
   }
 
   /**
-   * Best-effort correlation: find the member who minted an invite link with this name. Invite-link
-   * joiners carry no registrant id, so the baked-in name is all we have to match on.
+   * Best-effort correlation: find the member who minted a *recent* invite link with this name.
+   * Invite-link joiners carry no registrant id, so the baked-in name is all we have to match on.
+   * The invite is the contract, so the match is bounded by its TTL: a member who joins Zoom
+   * directly more than a TTL after their last Join click shows as a guest, and a same-named
+   * joiner months later can't inherit their mention.
    */
   private findMember(name: string): MemberLinkRow | undefined {
     return this.sql
       .exec<MemberLinkRow>(
-        "SELECT * FROM member_link WHERE display_name = ? ORDER BY created_at DESC LIMIT 1",
+        `SELECT * FROM member_link WHERE display_name = ? AND created_at >= ?
+         ORDER BY created_at DESC LIMIT 1`,
         name,
+        Date.now() - INVITE_LINK_TTL_MS,
       )
       .toArray()[0];
   }
@@ -500,4 +531,31 @@ export class CoworkingRoom extends DurableObject<Env> {
       .exec<SessionRow>("SELECT * FROM session WHERE instance_uuid = ?", uuid)
       .toArray()[0];
   }
+}
+
+// --- Zoom event helpers ---
+
+interface ParticipantIdentity {
+  /** Per-meeting id used to match a later participant_left to this join. */
+  zoomUserId: string;
+  displayName: string;
+}
+
+function instanceUuid(event: ZoomMeetingEvent): string {
+  return event.payload.object.uuid;
+}
+
+/** Event timestamp in ms — prefer Zoom's `event_ts`, fall back to wall clock. */
+function eventTimeMs(event: ZoomMeetingEvent): number {
+  return typeof event.event_ts === "number" ? event.event_ts : Date.now();
+}
+
+function participantIdentity(p: ZoomParticipant): ParticipantIdentity {
+  // user_id is the per-meeting handle Zoom reuses across this participant's join/leave pair.
+  // participant_uuid is the most reliable fallback if user_id is absent.
+  const zoomUserId = p.user_id || p.participant_uuid || p.participant_user_id || "";
+  return {
+    zoomUserId,
+    displayName: p.user_name?.trim() || "A guest",
+  };
 }

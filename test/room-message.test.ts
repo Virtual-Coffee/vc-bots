@@ -13,8 +13,9 @@ import {
 
 /**
  * `RoomMessage` against the fake channel port and a Map-backed storage: the card layouts, the
- * standing-invite hand-off between cards, announcements, and vanished-message handling. The
- * Slack adapter and the DO's session state machine are covered end-to-end in coworking-do.test.ts.
+ * standing-invite hand-off between cards (retired by the next `open` / `announceOpen`),
+ * announcements, and vanished-message handling. The Slack adapter and the DO's session state
+ * machine are covered end-to-end in coworking-do.test.ts.
  */
 
 const env = { ROOM_TITLE: "Co-Working Room" };
@@ -22,7 +23,8 @@ const STARTED_AT = Date.parse("2026-07-28T13:03:00Z");
 const ENDED_AT = Date.parse("2026-07-28T14:33:00Z");
 const NOW = Date.parse("2026-07-28T15:00:00Z");
 
-/** Storage keys RoomMessage owns (the first two predate the module and carry over from a deployed DO). */
+/** Storage keys RoomMessage owns (the last two predate the module and carry over from a deployed DO). */
+const OPEN_KEY = "room_message:open";
 const LAST_CLOSED_KEY = "last_closed_message";
 const LEGACY_KEY = "idle_invite_ts";
 
@@ -42,6 +44,12 @@ function stats(overrides: Partial<SessionStats> = {}): SessionStats {
   return { durationMs: 90 * 60_000, peak: 3, attendees: [], ...overrides };
 }
 
+/** Open a session card and return its ts — the card `showPresence` / `close` will edit. */
+async function openCard(): Promise<string> {
+  await room.open(STARTED_AT);
+  return port.posts.at(-1)!.ts;
+}
+
 /** Section fields of a card with the date tokens masked, so the 2×2 grid can be asserted in order. */
 function fieldsOf(blocks: { type: string; fields?: { text?: string }[] }[]): string[] {
   return blocks
@@ -51,8 +59,8 @@ function fieldsOf(blocks: { type: string; fields?: { text?: string }[] }[]): str
 
 describe("the open card", () => {
   it("has the ephemeral-trigger Join button (no url) and a bulleted presence roster", async () => {
-    const ts = (await room.open(STARTED_AT))!;
-    await room.showPresence(ts, [{ slackUserId: "U777" }, { displayName: "Ben" }], STARTED_AT);
+    await openCard();
+    await room.showPresence([{ slackUserId: "U777" }, { displayName: "Ben" }]);
 
     const open = port.updates.at(-1)!.blocks;
     expect(open[0]?.type).toBe("header");
@@ -92,24 +100,80 @@ describe("the open card", () => {
     expect(contextIdx).toBeLessThan(actionsIdx);
   });
 
-  it("omits the start line when there's no session behind it (an announcement, a null started_at)", async () => {
+  it("omits the start line when there's no session behind it (an announcement)", async () => {
     await room.announceOpen();
     expect(port.lastPostJson()).not.toContain("<!date");
-
-    const ts = (await room.open(STARTED_AT))!;
-    await room.showPresence(ts, [], null); // updatePresence passes a nullable column
-    expect(port.lastUpdateJson()).not.toContain("<!date");
   });
 
-  it("returns null (and posts nothing usable) when Slack answers without a ts", async () => {
+  it("keeps the start line on every presence edit, from the open card's own start time", async () => {
+    await openCard();
+    await room.showPresence([{ displayName: "Ada" }]);
+    expect(port.lastUpdateJson()).toContain(`<!date^${Math.floor(STARTED_AT / 1000)}^{time}|`);
+  });
+
+  it("records no open card when Slack answers without a ts", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     port.postWithoutTs = true;
-    expect(await room.open(STARTED_AT)).toBeNull();
+    await room.open(STARTED_AT);
+    expect(storage.map.has(OPEN_KEY)).toBe(false);
+  });
+});
+
+describe("the open card pointer", () => {
+  it("open records the open card; close spends it and remembers the ended card", async () => {
+    const ts = await openCard();
+    expect(storage.map.get(OPEN_KEY)).toEqual({ ts, startedAtMs: STARTED_AT });
+
+    await room.showPresence([{ displayName: "Ada" }]);
+    expect(port.updates.at(-1)!.ts).toBe(ts);
+
+    await room.close(stats());
+    expect(port.updates.at(-1)!.ts).toBe(ts);
+    expect(port.lastUpdateJson()).toContain("That's a wrap");
+    expect(storage.map.has(OPEN_KEY)).toBe(false);
+    expect(storage.map.get(LAST_CLOSED_KEY)).toMatchObject({ ts });
+  });
+
+  it("showPresence and close with no open card warn and touch nothing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await room.showPresence([{ displayName: "Ada" }]);
+    await room.close(stats());
+
+    expect(port.updates).toHaveLength(0);
+    expect(storage.map.has(LAST_CLOSED_KEY)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("coworking.room_msg.no_open_card op=presence"),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("coworking.room_msg.no_open_card op=close"),
+    );
+  });
+
+  it("adoptOpenCard carries a card opened before the pointer existed, so presence and close edit it", async () => {
+    await room.adoptOpenCard("old-ts", STARTED_AT);
+    expect(storage.map.get(OPEN_KEY)).toEqual({ ts: "old-ts", startedAtMs: STARTED_AT });
+
+    await room.showPresence([{ displayName: "Ada" }]);
+    expect(port.updates.at(-1)!.ts).toBe("old-ts");
+    expect(port.lastUpdateJson()).toContain(`<!date^${Math.floor(STARTED_AT / 1000)}^{time}|`);
+
+    await room.close(stats());
+    expect(port.updates.at(-1)!.ts).toBe("old-ts");
+    expect(storage.map.get(LAST_CLOSED_KEY)).toMatchObject({ ts: "old-ts" });
+  });
+
+  it("adoptOpenCard is a no-op when a card is already open", async () => {
+    const ts = await openCard();
+    await room.adoptOpenCard("old-ts", ENDED_AT);
+    expect(storage.map.get(OPEN_KEY)).toEqual({ ts, startedAtMs: STARTED_AT });
   });
 });
 
 describe("the ended card", () => {
   it("summarises length, peak, and a deduped roster, then invites the next session", async () => {
-    await room.close("ts-1", stats({ attendees: [{ slackUserId: "U1" }, { displayName: "Ben" }] }));
+    await openCard();
+    await room.close(stats({ attendees: [{ slackUserId: "U1" }, { displayName: "Ben" }] }));
 
     const closed = port.updates.at(-1)!.blocks;
     expect(closed[0]?.type).toBe("header");
@@ -131,11 +195,12 @@ describe("the ended card", () => {
   });
 
   it("drops the invite when retired by a newer room message, keeping the stats", async () => {
-    await room.close("ts-1", stats({ attendees: [{ slackUserId: "U1" }] }));
-    await room.retirePrevious();
+    const first = await openCard();
+    await room.close(stats({ attendees: [{ slackUserId: "U1" }] }));
+    await room.open(STARTED_AT);
 
     const retired = port.updates.at(-1)!;
-    expect(retired.ts).toBe("ts-1");
+    expect(retired.ts).toBe(first);
     const json = JSON.stringify(retired.blocks);
     expect(json).toContain("*Duration:* 1h 30m"); // the stats stay in channel history…
     expect(json).toContain("Dropped in (1)");
@@ -145,7 +210,8 @@ describe("the ended card", () => {
   });
 
   it("omits the roster line when nobody was recorded", async () => {
-    await room.close("ts-1", stats({ durationMs: 30_000, peak: 0 }));
+    await openCard();
+    await room.close(stats({ durationMs: 30_000, peak: 0 }));
     const json = port.lastUpdateJson();
     expect(json).toContain("<1m");
     expect(json).toContain("*Peak:* 0");
@@ -153,7 +219,8 @@ describe("the ended card", () => {
   });
 
   it("bookends the summary with Started/Ended date tokens ahead of Duration/Peak", async () => {
-    await room.close("ts-1", stats({ startedAtMs: STARTED_AT, endedAtMs: ENDED_AT }));
+    await openCard();
+    await room.close(stats({ startedAtMs: STARTED_AT, endedAtMs: ENDED_AT }));
 
     // Slack flows fields into two columns in order, so this order is what makes the 2×2 grid.
     expect(fieldsOf(port.updates.at(-1)!.blocks)).toEqual([
@@ -169,7 +236,8 @@ describe("the ended card", () => {
 
   it("falls back to the Duration/Peak row when the session has no recorded start", async () => {
     // started_at is nullable in the DO schema — the same reason durationMs degrades to 0.
-    await room.close("ts-1", stats({ startedAtMs: null, endedAtMs: null, durationMs: 0, peak: 0 }));
+    await openCard();
+    await room.close(stats({ startedAtMs: null, endedAtMs: null, durationMs: 0, peak: 0 }));
     expect(fieldsOf(port.updates.at(-1)!.blocks)).toHaveLength(2);
     expect(port.lastUpdateJson()).not.toContain("<!date");
   });
@@ -183,48 +251,79 @@ describe("the ended card", () => {
       [90 * 60_000, "1h 30m"],
     ];
     for (const [durationMs, rendered] of cases) {
-      await room.close("ts-1", stats({ durationMs }));
+      await openCard();
+      await room.close(stats({ durationMs }));
       expect(port.lastUpdateJson()).toContain(`*Duration:* ${rendered}`);
     }
   });
 });
 
 describe("the standing invite", () => {
-  it("close remembers the ended card; retirePrevious strips its invite once and forgets it", async () => {
-    await room.close("ts-1", stats());
-    expect(storage.map.get(LAST_CLOSED_KEY)).toMatchObject({ ts: "ts-1" });
+  it("close remembers the ended card; the next open strips its invite once and forgets it", async () => {
+    const first = await openCard();
+    await room.close(stats());
+    expect(storage.map.get(LAST_CLOSED_KEY)).toMatchObject({ ts: first });
 
-    await room.retirePrevious();
+    const post = vi.spyOn(port, "post");
+    const update = vi.spyOn(port, "update");
+    await room.open(STARTED_AT);
+    expect(port.posts).toHaveLength(2);
     expect(port.updates).toHaveLength(2);
-    expect(port.updates[1]!.ts).toBe("ts-1");
+    expect(port.updates[1]!.ts).toBe(first);
     expect(port.lastUpdateJson()).not.toContain(JOIN_ACTION_ID);
     expect(storage.map.has(LAST_CLOSED_KEY)).toBe(false);
+    // The new card goes up first, so a failed post never leaves the channel with no way in.
+    expect(post.mock.invocationCallOrder[0]).toBeLessThan(update.mock.invocationCallOrder[0]!);
 
     // Nothing left to retire — a second start doesn't touch the old card again.
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     expect(port.updates).toHaveLength(2);
   });
 
+  it("a retire failure still opens the room and leaves the pointer for the next open to retry", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const first = await openCard();
+    await room.close(stats());
+
+    port.updateError = new Error("ratelimited");
+    await room.open(STARTED_AT);
+    // The session gets its card regardless.
+    expect(storage.map.get(OPEN_KEY)).toMatchObject({ ts: port.posts[1]!.ts });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`coworking.room_msg.retire_failed step=last_closed ts=${first}`),
+    );
+    expect(storage.map.get(LAST_CLOSED_KEY)).toMatchObject({ ts: first }); // not spent
+
+    // The next takeover retries it and only then forgets it.
+    port.updateError = null;
+    await room.open(STARTED_AT);
+    expect(port.updates.at(-1)!.ts).toBe(first);
+    expect(port.lastUpdateJson()).not.toContain(JOIN_ACTION_ID);
+    expect(storage.map.has(LAST_CLOSED_KEY)).toBe(false);
+  });
+
   it("does not remember a card that vanished before it could be closed", async () => {
-    port.vanish("ts-1");
-    await room.close("ts-1", stats());
+    port.vanish(await openCard());
+    await room.close(stats());
     expect(port.updates.at(-1)!.result).toBe("vanished");
+    expect(storage.map.has(OPEN_KEY)).toBe(false); // spent either way
     expect(storage.map.has(LAST_CLOSED_KEY)).toBe(false);
 
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     expect(port.updates).toHaveLength(1); // nothing to retire
   });
 
   it("showPresence on a vanished card just skips (the join webhook must not throw)", async () => {
-    port.vanish("ts-1");
-    await expect(room.showPresence("ts-1", [{ displayName: "Ada" }], STARTED_AT)).resolves.toBeUndefined();
+    port.vanish(await openCard());
+    await expect(room.showPresence([{ displayName: "Ada" }])).resolves.toBeUndefined();
     expect(port.updates.at(-1)!.result).toBe("vanished");
   });
 
-  it("retirePrevious still clears the pointer when the ended card has vanished", async () => {
-    await room.close("ts-1", stats());
-    port.vanish("ts-1");
-    await room.retirePrevious();
+  it("open still clears the pointer when the ended card has vanished", async () => {
+    const first = await openCard();
+    await room.close(stats());
+    port.vanish(first);
+    await room.open(STARTED_AT);
     expect(storage.map.has(LAST_CLOSED_KEY)).toBe(false);
   });
 });
@@ -264,21 +363,22 @@ describe("announcements", () => {
     expect(json).toContain(String(Math.floor(ENDED_AT / 1000)));
 
     // The next room message retires it exactly like a session's ended card.
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     const retired = port.updates.at(-1)!;
     expect(retired.ts).toBe(announcementTs);
     expect(JSON.stringify(retired.blocks)).not.toContain(JOIN_ACTION_ID);
     expect(await room.announceClose()).toEqual({ closed: false }); // pointer spent
   });
 
-  it("retirePrevious closes a lingering open announcement without the invite", async () => {
+  it("open closes a lingering open announcement without the invite", async () => {
     vi.spyOn(Date, "now").mockReturnValue(STARTED_AT);
     await room.announceOpen();
     const announcementTs = port.posts[0]!.ts;
 
     vi.spyOn(Date, "now").mockReturnValue(ENDED_AT);
-    await room.retirePrevious(); // a session started while the announcement was still open
+    await room.open(STARTED_AT); // a session started while the announcement was still open
 
+    expect(port.posts).toHaveLength(2); // the session's own card
     const closed = port.updates.at(-1)!;
     expect(closed.ts).toBe(announcementTs);
     const json = JSON.stringify(closed.blocks);
@@ -306,14 +406,18 @@ describe("announcements", () => {
     expect(port.updates.at(-1)!.ts).toBe(port.posts[1]!.ts);
   });
 
-  it("announceOpen retires the previous session's ended card first", async () => {
-    await room.close("ts-1", stats());
+  it("announceOpen retires the previous session's ended card after posting", async () => {
+    const first = await openCard();
+    await room.close(stats());
+    const post = vi.spyOn(port, "post");
+    const update = vi.spyOn(port, "update");
     await room.announceOpen();
 
     const retired = port.updates.at(-1)!;
-    expect(retired.ts).toBe("ts-1");
+    expect(retired.ts).toBe(first);
     expect(JSON.stringify(retired.blocks)).not.toContain(JOIN_ACTION_ID);
-    expect(port.posts).toHaveLength(1);
+    expect(port.posts).toHaveLength(2);
+    expect(post.mock.invocationCallOrder[0]).toBeLessThan(update.mock.invocationCallOrder[0]!);
   });
 
   it("announceClose is a no-op with nothing announced", async () => {
@@ -342,19 +446,24 @@ describe("legacy standing-invite cleanup", () => {
   it("deletes the retired lifecycle's message once and forgets the pointer", async () => {
     await storage.put(LEGACY_KEY, "1699999999.000001");
 
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     expect(port.deletes).toEqual(["1699999999.000001"]);
     expect(storage.map.has(LEGACY_KEY)).toBe(false);
 
-    await room.retirePrevious();
+    await room.open(STARTED_AT);
     expect(port.deletes).toHaveLength(1); // one-shot
   });
 
-  it("swallows a failed delete but still forgets the pointer", async () => {
+  it("swallows a failed delete but still forgets the pointer (one-shot either way)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await storage.put(LEGACY_KEY, "1699999999.000001");
     port.deleteError = new Error("message_not_found");
 
-    await expect(room.retirePrevious()).resolves.toBeUndefined();
+    await room.open(STARTED_AT);
+    expect(storage.map.get(OPEN_KEY)).toMatchObject({ ts: port.posts[0]!.ts }); // still opens
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("coworking.legacy_invite.delete_failed"),
+    );
     expect(storage.map.has(LEGACY_KEY)).toBe(false);
   });
 });

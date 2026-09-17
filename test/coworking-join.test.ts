@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CANCEL_ACTION_ID,
@@ -8,6 +8,8 @@ import {
   handleJoinDismiss,
   type JoinActionPayload,
 } from "../src/bots/coworking/join";
+import { setLogLevel } from "../src/log";
+import { route } from "../src/router";
 import { installFetchRecorder, type FetchRecorder, type RecordedCall } from "./helpers/fetch-recorder";
 
 let fetched: FetchRecorder;
@@ -15,7 +17,11 @@ let fetched: FetchRecorder;
 beforeEach(() => {
   fetched = installFetchRecorder({ zoomJoinUrl: "https://zoom.us/w/personal-9" });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  setLogLevel("warn");
+});
 
 const RESPONSE_URL = "https://hooks.slack.com/actions/resp-123";
 const ORIGIN = "https://bots.example";
@@ -55,6 +61,36 @@ describe("handleJoinClick", () => {
     expect(attachments).not.toContain("personal-9");
   });
 
+  it("profile lookup fails → the DO gets displayName: null and the ephemeral is still sent", async () => {
+    fetched.respondWith((call) =>
+      call.url.includes("/api/users.profile.get")
+        ? Response.json({ ok: false, error: "user_not_found" })
+        : undefined,
+    );
+
+    const before = Date.now();
+    await handleJoinClick(payload(), env, ORIGIN);
+
+    // The DO saw no name: Zoom got its generic pre-fill, and this click stored nothing to
+    // correlate on (the DO is shared across this file, so only rows from this call count).
+    const zoom = fetched.callsTo("api.zoom.us/v2/meetings/").at(-1)!;
+    expect(JSON.parse(zoom.body).attendees).toEqual([{ name: "VirtualCoffee member" }]);
+    const stub = env.COWORKING_ROOM.getByName(env.ZOOM_MEETING_ID);
+    const links = await runInDurableObject(stub, (_i, state) =>
+      state.storage.sql
+        .exec("SELECT COUNT(*) AS n FROM member_link WHERE created_at >= ?", before)
+        .toArray(),
+    );
+    expect(links[0]?.n).toBe(0);
+
+    // The click still gets its join ephemeral.
+    const replies = responseUrlCalls();
+    expect(replies).toHaveLength(1);
+    const sent = JSON.parse(replies[0]!.body);
+    expect(sent.response_type).toBe("ephemeral");
+    expect(JSON.stringify(sent.attachments)).toMatch(new RegExp(`${ORIGIN}/join/[0-9a-f]{32}`));
+  });
+
   it("answers with an error ephemeral when registration fails", async () => {
     // Same routes, but the Zoom invite-link call now fails.
     fetched.respondWith((call) =>
@@ -69,6 +105,36 @@ describe("handleJoinClick", () => {
     expect(sent.response_type).toBe("ephemeral");
     expect(sent.text).toContain("couldn");
     expect(replies[0]!.body).not.toContain("personal-9");
+  });
+});
+
+describe("the join flow's logs", () => {
+  it("never carries the token or the personal Zoom url, even at debug", async () => {
+    // Every level: the token and the url it resolves to are both join credentials.
+    setLogLevel("debug");
+    const spies = (["debug", "info", "warn", "error"] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => {}),
+    );
+
+    // The click mints the token…
+    await handleJoinClick(payload(), env, ORIGIN);
+    const token = JSON.parse(responseUrlCalls()[0]!.body).attachments[0].blocks
+      .flatMap((b: { elements?: { url?: string }[] }) => b.elements ?? [])
+      .map((e: { url?: string }) => e.url?.match(/\/join\/([0-9a-f]{32})$/)?.[1])
+      .find(Boolean) as string;
+    expect(token).toBeTruthy();
+
+    // …and the redirect spends it.
+    const ctx = createExecutionContext();
+    const res = await route(new Request(`${ORIGIN}/join/${token}`), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.headers.get("Location")).toBe("https://zoom.us/w/personal-9");
+
+    const logged = spies.flatMap((s) => s.mock.calls.map((c: unknown[]) => String(c[0]))).join("\n");
+    expect(logged).toContain("coworking.join.token"); // the DO's debug lines were captured
+    expect(logged).toContain("join.redirect found=true");
+    expect(logged).not.toContain(token);
+    expect(logged).not.toContain("zoom.us/w/");
   });
 });
 

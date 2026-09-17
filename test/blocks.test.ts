@@ -25,6 +25,11 @@ function json(blocks: unknown): string {
   return JSON.stringify(blocks);
 }
 
+// Scheduled "Starting Soon" messages already carry this id, so a rename orphans their buttons.
+it("JOIN_EVENT_ACTION_ID stays button-join-event", () => {
+  expect(JOIN_EVENT_ACTION_ID).toBe("button-join-event");
+});
+
 describe("buildStartingSoonMessage", () => {
   it("renders header, title with a Join Event button for http links, description, divider", () => {
     const { text, blocks } = buildStartingSoonMessage(evt());

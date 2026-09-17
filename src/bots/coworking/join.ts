@@ -71,13 +71,15 @@ export async function handleJoinClick(
   }
 
   // Resolve a display name to pre-fill on the invite link (and to correlate the Zoom join later).
-  let displayName = "VirtualCoffee member";
+  // `null` when the profile can't be read: the DO then pre-fills a generic name and records
+  // nothing to correlate on, so two members with unreadable profiles never match each other.
+  let displayName: string | null = null;
   try {
     const client = createSlackClient(env);
     const res = await client.users.profile.get({ user: slackUserId });
-    displayName = res.profile?.display_name || res.profile?.real_name || displayName;
+    displayName = res.profile?.display_name || res.profile?.real_name || null;
   } catch {
-    // Keep the default; a missing display name shouldn't block registration.
+    // A missing display name shouldn't block registration.
   }
 
   // Mint the invite link and answer with the per-user ephemeral (☕ Join / Cancel).

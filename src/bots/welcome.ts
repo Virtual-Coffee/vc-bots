@@ -1,14 +1,38 @@
-import type { AnyMessageBlock, TeamJoinEvent } from "slack-cloudflare-workers";
+import type {
+  AnyHomeTabBlock,
+  AnyMessageBlock,
+  AppHomeOpenedEvent,
+  HomeTabView,
+  TeamJoinEvent,
+} from "slack-cloudflare-workers";
 import type { Env } from "../env";
 import { createSlackClient } from "../slack/client";
 
 /**
- * Welcome bot — responds to the Slack `team_join` event by DMing the new member.
- *
- * Posting to a user ID opens (or reuses) the bot↔user DM, so no channel config is needed.
+ * Welcome bot — the new-member welcome content and the two surfaces it goes out on: the
+ * `team_join` DM and the App Home tab. The `/vc-bot-admin` command and panel reuse the same
+ * two senders for manual runs.
+ */
+
+/**
+ * Responds to the Slack `team_join` event by DMing the new member.
  */
 export async function handleTeamJoin(event: TeamJoinEvent, env: Env): Promise<void> {
-  const userId = event.user.id;
+  await sendWelcomeDm(env, event.user.id);
+}
+
+/**
+ * App Home bot — responds to `app_home_opened` by publishing the Home tab view.
+ */
+export async function handleAppHomeOpened(event: AppHomeOpenedEvent, env: Env): Promise<void> {
+  await publishHomeTab(env, event.user);
+}
+
+/**
+ * DM the welcome message to `userId`. Posting to a user ID opens (or reuses) the bot↔user DM,
+ * so no channel config is needed.
+ */
+export async function sendWelcomeDm(env: Env, userId: string): Promise<void> {
   const client = createSlackClient(env);
   await client.chat.postMessage({
     channel: userId,
@@ -20,6 +44,21 @@ export async function handleTeamJoin(event: TeamJoinEvent, env: Env): Promise<vo
   });
 }
 
+/** Publish the App Home tab for `userId`. */
+export async function publishHomeTab(env: Env, userId: string): Promise<void> {
+  const client = createSlackClient(env);
+  await client.views.publish({ user_id: userId, view: homeView(env) });
+}
+
+/**
+ * Home tab view — mirrors the welcome message (no user → generic greeting), as the
+ * old bot did. The welcome builder only emits section/header/divider blocks, all of
+ * which are valid Home tab blocks.
+ */
+function homeView(env: Env): HomeTabView {
+  return { type: "home", blocks: welcomeBlocks(env) as AnyHomeTabBlock[] };
+}
+
 /** A blank section the old bot used to add breathing room around dividers. */
 function spacer(): AnyMessageBlock {
   return { type: "section", text: { type: "mrkdwn", text: " " } };
@@ -29,7 +68,7 @@ function spacer(): AnyMessageBlock {
  * Welcome message Block Kit, shared by the `team_join` DM and the App Home tab
  * (which passes no user). Content ported from the old webhooks repo.
  */
-export function welcomeBlocks(env: Env, userId?: string): AnyMessageBlock[] {
+function welcomeBlocks(env: Env, userId?: string): AnyMessageBlock[] {
   const blocks: AnyMessageBlock[] = [
     {
       type: "section",

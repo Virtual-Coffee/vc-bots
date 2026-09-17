@@ -70,8 +70,7 @@ src/
     coworking/        the room: Durable Object (session state), RoomMessage (the channel message
                       + its Slack port), Zoom event helpers, join flow + ephemeral
     reminders/        cron dispatch, event model + CMS source, Block Kit builders, html-to-mrkdwn
-    welcome.ts        new-member welcome DM
-    app-home.ts       App Home tab
+    welcome.ts        new-member welcome DM + App Home tab
     admin.ts          /vc-bot-admin slash command
     admin-panel.ts    the interactive /vc-bot-admin button panel + its modals
   slack/

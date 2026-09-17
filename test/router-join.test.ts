@@ -1,6 +1,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { route } from "../src/router";
+import { installFetchRecorder } from "./helpers/fetch-recorder";
 
 /**
  * GET /join/<token> — the opaque per-user redirect behind the ephemeral's ☕ Join button. The
@@ -9,17 +10,7 @@ import { route } from "../src/router";
  */
 
 beforeEach(() => {
-  const spy = vi.fn(async (input: unknown) => {
-    const url = input instanceof Request ? input.url : String(input);
-    if (url.includes("zoom.us/oauth/token")) {
-      return Response.json({ access_token: "zt", token_type: "bearer", expires_in: 3600 });
-    }
-    if (url.includes("api.zoom.us/v2/meetings/")) {
-      return Response.json({ attendees: [{ name: "Ada", join_url: "https://zoom.us/w/personal-7" }] });
-    }
-    return Response.json({ ok: true });
-  });
-  vi.stubGlobal("fetch", spy);
+  installFetchRecorder({ zoomJoinUrl: "https://zoom.us/w/personal-7" });
 });
 
 afterEach(() => vi.unstubAllGlobals());

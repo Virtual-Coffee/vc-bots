@@ -3,17 +3,10 @@ import { log } from "../log";
 import { createSlackClient } from "./client";
 
 /**
- * Post an important error alert to the private `#bot-log` channel
- * (`SLACK_BOTLOG_CHANNEL_ID`). Called explicitly at the few catch sites with no other surface
- * — the cron reminder run and the co-working DO/Zoom paths — not wired into `log.ts`.
+ * Post an error alert to the private `#bot-log` channel (`SLACK_BOTLOG_CHANNEL_ID`). Called
+ * explicitly at catch sites with no other surface, not from `log.ts` — see ADR 0006.
  *
- * Three guarantees, because this runs on the failure path:
- * - **No-op when unconfigured.** Empty channel id → return immediately (safe before the
- *   channel exists / the bot is invited; keeps tests + dev quiet).
- * - **Self-swallowing.** The post goes through the same Slack client that may be failing, so a
- *   throw/non-2xx is logged locally (`botlog.notify_failed`) and swallowed — never rethrown.
- * - **No recursion.** A failed alert is *not* itself alerted (only `log.warn`ed), so there's no
- *   feedback loop.
+ * Three guarantees on the failure path: no-op when unconfigured, self-swallowing, no recursion.
  */
 export async function notifyBotLog(
   env: Env,

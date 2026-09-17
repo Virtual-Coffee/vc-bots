@@ -5,9 +5,8 @@ import { log } from "../log";
 import { createSlackClient } from "../slack/client";
 import { deleteOriginal, replaceEphemeral } from "../slack/response";
 import { isWorkspaceAdmin, reminderReply } from "./admin";
-import { homeView } from "./app-home";
 import { type ReminderName, sendReminder } from "./reminders";
-import { welcomeBlocks } from "./welcome";
+import { publishHomeTab, sendWelcomeDm } from "./welcome";
 
 /**
  * The interactive `/vc-bot-admin` panel: an ephemeral message of buttons (one per admin
@@ -298,7 +297,7 @@ export async function handlePanelHomeClick(
   const responseUrl = await guardClick(payload, env);
   if (!responseUrl) return;
   try {
-    await createSlackClient(env).views.publish({ user_id: payload.user.id, view: homeView(env) });
+    await publishHomeTab(env, payload.user.id);
     await deleteOriginal(responseUrl);
   } catch (err) {
     log.error("admin.panel.home_failed", { user: payload.user.id, err: String(err) });
@@ -373,14 +372,7 @@ export async function handleWelcomeSubmit(
       await replaceEphemeral(responseUrl, ERROR_TEXT);
       return;
     }
-    await createSlackClient(env).chat.postMessage({
-      channel: target,
-      text: "Welcome message preview",
-      blocks: welcomeBlocks(env, target),
-      link_names: true,
-      unfurl_links: false,
-      unfurl_media: false,
-    });
+    await sendWelcomeDm(env, target);
     // Sending to yourself is self-verifiable (the DM appears) → just dismiss the panel.
     if (target === payload.user.id) {
       await deleteOriginal(responseUrl);
