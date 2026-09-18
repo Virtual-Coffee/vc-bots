@@ -32,15 +32,25 @@ const NAMED_ENTITIES: Record<string, string> = {
 };
 
 const SUPPORTED_TAGS = new Set(["p", "br", "a", "b", "strong", "i", "em", "ul", "ol", "li"]);
+// Only supported tags can survive the conversion; anything else `<…>`-shaped in the output is an
+// angle-bracketed link destination, not a tag.
+const LEFTOVER_TAG_RE = new RegExp(`<\\/?(${[...SUPPORTED_TAGS].join("|")})\\b[^>]*>`, "i");
 
 function decodeEntities(text: string): string {
   return text.replace(ENTITY_RE, (match, body: string) => {
-    if (body.startsWith("#x") || body.startsWith("#X")) {
-      return String.fromCodePoint(parseInt(body.slice(2), 16));
-    }
-    if (body.startsWith("#")) return String.fromCodePoint(parseInt(body.slice(1), 10));
-    return NAMED_ENTITIES[body] ?? match;
+    if (!body.startsWith("#")) return NAMED_ENTITIES[body] ?? match;
+    const hex = body[1] === "x" || body[1] === "X";
+    const codePoint = hex ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+    // `String.fromCodePoint` throws past U+10FFFF and on a lone surrogate; a bad entity in one
+    // description must not fail the whole fetch, so it becomes U+FFFD instead.
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return "�";
+    return String.fromCodePoint(codePoint);
   });
+}
+
+/** `[text](href)`, angle-bracketing the destination when CommonMark would otherwise misread it. */
+function markdownLink(text: string, href: string): string {
+  return /[\s()]/.test(href) ? `[${text}](<${href}>)` : `[${text}](${href})`;
 }
 
 /** Converts the small HTML subset Google Calendar descriptions use into Markdown. */
@@ -71,14 +81,16 @@ export function htmlToMarkdown(input: string): string {
       return `\n${items}\n`;
     })
     // Inline: links, bold, italic.
-    .replace(/<a\b[^>]*href\s*=\s*"([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, "[$2]($1)")
-    .replace(/<a\b[^>]*href\s*=\s*'([^']*)'[^>]*>([\s\S]*?)<\/a>/gi, "[$2]($1)")
+    .replace(
+      /<a\b[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\/a>/gi,
+      (_m, dq: string | undefined, sq: string | undefined, text: string) =>
+        markdownLink(text, dq ?? sq ?? ""),
+    )
     .replace(/<(b|strong)\b[^>]*>([\s\S]*?)<\/\1>/gi, "**$2**")
     .replace(/<(i|em)\b[^>]*>([\s\S]*?)<\/\1>/gi, "_$2_");
 
   // Any tag left is a supported one that appeared without its pair; `<a>` without href, say.
-  const leftover = TAG_RE.exec(markdown);
-  TAG_RE.lastIndex = 0;
+  const leftover = LEFTOVER_TAG_RE.exec(markdown);
   if (leftover) throw new UnsupportedHtmlError(leftover[1]!.toLowerCase());
 
   return decodeEntities(markdown)

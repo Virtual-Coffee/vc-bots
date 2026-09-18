@@ -24,6 +24,24 @@ describe("htmlToMarkdown", () => {
     ).toBe('Avi Flombaum & Adam Enbar. It\'s great — "yes"');
   });
 
+  it("decodes a numeric entity that String.fromCodePoint would reject as U+FFFD", () => {
+    expect(htmlToMarkdown("a &#x110000; b")).toBe("a � b");
+    expect(htmlToMarkdown("a &#55296; b")).toBe("a � b");
+    expect(htmlToMarkdown("&#169; &#xA9;")).toBe("© ©");
+  });
+
+  it("angle-brackets an href with whitespace or a paren", () => {
+    expect(htmlToMarkdown('<a href="https://example.com/a b">x</a>')).toBe(
+      "[x](<https://example.com/a b>)",
+    );
+    expect(htmlToMarkdown("<a href='https://example.com/a)'>x</a>")).toBe(
+      "[x](<https://example.com/a)>)",
+    );
+    expect(htmlToMarkdown("<a href='https://example.com/a'>x</a>")).toBe(
+      "[x](https://example.com/a)",
+    );
+  });
+
   it("converts links, bold and italic", () => {
     expect(
       htmlToMarkdown(
