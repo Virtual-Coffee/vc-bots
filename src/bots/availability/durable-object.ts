@@ -9,7 +9,7 @@ import {
   buildIntroMessage,
   DAYS,
   emptySheet,
-  ROLES,
+  SEED_REACTIONS,
   sheetFromReactions,
   weekDays,
   type Day,
@@ -93,7 +93,7 @@ export class AvailabilitySheet extends DurableObject<Env> {
     log.info("availability.posted", { channel, tuesday: ts.tuesday, thursday: ts.thursday });
 
     for (const day of DAYS) {
-      for (const { reaction } of ROLES) {
+      for (const reaction of SEED_REACTIONS) {
         try {
           await client.reactions.add({ channel, timestamp: dayMessages[day], name: reaction });
         } catch (err) {

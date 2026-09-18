@@ -29,7 +29,8 @@ Durable Object that keeps the sign-up lists and applies each `reaction_added` /
   Refreshes coalesce per message: a refresh queued but not yet started absorbs every later
   event for the same message (it reads Slack's state when it runs). A burst collapses to the
   in-flight render plus one queued render, and the last render reflects Slack's current state.
-- **The bot seeds the five reactions** on each day message so people one-click; its own user
+- **The bot seeds the seed reactions** (the four role emoji and `:x:`) on each day message so
+  people one-click; its own user
   id is filtered out of the sheet, and its own events (`ignoreSelfEvents: false`, ADR 0007)
   are dropped by reactor id before any render call (`reactions.get` / `chat.update`). The bot
   user id is looked up once (`auth.test`) and cached — `post()` warms the cache before posting
@@ -39,6 +40,21 @@ Durable Object that keeps the sign-up lists and applies each `reaction_added` /
   an admin run) posts a new trio and repoints; the old messages simply stop updating. No week
   bookkeeping. Concurrent `post()` calls on the one instance run one after another through the
   same queue, so two callers can't each post a trio with only one of them pointed at.
+
+### Projection rules
+
+`sheetFromReactions` (`message.ts`) turns the reaction list into the sheet; these are the only
+rules, and they are pure — nothing about a person's intent is stored anywhere.
+
+- **`:x:` wins.** Someone on `:x:` is *out* for that day and is dropped from every role, even
+  while their role reactions remain. Slack won't let the bot remove another user's reactions,
+  so those stay; removing the `:x:` later restores them to their roles. Accepted: it keeps the
+  sheet a pure rendering of the reactions.
+- **`:all-the-things:` signs the reactor up for every role** — appended after the direct
+  reactors of each role, never listed twice, rendered as a plain mention. It is an easter egg:
+  never seeded, never in the legend. `:x:` still wins over it.
+- **Any reaction refreshes.** The handler doesn't look at the reaction name; a refresh is
+  idempotent and re-reads everything, so unknown emoji just cost one render.
 
 Alternatives rejected: a DO-held ledger of sign-ups (drifts on any lost or duplicated event,
 with no way to notice); day messages as thread replies (Slack doesn't notify the channel for

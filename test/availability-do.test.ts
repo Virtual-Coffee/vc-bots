@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AvailabilitySheet } from "../src/bots/availability/durable-object";
-import { ROLES } from "../src/bots/availability/message";
+import { SEED_REACTIONS } from "../src/bots/availability/message";
 import {
   installFetchRecorder,
   type FetchRecorder,
@@ -64,14 +64,14 @@ describe("post", () => {
     });
   });
 
-  it("seeds the five role reactions on each day message, in role order", async () => {
+  it("seeds the four role reactions and :x: on each day message, in legend order", async () => {
     await sheet().post(NOW);
 
     const adds = callsTo("/api/reactions.add").map((c) => [
       form(c).get("timestamp"),
       form(c).get("name"),
     ]);
-    const names = ROLES.map((r) => r.reaction);
+    const names = SEED_REACTIONS;
     expect(adds).toEqual([...names.map((n) => [TUE_TS, n]), ...names.map((n) => [THU_TS, n])]);
   });
 
@@ -292,7 +292,7 @@ describe("refresh", () => {
     const blocks = form(update[0]!).get("blocks") ?? "";
     expect(blocks).toContain("Tuesday · Sep 15");
     expect(blocks).toContain(":computer: *Host:* <@U1>");
-    expect(blocks).toContain(":x: *Unavailable:* <@U2>");
+    expect(blocks).toContain(":x: Out Tuesday: <@U2>");
     expect(blocks).not.toContain(BOT);
   });
 
