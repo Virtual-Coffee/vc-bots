@@ -48,7 +48,7 @@ describe("buildDayMessage", () => {
     for (const { label, reaction } of ROLES) {
       expect(rendered[1]).toContain(`:${reaction}: *${label}:* —`);
     }
-    expect(rendered[2]).toContain("remove it to un-sign");
+    expect(rendered[2]).toContain("remove your reaction to withdraw");
   });
 
   it("lists sign-ups as mentions in reaction order under their role", () => {
