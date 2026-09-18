@@ -144,7 +144,7 @@ describe("the join flow's logs", () => {
     const logged = spies
       .flatMap((s) => s.mock.calls.map((c: unknown[]) => String(c[0])))
       .join("\n");
-    expect(logged).toContain("coworking.join.token"); // the DO's debug lines were captured
+    expect(logged).toContain("coworking.join.invite_link"); // the DO's debug lines were captured
     expect(logged).toContain("join.redirect found=true");
     expect(logged).not.toContain(token);
     expect(logged).not.toContain("zoom.us/w/");

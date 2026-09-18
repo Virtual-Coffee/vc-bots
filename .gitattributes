@@ -1,0 +1,6 @@
+# Generated wire types (`pnpm gen:api-types`, docs/adr/0012): collapsed in GitHub diffs.
+src/generated/** linguist-generated=true
+# Vendored provider specs (`pnpm specs:update`); the two OAuth fragments are hand-written.
+specs/** linguist-vendored=true
+specs/google-oauth-token.openapi.json -linguist-vendored
+specs/zoom-oauth-token.openapi.json -linguist-vendored

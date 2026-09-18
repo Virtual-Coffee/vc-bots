@@ -1,6 +1,12 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { DateTime } from "luxon";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GoogleCalendarEvent } from "../src/google/calendar";
+import {
+  type FetchRecorder,
+  installFetchRecorder,
+  type RecordedCall,
+} from "./helpers/fetch-recorder";
 import {
   type AdminPanelActionPayload,
   type AdminViewSubmissionPayload,
@@ -12,11 +18,13 @@ import {
   handlePanelReminderClick,
   handlePanelWelcomeClick,
   handleReminderSubmit,
+  handlePanelWatchStatusClick,
   handleWelcomeSubmit,
   PANEL_COWORKING_ACTION_ID,
+  PANEL_WATCH_STATUS_ACTION_ID,
   REMINDER_MODAL_CALLBACK_ID,
   WELCOME_MODAL_CALLBACK_ID,
-} from "../src/bots/admin-panel";
+} from "../src/bots/admin/panel";
 
 /**
  * Unit coverage for the `/vc-bot-admin` panel handlers, using the same stubbed-fetch harness
@@ -28,59 +36,35 @@ import {
 const PANEL_URL = "https://hooks.slack.com/actions/panel-1";
 const TRIGGER_ID = "TRIG-1";
 
-interface RecordedCall {
-  url: string;
-  body: string;
-}
-let recorded: RecordedCall[];
+let rec: FetchRecorder;
 let isAdmin: boolean;
-let cmsEvents: Array<Record<string, unknown>>;
+let googleEvents: GoogleCalendarEvent[];
 let postMessageOk: boolean;
 
 beforeEach(() => {
-  recorded = [];
   isAdmin = true;
-  cmsEvents = [];
+  googleEvents = [];
   postMessageOk = true;
-  const spy = vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-    let url: string;
-    let body: string;
-    if (input instanceof Request) {
-      url = input.url;
-      body = new TextDecoder().decode(await input.clone().arrayBuffer());
-    } else {
-      url = String(input);
-      body = typeof init?.body === "string" ? init.body : "";
-    }
-    recorded.push({ url, body });
-
-    if (url.includes("/api/users.info")) {
-      return Response.json({ ok: true, user: { is_admin: isAdmin, is_owner: false } });
-    }
-    if (url === env.CMS_GRAPHQL_URL) {
-      if (body.includes("getCalendars")) {
-        return Response.json({
-          data: { solspace_calendar: { calendars: [{ handle: "vcEvents" }] } },
-        });
+  rec = installFetchRecorder({
+    googleEvents: () => googleEvents,
+    respond(call) {
+      if (call.url.includes("/api/users.info")) {
+        return Response.json({ ok: true, user: { is_admin: isAdmin, is_owner: false } });
       }
-      return Response.json({ data: { solspace_calendar: { events: cmsEvents } } });
-    }
-    if (url.includes("/api/chat.postMessage")) {
-      return postMessageOk
-        ? Response.json({ ok: true, ts: "1700000000.000100", channel: "C" })
-        : Response.json({ ok: false, error: "channel_not_found" });
-    }
-    return Response.json({ ok: true, ts: "1700000000.000100", channel: "C" });
+      if (!postMessageOk && call.url.includes("/api/chat.postMessage")) {
+        return Response.json({ ok: false, error: "channel_not_found" });
+      }
+      return undefined;
+    },
   });
-  vi.stubGlobal("fetch", spy);
 });
 afterEach(() => vi.unstubAllGlobals());
 
 function callsTo(fragment: string): RecordedCall[] {
-  return recorded.filter((r) => r.url.includes(fragment));
+  return rec.callsTo(fragment);
 }
 function panelReply(): Record<string, unknown> | undefined {
-  const r = recorded.find((c) => c.url === PANEL_URL);
+  const r = rec.calls.find((c) => c.url === PANEL_URL);
   return r ? JSON.parse(r.body) : undefined;
 }
 function viewsOpenView(): Record<string, unknown> {
@@ -120,9 +104,9 @@ function submission(
   };
 }
 
-function cmsEvt(startMs: number): Record<string, unknown> {
+function googleEvt(startMs: number): GoogleCalendarEvent {
   const iso = new Date(startMs).toISOString();
-  return { id: "1", title: "Soon", startDateLocalized: iso, endDateLocalized: iso };
+  return { id: "1", summary: "Soon", start: { dateTime: iso }, end: { dateTime: iso } };
 }
 
 describe("admin panel — button clicks open modals", () => {
@@ -178,7 +162,7 @@ describe("admin panel — button clicks open modals", () => {
 
 describe("admin panel — reminder submit", () => {
   it("weekly posts to the channel and replaces the panel with the count", async () => {
-    cmsEvents = [cmsEvt(Date.now() + 3_600_000)];
+    googleEvents = [googleEvt(Date.now() + 3_600_000)];
     await handleReminderSubmit(
       submission(REMINDER_MODAL_CALLBACK_ID, {
         kind: { kind: { selected_option: { value: "weekly" } } },
@@ -189,11 +173,11 @@ describe("admin panel — reminder submit", () => {
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
     const reply = panelReply()!;
     expect(reply.replace_original).toBe(true);
-    expect(reply.text).toContain("Posted the *weekly* reminder (1 event)");
+    expect(reply.text).toContain("Posted the *weekly* reminder (1 event, source: *google*)");
   });
 
   it("the picked date drives the window — a Monday daily run reports the weekly-covers-Monday skip", async () => {
-    cmsEvents = [];
+    googleEvents = [];
     // 2024-01-01 is a Monday; noon-Eastern of it lands sendReminder on the Monday-skip path.
     await handleReminderSubmit(
       submission(REMINDER_MODAL_CALLBACK_ID, {
@@ -266,6 +250,23 @@ describe("admin panel — coworking submit", () => {
   });
 });
 
+describe("admin panel — watch buttons", () => {
+  beforeEach(async () => {
+    const stub = env.CALENDAR_SYNC.getByName("default");
+    await runInDurableObject(stub, async (_i, state) => {
+      await state.storage.deleteAlarm();
+      state.storage.sql.exec("DELETE FROM channel; DELETE FROM event_snapshot;");
+    });
+  });
+
+  it("watch status replaces the panel with the status line", async () => {
+    await handlePanelWatchStatusClick(action(PANEL_WATCH_STATUS_ACTION_ID), env);
+    const reply = panelReply()!;
+    expect(reply.replace_original).toBe(true);
+    expect(reply.text).toContain("Calendar watch is *not active*");
+  });
+});
+
 describe("admin panel — authorization & errors", () => {
   it("a non-admin click does no work and replaces the panel with the denial", async () => {
     isAdmin = false;
@@ -273,7 +274,7 @@ describe("admin panel — authorization & errors", () => {
     expect(callsTo("/api/views.open")).toHaveLength(0);
     expect(panelReply()!.text).toContain("admins only");
 
-    recorded = [];
+    rec.calls.length = 0;
     await handlePanelAvailabilityClick(action("admin_panel_availability"), env);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
     expect(panelReply()!.text).toContain("admins only");

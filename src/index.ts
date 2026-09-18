@@ -6,6 +6,7 @@ import { route } from "./router";
 // DO classes must be exported from the Worker's main module so the runtime can bind them.
 export { AvailabilitySheet } from "./bots/availability/durable-object";
 export { CoworkingRoom } from "./bots/coworking/durable-object";
+export { CalendarSync } from "./bots/calendar-sync/durable-object";
 
 /**
  * Worker entry point: the fetch() HTTP front door and the scheduled() cron handler.

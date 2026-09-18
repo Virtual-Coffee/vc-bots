@@ -1,4 +1,6 @@
 import type { Env } from "../env";
+import type { components, paths } from "../generated/zoom-oauth-token";
+import { apiError, createApiClient } from "../http/client";
 import { log } from "../log";
 
 /**
@@ -11,33 +13,32 @@ import { log } from "../log";
  * @see https://developers.zoom.us/docs/internal-apps/s2s-oauth/
  */
 
-const ZOOM_OAUTH_TOKEN_URL = "https://zoom.us/oauth/token";
+/** REST base every S2S-authenticated Zoom call (invite links) is made against. */
+export const ZOOM_API_BASE = "https://api.zoom.us/v2";
 
-export interface ZoomTokenResponse {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-  scope?: string;
-}
+const oauth = createApiClient<paths>({ baseUrl: "https://zoom.us" });
+
+export type ZoomTokenResponse = components["schemas"]["TokenResponse"];
 
 export async function fetchZoomAccessToken(env: Env): Promise<ZoomTokenResponse> {
-  const url = new URL(ZOOM_OAUTH_TOKEN_URL);
-  url.searchParams.set("grant_type", "account_credentials");
-  url.searchParams.set("account_id", env.ZOOM_S2S_ACCOUNT_ID);
-
   const basic = btoa(`${env.ZOOM_S2S_CLIENT_ID}:${env.ZOOM_S2S_CLIENT_SECRET}`);
-  const res = await fetch(url, {
-    method: "POST",
+  const { data, error, response } = await oauth.POST("/oauth/token", {
+    params: {
+      query: { grant_type: "account_credentials", account_id: env.ZOOM_S2S_ACCOUNT_ID },
+    },
     headers: {
       Authorization: `Basic ${basic}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
   });
 
-  if (!res.ok) {
-    throw new Error(`Zoom S2S OAuth failed: ${res.status} ${await res.text()}`);
+  if (!response.ok) {
+    throw apiError("zoom", "Zoom S2S OAuth failed", { response, error });
   }
-  return res.json<ZoomTokenResponse>();
+  if (typeof data?.access_token !== "string" || typeof data.expires_in !== "number") {
+    throw new Error("Zoom S2S OAuth returned an unexpected body shape");
+  }
+  return data;
 }
 
 /** Minimal key/value storage shape (satisfied by `DurableObjectStorage`). */

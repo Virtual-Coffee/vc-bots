@@ -40,7 +40,10 @@ true` / `delete_original: true` rewrites or deletes it for the whole channel.
 
 - Handlers are fire-and-forget: a failed `response_url` POST is logged
   (`slack.response_url.*`), never thrown — an unhandled rejection inside `waitUntil` is
-  invisible.
+  invisible. For everything else that escapes, every registration in `src/slack/app.ts` is
+  wrapped by `lazy()`: slack-edge hands the lazy promise to `waitUntil` with no try/catch, so
+  the wrapper is what turns a rejecting handler into a `slack.lazy_failed` alert in
+  `#bot-log` (ADR 0006).
 - A handler that needs a Slack reply but has no `response_url` (events like `team_join`) posts
   through the client instead; the helpers are for interactions and commands only.
 - Adding a new button on a shared message means: register it with `ack`, reply with

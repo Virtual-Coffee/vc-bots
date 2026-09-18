@@ -46,3 +46,7 @@ firing against the new code.
   no retry until the next daily run; an event added after 12:00 UTC is announced only by a
   manual `/vc-bot-admin daily`.
 - The cron run has no user surface, so a failing run alerts `#bot-log` (ADR 0006).
+- Three channels, fixed by kind: summaries → `SLACK_ANNOUNCEMENTS_CHANNEL_ID`; the public
+  starting-soon message → `SLACK_EVENTS_CHANNEL_ID`; its event-admin mirror (with the Zoom
+  host key) → `SLACK_EVENTADMIN_CHANNEL_ID`. Event windows are computed in `America/New_York`
+  (`reminderRange`, ADR 0011).

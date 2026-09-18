@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { hmacSha256Hex } from "../src/crypto";
 import { buildZoomUrlValidationResponse, verifyZoomSignature } from "../src/zoom/verify";
+import { signZoom } from "./helpers/signing";
 
 const SECRET = "zoom_webhook_secret_token_example";
 
 async function sign(rawBody: string, timestamp: string): Promise<string> {
-  return `v0=${await hmacSha256Hex(SECRET, `v0:${timestamp}:${rawBody}`)}`;
+  return (await signZoom(SECRET, rawBody, timestamp))["x-zm-signature"]!;
 }
 
 describe("verifyZoomSignature", () => {

@@ -1,7 +1,7 @@
-import type { AnyMessageBlock } from "slack-cloudflare-workers";
+import type { AnyMessageBlock, MessageAttachment } from "slack-cloudflare-workers";
 import { DateTime } from "luxon";
 import { dateToken } from "../../slack/date";
-import { htmlToMrkdwn } from "./html-to-mrkdwn";
+import { slackifyMarkdown } from "slackify-markdown";
 import type { ReminderEvent } from "./source";
 
 /**
@@ -9,39 +9,13 @@ import type { ReminderEvent } from "./source";
  * Netlify webhooks bot.
  *
  * Times are rendered with Slack's `<!date^…>` token so each member sees them in their own
- * timezone. HTML descriptions are converted to Slack mrkdwn with the local htmlToMrkdwn.
+ * timezone. Markdown descriptions are converted to Slack mrkdwn with `slackify-markdown`.
  */
 
 export interface ReminderMessage {
   text: string;
   blocks: AnyMessageBlock[];
-}
-
-/** Per-event "⏰ Starting Soon" announcement, scheduled to post ~10 min before the event. */
-export function buildStartingSoonMessage(event: ReminderEvent): ReminderMessage {
-  const blocks: AnyMessageBlock[] = [header("⏰ Starting Soon:"), titleSection(event, true)];
-  const link = event.joinLink;
-  if (link && !link.startsWith("http")) {
-    blocks.push(section(`*Location:* ${link}`));
-  }
-  const description = descriptionContext(event);
-  if (description) blocks.push(description);
-  blocks.push({ type: "divider" });
-
-  return { text: `Starting soon: ${event.title}: ${fallbackDate(event)}`, blocks };
-}
-
-/** Event-admin mirror of the starting-soon message, with host info for moderators. */
-export function buildStartingSoonAdminMessage(
-  event: ReminderEvent,
-  targetChannelId: string,
-): ReminderMessage {
-  const blocks: AnyMessageBlock[] = [header("⏰ Starting Soon:"), titleSection(event, true)];
-  if (event.joinLink) blocks.push(section(`*Location:* ${event.joinLink}`));
-  if (event.zoomHostCode) blocks.push(section(`*Host Code:* ${event.zoomHostCode}`));
-  blocks.push(section(`*Announcement posted to:* <#${targetChannelId}>`), { type: "divider" });
-
-  return { text: `Starting soon: ${event.title}: ${fallbackDate(event)}`, blocks };
+  attachments?: MessageAttachment[];
 }
 
 /** "Today's Events" summary for the announcements channel. */
@@ -87,7 +61,7 @@ function eventDateToken(event: ReminderEvent): string {
   return dateToken(eventStart(event), EVENT_DATE_FORMAT, EVENT_FALLBACK_FORMAT);
 }
 
-function fallbackDate(event: ReminderEvent): string {
+export function fallbackDate(event: ReminderEvent): string {
   return eventStart(event).toFormat(EVENT_FALLBACK_FORMAT);
 }
 
@@ -104,13 +78,13 @@ function eventListText(events: ReminderEvent[]): string {
 export const JOIN_EVENT_ACTION_ID = "button-join-event";
 
 /** Bold title + date token; a Join Event button only for real URLs (when asked for). */
-function titleSection(event: ReminderEvent, withButton: boolean): AnyMessageBlock {
+export function titleSection(event: ReminderEvent, withButton: boolean): AnyMessageBlock {
   const text = {
     type: "mrkdwn" as const,
     text: `*${event.title}*\n${eventDateToken(event)}`,
   };
-  const link = event.joinLink;
-  if (withButton && link && link.startsWith("http")) {
+  const { join } = event;
+  if (withButton && (join.kind === "zoom" || join.kind === "url")) {
     return {
       type: "section",
       text,
@@ -118,7 +92,7 @@ function titleSection(event: ReminderEvent, withButton: boolean): AnyMessageBloc
         type: "button",
         text: { type: "plain_text", text: "Join Event", emoji: true },
         value: `join_event_${event.id}`,
-        url: link,
+        url: join.url,
         action_id: JOIN_EVENT_ACTION_ID,
       },
     };
@@ -127,20 +101,58 @@ function titleSection(event: ReminderEvent, withButton: boolean): AnyMessageBloc
 }
 
 /** Description as a context block; omitted when empty (Slack rejects empty context elements). */
-function descriptionContext(event: ReminderEvent): AnyMessageBlock | null {
-  const text = event.description ? htmlToMrkdwn(event.description) : "";
+export function descriptionContext(event: ReminderEvent): AnyMessageBlock | null {
+  const text = event.description ? slackifyMarkdown(event.description).trim() : "";
   if (!text) return null;
   return context(text);
 }
 
-function header(text: string): AnyMessageBlock {
+export function header(text: string): AnyMessageBlock {
   return { type: "header", text: { type: "plain_text", text, emoji: true } };
 }
 
-function section(text: string): AnyMessageBlock {
+export function section(text: string): AnyMessageBlock {
   return { type: "section", text: { type: "mrkdwn", text } };
 }
 
 function context(text: string): AnyMessageBlock {
   return { type: "context", elements: [{ type: "mrkdwn", text }] };
+}
+
+/** Standout notice that an event in the announced window was cancelled. */
+export function buildCancellationMessage(event: ReminderEvent): ReminderMessage {
+  return {
+    text: `Cancelled: ${event.title} — ${fallbackDate(event)}`,
+    blocks: [],
+    attachments: [
+      {
+        color: "#d9376e",
+        blocks: [
+          section("*:warning: Event Cancelled*"),
+          section(`*${event.title}*\n${eventDateToken(event)}`),
+          section("This event has been cancelled."),
+        ],
+      },
+    ],
+  };
+}
+
+/** Standout notice that an event was rescheduled from oldStartsAt to its new start. */
+export function buildRescheduleMessage(event: ReminderEvent, oldStartsAt: string): ReminderMessage {
+  const oldDt = DateTime.fromISO(oldStartsAt, { zone: "utc" });
+  return {
+    text: `Rescheduled: ${event.title} — now ${fallbackDate(event)}`,
+    blocks: [],
+    attachments: [
+      {
+        color: "#d9376e",
+        blocks: [
+          section("*:calendar: Event Rescheduled*"),
+          section(`*${event.title}*`),
+          section(`*Was:* ${dateToken(oldDt, EVENT_DATE_FORMAT, EVENT_FALLBACK_FORMAT)}`),
+          section(`*Now:* ${eventDateToken(event)}`),
+        ],
+      },
+    ],
+  };
 }

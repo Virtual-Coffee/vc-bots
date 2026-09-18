@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CRON_JOBS, runCron } from "../src/cron";
 import { installFetchRecorder } from "./helpers/fetch-recorder";
@@ -75,19 +75,50 @@ describe("runCron", () => {
     expect(form.get("text")).toContain("0 12 * * *");
   });
 
-  it("the daily cron reaches the CMS event source", async () => {
+  it("the daily cron reaches the Google source and bootstraps the Calendar watch", async () => {
+    const fetched = installFetchRecorder();
+
+    await runCron(controller("0 12 * * *"), env);
+
+    expect(fetched.callsTo("/calendar/v3/calendars/").length).toBeGreaterThan(0);
+    expect(fetched.callsTo("/events/watch")).toHaveLength(1);
+  });
+
+  it("with the interim cms source, the daily cron never touches Google (no watch bootstrap)", async () => {
     const fetched = installFetchRecorder({
-      respond: (call) => {
-        if (!call.url.includes(env.CMS_GRAPHQL_URL)) return undefined;
-        return call.body.includes("getCalendars")
-          ? Response.json({ data: { solspace_calendar: { calendars: [{ handle: "vcEvents" }] } } })
-          : Response.json({ data: { solspace_calendar: { events: [] } } });
-      },
+      respond: (call) =>
+        call.url === env.CMS_GRAPHQL_URL
+          ? Response.json({ data: { solspace_calendar: { calendars: [], events: [] } } })
+          : undefined,
+    });
+
+    await runCron(controller("0 12 * * *"), { ...env, EVENT_SOURCE: "cms" });
+
+    expect(fetched.callsTo(env.CMS_GRAPHQL_URL).length).toBeGreaterThan(0);
+    expect(fetched.callsTo("googleapis.com")).toHaveLength(0);
+  });
+
+  it("a failing watch bootstrap alerts #bot-log without masking the reminder", async () => {
+    const fetched = installFetchRecorder({
+      respond: (call) =>
+        call.url.endsWith("/events/watch")
+          ? Response.json({ error: "nope" }, { status: 500 })
+          : undefined,
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // DO storage outlives a test: drop the channel the previous run registered so this one must watch.
+    await runInDurableObject(env.CALENDAR_SYNC.getByName("default"), async (_i, state) => {
+      state.storage.sql.exec("DELETE FROM channel");
     });
 
     await runCron(controller("0 12 * * *"), env);
 
-    expect(fetched.callsTo(env.CMS_GRAPHQL_URL).length).toBeGreaterThan(0);
+    const alerts = fetched
+      .callsTo("/api/chat.postMessage")
+      .map((c) => fetched.form(c))
+      .filter((f) => f.get("channel") === env.SLACK_BOTLOG_CHANNEL_ID);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.get("text")).toContain("calendar_sync.bootstrap_failed");
   });
 
   it("the Monday 13:00 cron posts the availability trio and seeds its reactions", async () => {
