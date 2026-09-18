@@ -7,7 +7,7 @@
  *
  * For every live series master and standalone event it
  *   - sets `location` to the retired `extendedProperties.private.joinLink` when they differ,
- *   - converts an HTML description to Markdown (`scripts/html-to-markdown.ts`),
+ *   - converts an HTML description to Markdown (`src/html-to-markdown.ts`),
  *   - deletes the `joinLink` property (`null` in a PATCH removes it).
  * Instance exceptions (an occurrence with its own location/description) are reported, not
  * patched; so is a Zoom Join Link with no `hostCode`. Re-running after `--apply` is all no-ops.
@@ -18,7 +18,7 @@
  */
 import { importPKCS8, SignJWT } from "jose";
 import { parseZoomMeetingId } from "../src/zoom/join-link.ts";
-import { UnsupportedHtmlError, htmlToMarkdown } from "./html-to-markdown.ts";
+import { UnsupportedHtmlError, htmlToMarkdown } from "../src/html-to-markdown.ts";
 
 // The Worker tsconfig has no Node globals on purpose; this is the slice the script touches.
 declare const process: {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { UnsupportedHtmlError, htmlToMarkdown } from "../scripts/html-to-markdown";
+import { UnsupportedHtmlError, htmlToMarkdown } from "../src/html-to-markdown";
 
 describe("htmlToMarkdown", () => {
   it("returns Markdown untouched (no tags, no entities)", () => {
