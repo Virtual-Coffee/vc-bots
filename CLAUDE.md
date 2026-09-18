@@ -207,3 +207,8 @@ See `docs/agents/triage-labels.md`.
 
 Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root.
 See `docs/agents/domain.md`.
+
+### Code review
+
+Label a PR `greptile-review` (or `coderabbit-review` for CodeRabbit) to get a bot review.
+Greptile's config is `.greptile/`.

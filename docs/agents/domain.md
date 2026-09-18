@@ -25,6 +25,8 @@ Note that `CLAUDE.md` at the repo root already carries the architectural orienta
 └── src/
 ```
 
+A new ADR also gets a one-line entry in `.greptile/files.json` so the code reviewer reads it.
+
 If this repo ever splits into genuinely separate contexts, add a root `CONTEXT-MAP.md` pointing at one `CONTEXT.md` per context, with context-scoped decisions under `src/<context>/docs/adr/`.
 
 ## Use the glossary's vocabulary
