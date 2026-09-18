@@ -4,7 +4,14 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
-  globalIgnores(["node_modules/", ".wrangler/", "dist/", "worker-configuration.d.ts"]),
+  globalIgnores([
+    "node_modules/",
+    ".wrangler/",
+    "dist/",
+    "worker-configuration.d.ts",
+    // `pnpm gen:api-types` output (docs/adr/0012).
+    "src/generated/",
+  ]),
   {
     files: ["**/*.ts"],
     extends: [js.configs.recommended, tseslint.configs.recommendedTypeChecked, prettier],
@@ -37,7 +44,8 @@ export default defineConfig(
             },
             {
               name: "slackify-html",
-              message: "Throws on workerd; use the local html-to-mrkdwn converter (CLAUDE.md).",
+              message:
+                "Throws on workerd; descriptions are Markdown, rendered with slackify-markdown (CLAUDE.md).",
             },
           ],
         },
@@ -58,6 +66,14 @@ export default defineConfig(
     // and pull in Node/wrangler types the Worker project doesn't have — syntax-only lint.
     files: ["*.ts"],
     extends: [tseslint.configs.disableTypeChecked],
+  },
+  {
+    // Local CLIs (`pnpm fix-calendar`, `pnpm gen:api-types`) run under plain `node`, sit outside
+    // tsconfig `include` like the root config files, print to stdout by design, and may use
+    // `node:*` — the workerd restriction is for the Worker.
+    files: ["scripts/**/*.ts"],
+    extends: [tseslint.configs.disableTypeChecked],
+    rules: { "no-console": "off", "no-restricted-imports": "off" },
   },
   {
     // The leveled logger is the one sanctioned console caller.

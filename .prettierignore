@@ -7,3 +7,7 @@ worker-configuration.d.ts
 *.md
 *.yml
 *.yaml
+# Generated wire types and vendored provider specs (docs/adr/0012); the OAuth fragments are ours.
+src/generated/
+specs/google-calendar-v3.openapi.json
+specs/zoom-meetings.openapi.json

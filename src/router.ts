@@ -1,17 +1,16 @@
+import { activeSourceName } from "./bots/reminders";
 import type { Env } from "./env";
 import { log } from "./log";
 import { createSlackApp } from "./slack/app";
 import { notifyBotLog } from "./slack/notify";
-import type { ZoomInboundEvent, ZoomMeetingEvent } from "./zoom/types";
-import { isZoomMeetingEvent } from "./zoom/types";
-import { buildZoomUrlValidationResponse, verifyZoomRequest } from "./zoom/verify";
+import { handleZoomWebhook } from "./zoom/webhook";
 
 /**
  * HTTP front door. A plain method+path switch — no router dependency for ~4 routes.
  *
  * Every bot route verifies its provider signature against the raw body, before parsing:
- * the Zoom route does it inline as its FIRST step; the Slack routes delegate to the
- * `SlackApp` (`src/slack/app.ts`), which does the same internally.
+ * the Zoom route (`src/zoom/webhook.ts`) does it as its FIRST step; the Slack routes delegate
+ * to the `SlackApp` (`src/slack/app.ts`), which does the same internally.
  */
 export async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
@@ -34,6 +33,9 @@ export async function route(req: Request, env: Env, ctx: ExecutionContext): Prom
   switch (`${method} ${path}`) {
     case "POST /zoom/webhook":
       return handleZoomWebhook(req, env, ctx);
+
+    case "POST /google/notify":
+      return handleGoogleNotify(req, env, ctx);
 
     // One path-agnostic SlackApp serves all three Slack endpoints: it verifies the
     // signature against the raw body, answers the url_verification handshake, ACKs within
@@ -77,66 +79,55 @@ async function handleJoinRedirect(token: string, env: Env): Promise<Response> {
   });
 }
 
-// --- Zoom webhooks → co-working room ---
+// Google Calendar push (`watch`) notifications POST here with an empty body — all signal is in
+// X-Goog-* headers. There's no body signature; authenticity is the per-channel token we set when
+// registering the watch. We ACK fast (200) and run the sync via the DO in the background — non-2xx
+// would make Google retry-storm, so even dropped notifications return 200.
+function handleGoogleNotify(req: Request, env: Env, ctx: ExecutionContext): Response {
+  const goog: Record<string, string> = {};
+  for (const [k, v] of req.headers) {
+    if (k.startsWith("x-goog-")) goog[k] = v;
+  }
+  const state = goog["x-goog-resource-state"];
+  const channelId = goog["x-goog-channel-id"];
+  const resourceId = goog["x-goog-resource-id"];
+  const messageNumber = goog["x-goog-message-number"];
 
-async function handleZoomWebhook(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const rawBody = await req.text();
-  if (!(await verifyZoomRequest(req, rawBody, env.ZOOM_WEBHOOK_SECRET_TOKEN))) {
-    log.warn("verify.failed", { path: "/zoom/webhook" });
-    return new Response("invalid signature", { status: 401 });
+  // Authenticate via the per-channel token before anything else — even the info log below, so an
+  // unauthenticated caller can't write its header values into our logs as a "notification". Drop
+  // silently (200) on mismatch so spoofed/stale notifications don't trigger a Google retry-storm.
+  // Never log the provided/expected value.
+  const provided = req.headers.get("x-goog-channel-token");
+  if (provided !== env.GOOGLE_WATCH_TOKEN) {
+    log.warn("google.notify.bad_token", { channelId });
+    return new Response(null, { status: 200 });
   }
 
-  const body = safeJson<ZoomInboundEvent>(rawBody);
-  if (!body) return new Response("bad request", { status: 400 });
+  // Never log the channel token or the full header bag — x-goog-channel-token is a credential.
+  log.info("google.notify", { state, channelId, resourceId, messageNumber });
 
-  // Endpoint URL validation handshake.
-  if (body.event === "endpoint.url_validation" && body.payload?.plainToken) {
-    log.info("zoom.url_validation");
-    const res = await buildZoomUrlValidationResponse(
-      env.ZOOM_WEBHOOK_SECRET_TOKEN,
-      body.payload.plainToken,
-    );
-    return Response.json(res, { status: 200 });
+  // Initial handshake when a watch channel is created — no change to process.
+  if (state === "sync") {
+    return new Response(null, { status: 200 });
   }
 
-  // Meeting events → the co-working DO, keyed by meeting ID. ACK now and do the work in
-  // `waitUntil`; the DO orders its own handlers (ADR 0003).
-  // The subscription is account-wide, so events arrive for every meeting under the account;
-  // only the configured co-working meeting is ours — ignore the rest (still 200: Zoom retries
-  // non-2xx responses and can eventually deactivate the endpoint).
-  if (isZoomMeetingEvent(body)) {
-    const meeting = String(body.payload.object.id);
-    if (meeting !== env.ZOOM_MEETING_ID) {
-      log.info("zoom.webhook.ignored", { event: body.event, meeting });
-      return new Response(null, { status: 200 });
-    }
-    log.info("zoom.webhook", { event: body.event, meeting });
-    ctx.waitUntil(dispatchZoomEvent(env, meeting, body));
+  // A stale watch may still fire after a cutover back to CMS — ignore unless Google is active.
+  if (activeSourceName(env) !== "google") {
+    log.info("google.notify.ignored_source");
+    return new Response(null, { status: 200 });
   }
+
+  const stub = env.CALENDAR_SYNC.getByName("default");
+  ctx.waitUntil(
+    (async () => {
+      try {
+        // The DO drops pushes whose channel id isn't its stored one (stale/replaced channels).
+        await stub.notify(channelId ?? "");
+      } catch (error) {
+        log.error("google.notify.failed", { channelId, error: String(error) });
+        await notifyBotLog(env, "google.notify.failed", { channelId, error: String(error) });
+      }
+    })(),
+  );
   return new Response(null, { status: 200 });
-}
-
-async function dispatchZoomEvent(env: Env, meeting: string, body: ZoomMeetingEvent): Promise<void> {
-  const stub = env.COWORKING_ROOM.getByName(meeting);
-  try {
-    await stub.handleZoomEvent(body);
-  } catch (error) {
-    // Alert #bot-log (we've already 200'd, so a persistent DO/Slack failure can't trigger a Zoom
-    // retry-storm or risk the account-wide endpoint being deactivated). Room presence
-    // self-corrects on the next participant event.
-    log.error("zoom.webhook.failed", { event: body.event, meeting, error: String(error) });
-    await notifyBotLog(env, "zoom.webhook.failed", {
-      event: body.event,
-      meeting,
-      error: String(error),
-    });
-  }
-}
-
-function safeJson<T>(raw: string): T | null {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
 }

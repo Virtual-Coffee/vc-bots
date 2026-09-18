@@ -1,7 +1,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hmacSha256Hex } from "../src/crypto";
 import { route } from "../src/router";
+import { signSlack } from "./helpers/signing";
 
 /**
  * End-to-end coverage of the SlackApp pipeline (`src/slack/app.ts`) through `route()`:
@@ -18,6 +18,8 @@ interface RecordedCall {
   body: string;
 }
 let recorded: RecordedCall[];
+/** The stubbed fetch — a test can wrap it to fail selected calls. */
+let stubbedFetch: (input: unknown, init?: { body?: unknown }) => Promise<Response>;
 
 beforeEach(() => {
   recorded = [];
@@ -49,6 +51,7 @@ beforeEach(() => {
     }
     return Response.json({ ok: true, ts: "1700000000.000100", channel: "C" });
   });
+  stubbedFetch = spy;
   vi.stubGlobal("fetch", spy);
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -64,16 +67,10 @@ async function post(
   contentType: string,
   opts?: { secret?: string },
 ): Promise<Response> {
-  const timestamp = String(Math.floor(Date.now() / 1000));
   const secret = opts?.secret ?? env.SLACK_SIGNING_SECRET;
-  const signature = `v0=${await hmacSha256Hex(secret, `v0:${timestamp}:${rawBody}`)}`;
   const req = new Request(`https://bots.example${path}`, {
     method: "POST",
-    headers: {
-      "Content-Type": contentType,
-      "x-slack-request-timestamp": timestamp,
-      "x-slack-signature": signature,
-    },
+    headers: { "Content-Type": contentType, ...(await signSlack(secret, rawBody)) },
     body: rawBody,
   });
   const ctx = createExecutionContext();
@@ -152,6 +149,33 @@ describe("events", () => {
     const publishes = callsTo("/api/views.publish");
     expect(publishes).toHaveLength(1);
     expect(new URLSearchParams(publishes[0]!.body).get("user_id")).toBe("U456");
+  });
+
+  // slack-edge hands the lazy handler to ctx.waitUntil with no try/catch, so without the
+  // `lazy()` wrapper a rejection here would vanish. handleAppHomeOpened has no catch of its own.
+  it("a rejecting lazy handler alerts #bot-log instead of vanishing", async () => {
+    const inner = stubbedFetch;
+    vi.stubGlobal("fetch", async (input: unknown, init?: { body?: unknown }) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("/api/views.publish")) throw new Error("boom");
+      return inner(input, init);
+    });
+    const body = JSON.stringify({
+      type: "event_callback",
+      team_id: "T1",
+      api_app_id: "A1",
+      event: { type: "app_home_opened", user: "U456", channel: "D1", tab: "home", event_ts: "1" },
+      event_id: "Ev3",
+      event_time: 3,
+    });
+    const res = await post("/slack/events", body, "application/json"); // waitUntil drained
+    expect(res.status).toBe(200);
+
+    const alerts = callsTo("/api/chat.postMessage").map((c) => new URLSearchParams(c.body));
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.get("channel")).toBe(env.SLACK_BOTLOG_CHANNEL_ID);
+    expect(alerts[0]!.get("text")).toContain("slack.lazy_failed");
+    expect(alerts[0]!.get("text")).toContain("handler=app_home_opened");
   });
 });
 

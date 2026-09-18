@@ -37,6 +37,10 @@ Strip the standing invite from an ended card because a newer room message has ta
 A room message an admin posts by hand, with no Zoom session behind it. It behaves like a session for the purposes of cards and the standing invite.
 _Avoid_: announce-only message, admin announce
 
+**Admin action**:
+One thing a workspace admin can make the bots do by hand (run a reminder, send a welcome, publish an App Home, announce the co-working room, manage the calendar watch). The slash command and the admin panel are two ways of requesting the same action; the gate and the outcome are the same whichever asked.
+_Avoid_: admin command, panel action, subcommand (for the action itself; a subcommand is how the slash surface spells one)
+
 **Presence**:
 Who is in the room right now.
 
@@ -57,3 +61,37 @@ _Avoid_: registration link, join url
 
 **Join token**:
 The opaque token a member's Join button carries. It resolves to that member's invite link and expires with it.
+
+## Event announcements
+
+**Calendar**:
+The Google Calendar that is the system of record for VirtualCoffee events. The bots read events from it and subscribe to its changes; they never write events to it.
+_Avoid_: Google API, gcal, events feed
+
+**Calendar watch**:
+The bots' subscription to Calendar changes, so a cancellation or reschedule is noticed between daily runs.
+_Avoid_: webhook, notification channel, sync channel
+
+**Event**:
+One timed entry on the Calendar. The bots read it; they never write it.
+_Avoid_: CMS event, reminder event
+
+**Join Link**:
+Where members go to attend an event: a Zoom link (with its host key), another URL, a place (free text), or none.
+_Avoid_: joinLink property, Zoom link, meeting link
+
+**Host key**:
+Zoom's per-user key that lets a moderator claim host in the meeting. Part of a Zoom Join Link and nothing else.
+_Avoid_: host code field, zoomHostCode, hostCode property
+
+**Invalid event**:
+A timed, live event the bots refuse to announce — today, a Zoom Join Link without a host key. Left out on its own; every other event proceeds.
+_Avoid_: bad event, broken event, failed event
+
+**Starting-soon pair**:
+The public "Starting Soon" message and its event-admin mirror, both queued for ten minutes before an event starts.
+_Avoid_: reminder pair, scheduled messages
+
+**Event-admin mirror**:
+The copy of a starting-soon message posted to the event-admin channel with moderator extras (the host key, where the public message went).
+_Avoid_: admin copy, admin message

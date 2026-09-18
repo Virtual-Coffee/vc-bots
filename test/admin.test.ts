@@ -1,47 +1,36 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleAdminCommand, type AdminCommandPayload } from "../src/bots/admin";
+import { handleAdminCommand, type AdminCommandPayload } from "../src/bots/admin/slash";
+import type { GoogleCalendarEvent } from "../src/google/calendar";
+import {
+  type FetchRecorder,
+  installFetchRecorder,
+  type RecordedCall,
+} from "./helpers/fetch-recorder";
+
+/**
+ * The `/vc-bot-admin` slash adapter: parsing, the admin gate on its own replies, and the reply
+ * text per verb. The operations themselves are covered in admin-actions.test.ts.
+ */
 
 const RESPONSE_URL = "https://hooks.slack.com/commands/resp-1";
 
-interface RecordedCall {
-  url: string;
-  body: string;
-}
-let recorded: RecordedCall[];
+let rec: FetchRecorder;
 let isAdmin: boolean;
-let cmsEvents: Array<Record<string, unknown>>;
+let googleEvents: GoogleCalendarEvent[];
 
 beforeEach(() => {
-  recorded = [];
   isAdmin = true;
-  cmsEvents = [];
-  const spy = vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-    let url: string;
-    let body: string;
-    if (input instanceof Request) {
-      url = input.url;
-      body = new TextDecoder().decode(await input.clone().arrayBuffer());
-    } else {
-      url = String(input);
-      body = typeof init?.body === "string" ? init.body : "";
-    }
-    recorded.push({ url, body });
-
-    if (url.includes("/api/users.info")) {
-      return Response.json({ ok: true, user: { is_admin: isAdmin, is_owner: false } });
-    }
-    if (url === env.CMS_GRAPHQL_URL) {
-      if (body.includes("getCalendars")) {
-        return Response.json({
-          data: { solspace_calendar: { calendars: [{ handle: "vcEvents" }] } },
-        });
+  googleEvents = [];
+  rec = installFetchRecorder({
+    googleEvents: () => googleEvents,
+    respond(call) {
+      if (call.url.includes("/api/users.info")) {
+        return Response.json({ ok: true, user: { is_admin: isAdmin, is_owner: false } });
       }
-      return Response.json({ data: { solspace_calendar: { events: cmsEvents } } });
-    }
-    return Response.json({ ok: true, ts: "1700000000.000100", channel: "C" });
+      return undefined;
+    },
   });
-  vi.stubGlobal("fetch", spy);
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -49,10 +38,10 @@ function cmd(text: string): AdminCommandPayload {
   return { text, user_id: "U1", response_url: RESPONSE_URL };
 }
 function callsTo(fragment: string): RecordedCall[] {
-  return recorded.filter((r) => r.url.includes(fragment));
+  return rec.callsTo(fragment);
 }
 function replyText(): string | undefined {
-  const r = recorded.find((c) => c.url === RESPONSE_URL);
+  const r = rec.calls.find((c) => c.url === RESPONSE_URL);
   return r ? JSON.parse(r.body).text : undefined;
 }
 
@@ -66,31 +55,27 @@ describe("handleAdminCommand — authorization", () => {
 });
 
 describe("handleAdminCommand — reminders", () => {
-  function cmsEvt(startMs: number): Record<string, unknown> {
+  function googleEvt(startMs: number): GoogleCalendarEvent {
     const iso = new Date(startMs).toISOString();
-    return { id: "1", title: "Soon", startDateLocalized: iso, endDateLocalized: iso };
+    return { id: "1", summary: "Soon", start: { dateTime: iso }, end: { dateTime: iso } };
   }
 
+  // The command's optional `[source]` arg is how an admin pins a source for a run; "google" is
+  // also the configured default.
   it("posts the weekly reminder to the channel and confirms the count", async () => {
-    cmsEvents = [cmsEvt(Date.now() + 3_600_000)];
-    await handleAdminCommand(cmd("weekly"), env);
+    googleEvents = [googleEvt(Date.now() + 3_600_000)];
+    await handleAdminCommand(cmd("weekly google"), env);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
-    expect(replyText()).toContain("Posted the *weekly* reminder (1 event)");
+    expect(replyText()).toContain("Posted the *weekly* reminder (1 event");
+    expect(replyText()).toContain("source: *google*");
   });
 
-  it("daily schedules a starting-soon pair and reports it", async () => {
-    cmsEvents = [cmsEvt(Date.now() + 6 * 3_600_000)];
-    await handleAdminCommand(cmd("daily"), env);
-    expect(callsTo("/api/chat.scheduleMessage")).toHaveLength(2); // public + admin mirror
-    // The summary itself is day-dependent (Mondays skip it), so assert the stable part.
-    expect(replyText()).toContain("Scheduled 1 starting-soon message");
-  });
-
-  it("reports when there are no upcoming events", async () => {
-    cmsEvents = [];
-    await handleAdminCommand(cmd("weekly"), env);
+  it("rejects an unknown source name with a friendly message and makes no Slack API calls", async () => {
+    await handleAdminCommand(cmd("daily nonsense"), env);
+    expect(replyText()).toContain("Unknown event source");
+    expect(replyText()).toContain("google");
     expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
-    expect(replyText()).toContain("No upcoming events");
+    expect(callsTo("/api/chat.scheduleMessage")).toHaveLength(0);
   });
 });
 
@@ -99,7 +84,26 @@ describe("handleAdminCommand — previews", () => {
     await handleAdminCommand(cmd("welcome"), env);
     const post = callsTo("/api/chat.postMessage")[0];
     expect(new URLSearchParams(post!.body).get("channel")).toBe("U1");
-    expect(replyText()).toContain("welcome");
+    expect(replyText()).toBe(":white_check_mark: Sent you the welcome message.");
+  });
+
+  it.each([
+    ["<@U2|joe.k>", "escaped mention with a handle"],
+    ["<@U2|Joe Karow>", "escaped mention with a display name"],
+    ["<@U2>", "bare mention"],
+    ["U2", "bare user id"],
+  ])("welcome %s (%s) DMs that member and confirms", async (target) => {
+    await handleAdminCommand(cmd(`welcome ${target}`), env);
+    const post = callsTo("/api/chat.postMessage")[0];
+    expect(new URLSearchParams(post!.body).get("channel")).toBe("U2");
+    expect(replyText()).toBe(":white_check_mark: Sent the welcome message to <@U2>.");
+  });
+
+  it("welcome with a target that is not a member replies with usage and DMs nobody", async () => {
+    await handleAdminCommand(cmd("welcome everyone"), env);
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
+    expect(replyText()).toContain("Usage: `welcome`");
+    expect(replyText()).toContain("/vc-bot-admin");
   });
 
   it("home publishes the App Home view", async () => {
@@ -115,7 +119,7 @@ describe("handleAdminCommand — coworking announce", () => {
     expect(callsTo("/api/chat.postMessage").length).toBeGreaterThanOrEqual(1);
     expect(replyText()).toContain("room-open announcement");
 
-    recorded = [];
+    rec.calls.length = 0;
     await handleAdminCommand(cmd("coworking close"), env);
     expect(callsTo("/api/chat.update")).toHaveLength(1);
     expect(replyText()).toContain("Closed the co-working announcement");
@@ -125,12 +129,50 @@ describe("handleAdminCommand — coworking announce", () => {
     await handleAdminCommand(cmd("nonsense"), env);
     expect(replyText()).toContain("/vc-bot-admin");
   });
+
+  it("usage mentions [source] for daily/weekly, [@user] for welcome, and the watch ops", async () => {
+    await handleAdminCommand(cmd("nonsense"), env);
+    expect(replyText()).toContain("[source]");
+    expect(replyText()).toContain("welcome [@user]");
+    expect(replyText()).toContain("watch status");
+  });
+});
+
+describe("handleAdminCommand — calendar watch", () => {
+  beforeEach(async () => {
+    const stub = env.CALENDAR_SYNC.getByName("default");
+    await runInDurableObject(stub, async (_i, state) => {
+      await state.storage.deleteAlarm();
+      state.storage.sql.exec("DELETE FROM channel; DELETE FROM event_snapshot;");
+    });
+  });
+
+  it("watch status reports the inactive channel", async () => {
+    await handleAdminCommand(cmd("watch status"), env);
+    expect(replyText()).toBe(":mute: Calendar watch is *not active*.");
+  });
+
+  it("watch start registers a channel and reports it active", async () => {
+    await handleAdminCommand(cmd("watch start"), env);
+    expect(callsTo("/events/watch")).toHaveLength(1);
+    expect(replyText()).toContain("Calendar watch is *active*");
+  });
+
+  it("watch stop with nothing running says so", async () => {
+    await handleAdminCommand(cmd("watch stop"), env);
+    expect(replyText()).toBe(":information_source: No active calendar watch to stop.");
+  });
+
+  it("an unknown watch op replies with usage", async () => {
+    await handleAdminCommand(cmd("watch bounce"), env);
+    expect(replyText()).toContain("Usage: `watch status`");
+  });
 });
 
 describe("handleAdminCommand — panel", () => {
   it("no args replies with the interactive panel (buttons, never replacing)", async () => {
     await handleAdminCommand(cmd(""), env);
-    const reply = recorded.find((c) => c.url === RESPONSE_URL);
+    const reply = rec.calls.find((c) => c.url === RESPONSE_URL);
     expect(reply).toBeDefined();
     const body = JSON.parse(reply!.body);
     expect(body.replace_original).toBe(false);
@@ -152,26 +194,15 @@ describe("handleAdminCommand — failures", () => {
   it("reports an error back instead of leaving the waitUntil rejection uncaught", async () => {
     // The route has already ACKed by the time this runs (ctx.waitUntil), so a throw here would
     // surface as an uncaught error and the admin would see nothing. Make the work fail:
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: unknown, init?: { body?: unknown }) => {
-        const url = input instanceof Request ? input.url : String(input);
-        const body =
-          input instanceof Request
-            ? new TextDecoder().decode(await input.clone().arrayBuffer())
-            : typeof init?.body === "string"
-              ? init.body
-              : "";
-        recorded.push({ url, body });
-        if (url.includes("/api/users.info")) {
-          return Response.json({ ok: true, user: { is_admin: true, is_owner: false } });
-        }
-        if (url.includes("/api/chat.postMessage")) {
-          return Response.json({ ok: false, error: "channel_not_found" });
-        }
-        return Response.json({ ok: true });
-      }),
-    );
+    rec.respondWith((call) => {
+      if (call.url.includes("/api/users.info")) {
+        return Response.json({ ok: true, user: { is_admin: true, is_owner: false } });
+      }
+      if (call.url.includes("/api/chat.postMessage")) {
+        return Response.json({ ok: false, error: "channel_not_found" });
+      }
+      return undefined;
+    });
 
     await expect(handleAdminCommand(cmd("welcome"), env)).resolves.toBeUndefined();
     expect(replyText()).toContain(":warning:");

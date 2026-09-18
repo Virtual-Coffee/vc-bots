@@ -1,6 +1,6 @@
 # 0003 — Zoom events are serialized inside the co-working DO, not by the runtime
 
-**Status:** Accepted (2026-09-17)
+**Status:** Accepted (2026-09-17), amended 2026-09-18
 
 ## Context
 
@@ -53,3 +53,25 @@ as a presence card.
   buffer joins for an unknown instance and replay them on `meeting.started`.
 - Tests in `test/coworking-do.test.ts` ("event serialization") reproduce both windows by
   parking the DO inside a stubbed `fetch` and delivering a second event before releasing it.
+
+## Amendment (2026-09-18) — `CalendarSync` has the same shape
+
+`CalendarSync` (`src/bots/calendar-sync/durable-object.ts`) was written on the assumption this
+ADR refutes: its class doc claimed the singleton instance serialized push notifications. It does
+not — `processNotification` awaits Google (`listEvents`, `getEvent`) before it commits the
+snapshot, so two pushes (Google sends them in bursts) each diffed the same prior snapshot and
+each posted the same cancellation to all three channels, and both ran `reconcileStartingSoon`
+(clear-then-schedule → a duplicate starting-soon pair). `ensureWatch`'s seed raced a
+notification's diff the same way.
+
+- **The queue is shared.** `SerialQueue` (`src/serial-queue.ts`) is the `enqueue` above,
+  extracted; `CoworkingRoom.enqueue` delegates to it and its log names are unchanged.
+- **`CalendarSync` routes every state-mutating entry point through it**: `notify` (the
+  channel-id check included — a queued `ensureWatch` ahead of the push may have replaced the
+  channel), `ensureWatch`, `stopWatch`, `seed`, `processNotification` and the alarm. Internal
+  callers use the un-queued `*Now` bodies so nothing enqueues from inside the queue.
+  `watchStatus` is a synchronous read and stays outside, like the join-token RPCs.
+- **Log names**: `calendar_sync.queue.wait` / `.run` / `.done`, same levels as coworking's.
+- The in-memory caveat is milder here: Google re-delivers a push its receiver died on.
+- `test/calendar-sync-do.test.ts` ("serialization") parks the DO inside the calendar fake's
+  `listEvents` and proves a second push posts nothing extra.

@@ -1,8 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
-import { getCachedZoomToken } from "../../zoom/oauth";
-import { createInviteLink } from "../../zoom/invite-links";
+import { SerialQueue } from "../../serial-queue";
+import type { InviteLinkPort } from "../../zoom/invite-links";
+import { createZoomInviteLinkPort } from "../../zoom/invite-links";
 import type { ZoomMeetingEvent, ZoomParticipant } from "../../zoom/types";
 import {
   type PresenceUser,
@@ -17,9 +18,10 @@ import {
  *
  * The DO owns the session state machine (the `session` / `participant` / `member_link` /
  * `invite_link` tables, the stale-session alarm, and the join tokens) and mints per-user Zoom
- * invite links. Everything about the room message — the cards, the copy, the standing-invite
- * hand-off between sessions and announcements, which card is open — is delegated to
- * `RoomMessage`; the DO never sees a message ts, it only tells RoomMessage what happened.
+ * invite links through `InviteLinkPort`. Everything about the room message — the cards, the copy,
+ * the standing-invite hand-off between sessions and announcements, which card is open — is
+ * delegated to `RoomMessage`; the DO never sees a message ts, it only tells RoomMessage what
+ * happened. Both are swappable fields so the DO suite runs against in-memory fakes.
  */
 
 /** Force-end a session this long after it started if `meeting.ended` was never received. */
@@ -66,15 +68,17 @@ type ParticipantRow = {
 
 export class CoworkingRoom extends DurableObject<Env> {
   private readonly sql: SqlStorage;
-  private readonly roomMessage: RoomMessage;
-  /** Tail of the serialized work queue — see `enqueue`. */
-  private queue: Promise<unknown> = Promise.resolve();
-  private pending = 0;
+  // Not readonly: tests swap in fakes (`installInviteLinkFake` / `installRoomChannelFake`).
+  private inviteLinks: InviteLinkPort;
+  private roomMessage: RoomMessage;
+  /** Serializes the state-mutating handlers — see `enqueue`. */
+  private readonly queue = new SerialQueue("coworking.queue");
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     setLogLevel(env.LOG_LEVEL); // the DO runs in its own isolate
     this.sql = ctx.storage.sql;
+    this.inviteLinks = createZoomInviteLinkPort(env, ctx.storage);
     this.roomMessage = new RoomMessage(createSlackRoomChannelPort(env), ctx.storage, env);
     // The runtime holds deliveries until this settles; nothing to await in a constructor.
     void ctx.blockConcurrencyWhile(async () => this.migrate());
@@ -152,7 +156,7 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   /** Work items queued or running — readable via `runInDurableObject` so tests can prove interleaving. */
   get queueDepth(): number {
-    return this.pending;
+    return this.queue.depth;
   }
 
   /**
@@ -162,25 +166,7 @@ export class CoworkingRoom extends DurableObject<Env> {
    * the interleaving the queue exists for actually happened.
    */
   private enqueue<T>(label: string, work: () => Promise<T>): Promise<T> {
-    const depth = ++this.pending;
-    const queuedAt = Date.now();
-    if (depth > 1) log.info("coworking.queue.wait", { work: label, depth });
-    const run = this.queue.then(async () => {
-      log.debug("coworking.queue.run", { work: label, waitedMs: Date.now() - queuedAt });
-      const startedAt = Date.now();
-      try {
-        return await work();
-      } finally {
-        this.pending--;
-        log.debug("coworking.queue.done", {
-          work: label,
-          ranMs: Date.now() - startedAt,
-          depth: this.pending,
-        });
-      }
-    });
-    this.queue = run.catch(() => undefined);
-    return run;
+    return this.queue.run(label, work);
   }
 
   // --- RPC surface ---
@@ -203,14 +189,8 @@ export class CoworkingRoom extends DurableObject<Env> {
     slackUserId: string;
     displayName: string | null;
   }): Promise<{ token: string }> {
-    log.debug("coworking.join.token", { user: input.slackUserId });
-    const accessToken = await getCachedZoomToken(this.env, this.ctx.storage);
     log.debug("coworking.join.invite_link", { user: input.slackUserId });
-    const { joinUrl } = await createInviteLink(
-      accessToken,
-      this.env.ZOOM_MEETING_ID,
-      input.displayName ?? FALLBACK_DISPLAY_NAME,
-    );
+    const { joinUrl } = await this.inviteLinks.mint(input.displayName ?? FALLBACK_DISPLAY_NAME);
 
     // No display name → nothing to correlate on. Storing the generic pre-fill instead would match
     // every Zoom joiner who shows up under it to whichever member clicked Join last.

@@ -10,7 +10,7 @@
   "rules": [
     {
       "id": "verify-before-parse",
-      "rule": "Every provider route (POST /zoom/webhook, POST /slack/*, POST /google/notify) verifies the request signature against the raw body before the body is parsed. Flag any handler that reads or parses the body first.",
+      "rule": "Every provider route authenticates the request before doing any work: POST /zoom/webhook and POST /slack/* verify the provider signature against the raw body before the body is parsed (flag any handler that reads or parses the body first); POST /google/notify has no body or signature (Google Calendar push), so it checks X-Goog-Channel-Token against GOOGLE_WATCH_TOKEN before dispatching. Do not flag the Google route for lacking a body signature.",
       "scope": ["src/router.ts", "src/zoom/**", "src/slack/**", "src/google/**"],
       "severity": "high"
     },

@@ -43,7 +43,8 @@ API**; the API returns in 7.1. typescript-eslint and knip both need it and throw
 ## Consequences
 
 - A rule violation is a CI failure with a message pointing at CLAUDE.md, not a review comment.
-  `.coderabbit.yaml` still carries the same instructions; they are now redundant, not wrong.
+  `.coderabbit.yaml` no longer restates the rules as `path_instructions`; CodeRabbit reads
+  CLAUDE.md, CONTEXT.md and the ADRs through its `knowledge_base` instead.
 - Two `typescript` packages in `devDependencies` until typescript-eslint supports TS ≥ 7.1
   (typescript-eslint/typescript-eslint#10940). When it does: drop `@typescript/native`, point
   `typescript` back at `^7`, confirm `pnpm exec tsc --version` is 7.x and `pnpm lint` runs.

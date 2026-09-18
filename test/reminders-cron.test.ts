@@ -36,7 +36,11 @@ describe("CRON_TO_KIND ↔ wrangler.jsonc", () => {
 describe("runReminders", () => {
   it("a known cron runs its reminder with the scheduled time", async () => {
     const fetched = installFetchRecorder();
-    const send = vi.fn<typeof sendReminder>(async () => ({ posted: true, count: 0 }));
+    const send = vi.fn<typeof sendReminder>(async () => ({
+      posted: true,
+      count: 0,
+      source: "google",
+    }));
 
     await runReminders(controller("0 12 * * MON"), env, {} as ExecutionContext, send);
 
