@@ -14,9 +14,10 @@ import type { Env } from "../src/env";
 const NOW = Date.parse("2026-05-28T12:00:00Z");
 
 describe("getEventSource / isEventSourceName", () => {
-  it("returns the google source by default (no EVENT_SOURCE set)", () => {
-    const source = getEventSource({ ...env, EVENT_SOURCE: undefined } as unknown as Env);
-    expect(source.name).toBe("google");
+  it.each([undefined, ""])("throws when EVENT_SOURCE is %j (no default source)", (value) => {
+    const bad = { ...env, EVENT_SOURCE: value } as unknown as Env;
+    expect(() => getEventSource(bad)).toThrow("EVENT_SOURCE");
+    expect(() => getEventSource(bad)).toThrow("google");
   });
 
   it("returns the google source when EVENT_SOURCE is 'google'", () => {

@@ -10,10 +10,11 @@ import { createCmsSource } from "./sources/cms";
  * Senders and Block Kit builders depend only on the source-agnostic model in `src/events.ts`
  * (re-exported here) — never on a provider's field names. Two sources: `google` (the
  * `CalendarPort` adapter's `listEvents`; the system of record once cut over, docs/adr/0001)
- * and `cms` (the interim default until then — docs/adr/0001 §Consequences, dated note). The
- * registry is the `EVENT_SOURCE` / admin `[source]` seam. `getEventSource` resolves: explicit
- * name (from `/vc-bot-admin daily|weekly [source]`) wins; otherwise `env.EVENT_SOURCE`; throws
- * on unknown so a typo'd config var fails loudly (admin pre-validates for a friendly message).
+ * and `cms` (the interim `EVENT_SOURCE` until then — docs/adr/0001 §Consequences, dated note).
+ * The registry is the `EVENT_SOURCE` / admin `[source]` seam. `getEventSource` resolves: explicit
+ * name (from `/vc-bot-admin daily|weekly [source]`) wins; otherwise `env.EVENT_SOURCE`, which has
+ * no fallback — a missing or unknown value throws so a config omission or typo fails loudly rather
+ * than silently switching sources (admin pre-validates for a friendly message).
  */
 
 export type { EventRange, ReminderEvent } from "../../events";
@@ -41,9 +42,14 @@ export function isEventSourceName(name: string): name is EventSourceName {
   return Object.prototype.hasOwnProperty.call(SOURCES, name);
 }
 
-/** The configured default source name (`EVENT_SOURCE`, "google" when unset) — the one seam for it. */
+/** The configured source name (`EVENT_SOURCE`) — the one seam for it. Throws when unset. */
 export function activeSourceName(env: Env): string {
-  return env.EVENT_SOURCE ?? "google";
+  // `Env` types it as required, but a wrangler.jsonc omission would still reach here as
+  // undefined at runtime; there is deliberately no default to fall back to.
+  if (!env.EVENT_SOURCE) {
+    throw new Error(`EVENT_SOURCE is not set (valid: ${EVENT_SOURCE_NAMES.join(", ")})`);
+  }
+  return env.EVENT_SOURCE;
 }
 
 export function getEventSource(env: Env, name?: string): EventSource {
