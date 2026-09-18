@@ -20,6 +20,8 @@ export interface RecordedCall {
   /** Upper-case HTTP method (`GET` when unspecified). */
   method: string;
   body: string;
+  /** The `Authorization` request header, `null` when absent. */
+  authorization: string | null;
 }
 
 /** Answer a call yourself, or return `undefined` to fall through to the defaults. */
@@ -77,46 +79,55 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
   };
   const googlePages = options.googlePages ?? [];
 
-  const spy = vi.fn(async (input: unknown, init?: { method?: string; body?: unknown }) => {
-    let url: string;
-    let method: string;
-    let body: string;
-    if (input instanceof Request) {
-      url = input.url;
-      method = input.method;
-      body = new TextDecoder().decode(await input.clone().arrayBuffer());
-    } else {
-      url = String(input); // string or URL
-      method = init?.method?.toUpperCase() ?? "GET";
-      body = typeof init?.body === "string" ? init.body : "";
-    }
-    const call: RecordedCall = { url, method, body };
-    calls.push(call);
+  const spy = vi.fn(
+    async (input: unknown, init?: { method?: string; body?: unknown; headers?: HeadersInit }) => {
+      let url: string;
+      let method: string;
+      let body: string;
+      let authorization: string | null;
+      if (input instanceof Request) {
+        url = input.url;
+        method = input.method;
+        body = new TextDecoder().decode(await input.clone().arrayBuffer());
+        authorization = input.headers.get("authorization");
+      } else {
+        url = String(input); // string or URL
+        method = init?.method?.toUpperCase() ?? "GET";
+        body = typeof init?.body === "string" ? init.body : "";
+        authorization = new Headers(init?.headers).get("authorization");
+      }
+      const call: RecordedCall = { url, method, body, authorization };
+      calls.push(call);
 
-    const custom = await respond?.(call);
-    if (custom) return custom;
+      const custom = await respond?.(call);
+      if (custom) return custom;
 
-    if (url.includes("zoom.us/oauth/token")) {
-      return Response.json({ access_token: "zoom-token", token_type: "bearer", expires_in: 3600 });
-    }
-    if (method === "POST" && url.includes("api.zoom.us/v2/meetings/")) {
-      return Response.json({ attendees: [{ name: profileName, join_url: zoomJoinUrl }] });
-    }
-    if (url.startsWith("https://oauth2.googleapis.com/token")) {
-      return Response.json({ access_token: "g-tok", expires_in: 3600 });
-    }
-    if (url.startsWith("https://www.googleapis.com/calendar/v3/")) {
-      return googleCalendar(url, method);
-    }
-    if (url.includes("/api/users.profile.get")) {
-      return Response.json({ ok: true, profile: { real_name: profileName } });
-    }
-    if (url.includes("/api/chat.postMessage")) {
-      const ts = postTs[Math.min(postCount++, postTs.length - 1)] ?? defaultTs;
-      return Response.json({ ok: true, ts, channel: "C0B6C3BFEDD" });
-    }
-    return Response.json({ ok: true, ts: defaultTs, channel: "C0B6C3BFEDD" });
-  });
+      if (url.includes("zoom.us/oauth/token")) {
+        return Response.json({
+          access_token: "zoom-token",
+          token_type: "bearer",
+          expires_in: 3600,
+        });
+      }
+      if (method === "POST" && url.includes("api.zoom.us/v2/meetings/")) {
+        return Response.json({ attendees: [{ name: profileName, join_url: zoomJoinUrl }] });
+      }
+      if (url.startsWith("https://oauth2.googleapis.com/token")) {
+        return Response.json({ access_token: "g-tok", expires_in: 3600 });
+      }
+      if (url.startsWith("https://www.googleapis.com/calendar/v3/")) {
+        return googleCalendar(url, method);
+      }
+      if (url.includes("/api/users.profile.get")) {
+        return Response.json({ ok: true, profile: { real_name: profileName } });
+      }
+      if (url.includes("/api/chat.postMessage")) {
+        const ts = postTs[Math.min(postCount++, postTs.length - 1)] ?? defaultTs;
+        return Response.json({ ok: true, ts, channel: "C0B6C3BFEDD" });
+      }
+      return Response.json({ ok: true, ts: defaultTs, channel: "C0B6C3BFEDD" });
+    },
+  );
   vi.stubGlobal("fetch", spy);
 
   function googleCalendar(url: string, method: string): Response {

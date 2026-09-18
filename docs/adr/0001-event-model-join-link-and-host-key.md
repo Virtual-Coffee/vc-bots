@@ -1,6 +1,6 @@
 # 0001 — Event model: Join Link is `location`, host key is a private calendar property
 
-**Status:** Accepted (2026-09-13)
+**Status:** Accepted (2026-09-13); CMS removal deferred (2026-09-18, see Consequences)
 
 ## Context
 
@@ -44,7 +44,8 @@ answer is "keep your own datastore" — see
 - **Descriptions are Markdown**, rendered with `slackify-markdown` (pure ESM on unified/remark,
   runs on workerd). The local `html-to-mrkdwn` converter is gone; there is no HTML tolerance.
 - **The CMS source is removed** with the cutover. The `EventSource` registry stays as the
-  `EVENT_SOURCE` / admin `[source]` seam, with `google` as its only entry.
+  `EVENT_SOURCE` / admin `[source]` seam, with `google` as its only entry. _(Deferred — see the
+  2026-09-18 note below.)_
 
 ## Consequences
 
@@ -52,7 +53,19 @@ answer is "keep your own datastore" — see
 - The Zoom S2S app needs only `meeting:write:invite_links:admin` (plus the webhook
   subscriptions); the `meeting:read:meeting:admin`, `user:read:user:admin`, and
   `user:read:list_users:admin` scopes added for the Zoom lookup can be removed.
-- `CMS_TOKEN`, `CMS_GRAPHQL_URL`, `graphql`, and `graphql-request` are gone.
+- `CMS_TOKEN`, `CMS_GRAPHQL_URL`, `graphql`, and `graphql-request` are gone. _(Deferred, below.)_
+- **2026-09-18 — CMS source restored as the interim default.** The Worker ships before the
+  calendar is canonical, so `src/bots/reminders/sources/cms.ts` is back, registered as `cms`
+  and set as `EVENT_SOURCE` in `wrangler.jsonc`. It maps onto the same model as the Google
+  adapter: the Join Link rule is the shared `deriveJoinInfo` (`src/events.ts`, [0002](0002-join-info-union-and-invalid-events.md)), so a
+  Zoom link without `eventZoomHostCode` is an invalid event, dropped and alerted; Craft's HTML
+  descriptions go through `src/html-to-markdown.ts` (the migration converter, moved into
+  `src/`), degrading to stripped text on an unsupported tag. `CMS_TOKEN`, `CMS_GRAPHQL_URL`,
+  `graphql` and `graphql-request` are back with it. The Google side stays operable while
+  `cms` is active (`/vc-bot-admin daily google`, `watch start`); the router drops Calendar
+  pushes and the cron skips the watch bootstrap unless `google` is active. The cutover is
+  `EVENT_SOURCE` → `"google"`; the removal above then happens for real —
+  [#28](https://github.com/Virtual-Coffee/vc-bots/issues/28).
 - virtualcoffee.io ADR 0014 has been reconciled with this decision (on PR #1579): the Host Code is
   `extendedProperties.private.hostCode`, an Event field kept where the bots read it; the calendar
   is workspace-readable, not public; the site's `/admin/events` is the only writer of `hostCode`

@@ -42,6 +42,11 @@ export default defineConfig(async () => {
             GOOGLE_SERVICE_ACCOUNT_KEY: testServiceAccountKey,
             GOOGLE_WATCH_TOKEN: "test-watch-token",
             GOOGLE_CALENDAR_ID: "vc-events-test@group.calendar.google.com",
+            // The suites exercise the Google source through the fetch recorder's Calendar stub;
+            // wrangler.jsonc's interim "cms" default is pinned back to "google" here, and the CMS
+            // source is covered by its own suite (reminders-cms.test.ts) via an explicit name.
+            EVENT_SOURCE: "google",
+            CMS_TOKEN: "test-cms-token",
             // Test-only: the configured `triggers.crons`, for the cron-contract test.
             TEST_WRANGLER_CRONS: JSON.stringify(crons),
           },

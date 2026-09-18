@@ -26,7 +26,8 @@ events (ADR 0002). Written twice, those rules diverged.
   Amended by [0012](0012-provider-wire-types-from-vendored-openapi-specs.md): the adapter and
   the token exchange call through `openapi-fetch` clients typed by generated wire types.
 - **Announcements reach the Calendar through `EventSource` (`src/bots/reminders/source.ts`)**:
-  a registry of named sources — Google is the only one, and the `EVENT_SOURCE` default. Cron
+  a registry of named sources — Google, and the interim `cms` source that is the `EVENT_SOURCE`
+  default until the cutover ([0001](0001-event-model-join-link-and-host-key.md)). Cron
   always uses the configured source; `/vc-bot-admin daily|weekly [source]` may name a
   registered one. `reminderRange` computes the window in `America/New_York` (`EASTERN`).
 - **The `CalendarSync` Durable Object (`src/bots/calendar-sync/durable-object.ts`) takes the

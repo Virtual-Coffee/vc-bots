@@ -32,16 +32,20 @@ describe("getEventSource / isEventSourceName", () => {
   it("throws on unknown source name and lists valid names in the message", () => {
     expect(() => getEventSource(env as Env, "bogus")).toThrow("bogus");
     expect(() => getEventSource(env as Env, "bogus")).toThrow("google");
-    expect(() => getEventSource({ ...env, EVENT_SOURCE: "cms" })).toThrow("cms");
   });
 
-  it("EVENT_SOURCE_NAMES is exactly google", () => {
-    expect(EVENT_SOURCE_NAMES).toEqual(["google"]);
+  it("resolves the interim cms source by name and by EVENT_SOURCE", () => {
+    expect(getEventSource(env as Env, "cms").name).toBe("cms");
+    expect(getEventSource({ ...env, EVENT_SOURCE: "cms" }).name).toBe("cms");
+  });
+
+  it("EVENT_SOURCE_NAMES is exactly google and cms", () => {
+    expect(EVENT_SOURCE_NAMES).toEqual(["google", "cms"]);
   });
 
   it("isEventSourceName narrows correctly", () => {
     expect(isEventSourceName("google")).toBe(true);
-    expect(isEventSourceName("cms")).toBe(false);
+    expect(isEventSourceName("cms")).toBe(true);
     expect(isEventSourceName("bogus")).toBe(false);
   });
 

@@ -114,14 +114,15 @@ Config and secrets are split deliberately:
   `SLACK_ANNOUNCEMENTS_CHANNEL_ID` (daily/weekly summaries), `SLACK_EVENTADMIN_CHANNEL_ID`
   (admin mirror with the Zoom host key) — `SLACK_BOTLOG_CHANNEL_ID` (private `#bot-log`
   channel for error alerts; empty disables alerting and the bot must be invited before it can
-  post), `EVENT_SOURCE` (active event source; `"google"` is the only one registered),
-  `GOOGLE_CALENDAR_ID`, and `LOG_LEVEL`. After changing bindings or vars, rerun `pnpm cf-types`
+  post), `EVENT_SOURCE` (active event source: `"cms"`, the interim default until the Google
+  cutover, or `"google"` — see `docs/adr/0001`), `CMS_GRAPHQL_URL`, `GOOGLE_CALENDAR_ID`, and
+  `LOG_LEVEL`. After changing bindings or vars, rerun `pnpm cf-types`
   and keep `src/env.ts` in sync by hand.
 - **Secrets** go via `wrangler secret put <NAME>` in production and `.dev.vars` locally (see
   `.dev.vars.example`): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`,
   `ZOOM_WEBHOOK_SECRET_TOKEN`, `ZOOM_S2S_CLIENT_ID`, `ZOOM_S2S_CLIENT_SECRET`,
   `ZOOM_S2S_ACCOUNT_ID` (the S2S app needs only `meeting:write:invite_links:admin`),
-  `GOOGLE_SERVICE_ACCOUNT_KEY` (Google Calendar service account), `GOOGLE_WATCH_TOKEN` (any
+  `CMS_TOKEN` (Craft GraphQL bearer token, interim), `GOOGLE_SERVICE_ACCOUNT_KEY` (Google Calendar service account), `GOOGLE_WATCH_TOKEN` (any
   random string ≤256 chars; Google echoes it back on every Calendar push notification and the
   `/google/notify` route drops notifications that don't carry it).
 

@@ -22,6 +22,8 @@ export interface Env {
   ZOOM_S2S_CLIENT_ID: string;
   ZOOM_S2S_CLIENT_SECRET: string;
   ZOOM_S2S_ACCOUNT_ID: string;
+  /** Craft CMS GraphQL bearer token — the interim `cms` event source. */
+  CMS_TOKEN: string;
   /** Full Google service-account JSON (one line). Carries a private key — never log it. */
   GOOGLE_SERVICE_ACCOUNT_KEY: string;
   /** Verification token echoed back in the X-Goog-Channel-Token header of every Calendar push notification. Never log it. */
@@ -51,9 +53,11 @@ export interface Env {
    * `src/slack/notify.ts`.
    */
   SLACK_BOTLOG_CHANNEL_ID: string;
+  /** CMS GraphQL endpoint for event announcements (Craft + Solspace Calendar) — interim. */
+  CMS_GRAPHQL_URL: string;
   /** Google Calendar id for event announcements (the …@group.calendar.google.com address). */
   GOOGLE_CALENDAR_ID: string;
-  /** Default event source for reminders ("google" is the only one registered; see `reminders/source.ts`). */
+  /** Default event source for reminders: "cms" (interim) | "google" — see `reminders/source.ts`. */
   EVENT_SOURCE: string;
   /** Comma-separated Slack user IDs mentioned as community maintainers in the welcome message. */
   WELCOME_MAINTAINER_IDS: string;

@@ -81,6 +81,17 @@ describe("sendReminder — daily", () => {
     });
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
   });
+
+  it("with the interim cms source, never touches Google (no listing, no watch bootstrap)", async () => {
+    rec.respondWith((call) =>
+      call.url === env.CMS_GRAPHQL_URL
+        ? Response.json({ data: { solspace_calendar: { calendars: [], events: [] } } })
+        : undefined,
+    );
+    const result = await sendReminder("daily", { ...env, EVENT_SOURCE: "cms" }, NOW);
+    expect(result).toMatchObject({ posted: false, reason: "no-events", source: "cms" });
+    expect(rec.callsTo("googleapis.com")).toHaveLength(0);
+  });
 });
 
 describe("sendReminder — weekly", () => {

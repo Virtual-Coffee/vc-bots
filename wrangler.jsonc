@@ -43,10 +43,13 @@
     // Private bot-log channel for error alerts (cron + co-working DO/Zoom failures). Empty
     // disables alerting; the bot must be invited to the channel before it can post there.
     "SLACK_BOTLOG_CHANNEL_ID": "C0BATRPD3QC",
+    // CMS event source (Craft + Solspace Calendar GraphQL) — interim until the Google cutover.
+    "CMS_GRAPHQL_URL": "https://members.virtualcoffee.io/api",
     // Google Calendar event source ("Virtual Coffee Events", shared with the service account).
     "GOOGLE_CALENDAR_ID": "c_9605915e57e591ee12b82c98dc4c5e0aae1829024e1bc15e4026f5ee5b41d2f8@group.calendar.google.com",
-    // Which event source the cron + default admin runs use ("google" is the only one registered).
-    "EVENT_SOURCE": "google",
+    // Which event source the cron + default admin runs use: "cms" | "google". The Google
+    // cutover is this one line → "google" (docs/adr/0001 §Consequences).
+    "EVENT_SOURCE": "cms",
     // Note: the Google Calendar push-notification (watch) address is derived from PUBLIC_BASE_URL
     // as `${PUBLIC_BASE_URL}/google/notify`; its host must be domain-verified in Google Cloud
     // Console. Override PUBLIC_BASE_URL in .dev.vars to point a watch at a local tunnel.
