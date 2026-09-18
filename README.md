@@ -48,7 +48,8 @@ one standing invite exists at a time. A stale-session alarm force-closes session
 
 **The availability check-in is the other stateful piece**, and deliberately a thin one.
 `AvailabilitySheet` (`src/bots/availability/durable-object.ts`), one instance per availability
-channel, stores only the two day-message pointers; every `reaction_added` / `reaction_removed`
+channel, stores only the two day-message pointers (with the post time) and the cached bot user
+id; every `reaction_added` / `reaction_removed`
 on a day message re-reads `reactions.get` and rewrites the message's sign-up sheet, with
 concurrent refreshes of one message coalescing into a single trailing render. The layouts and
 the reaction → sheet projection are pure functions in `src/bots/availability/message.ts`.
