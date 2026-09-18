@@ -10,7 +10,9 @@
  *   - converts an HTML description to Markdown (`src/html-to-markdown.ts`),
  *   - deletes the `joinLink` property (`null` in a PATCH removes it).
  * Instance exceptions (an occurrence with its own location/description) are reported, not
- * patched; so is a Zoom Join Link with no `hostCode`. Re-running after `--apply` is all no-ops.
+ * patched. A Zoom Join Link with no `hostCode` is warned about but still patched: the gap is
+ * orthogonal to this migration (ADR 0001 keeps `hostCode` on every Zoom series; the adapter
+ * alerts on a missing one). Re-running after `--apply` is all no-ops.
  *
  * Needs `GOOGLE_SERVICE_ACCOUNT_KEY` in the environment (mise exports `.dev.vars`; the value
  * must be single-quoted there, see `.dev.vars.example`). The service account is an owner of
