@@ -10,8 +10,7 @@ import { notifyBotLog } from "./slack/notify";
  *
  * Crons fire in UTC; 12:00 UTC = 8am EDT / 7am EST and 13:00 UTC = 9am EDT / 8am EST
  * (accepted DST drift). All three are live in wrangler.jsonc.
- * ⚠️ Keys MUST equal `triggers.crons` byte-for-byte — enforced by test/cron.test.ts; ADR 0005.
- * ⚠️ Weekdays are spelled (`MON`), never numeric (Cloudflare is Quartz-style) — same test; ADR 0005.
+ * ⚠️ Keys must match `triggers.crons` byte-for-byte, weekdays spelled — test/cron.test.ts, ADR 0005.
  */
 export const CRON_JOBS: Record<string, (env: Env, nowMs: number) => Promise<unknown>> = {
   "0 12 * * *": (env, now) => sendReminder("daily", env, now),

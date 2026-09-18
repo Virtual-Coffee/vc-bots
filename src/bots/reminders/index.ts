@@ -16,7 +16,7 @@ export type { ReminderName } from "./source";
 
 /**
  * Event announcements. `sendReminder` does the actual work and is shared by the cron schedule
- * (`src/cron.ts`, which owns the cron strings — ADR 0005) and the `/vc-bot-admin` slash command.
+ * (`src/cron.ts`) and the `/vc-bot-admin` slash command.
  *
  * - `daily` (12:00 UTC): schedules each event's "Starting Soon" message (and an event-admin
  *   mirror) for start − 10 min via `chat.scheduleMessage`, then posts the "Today's Events"

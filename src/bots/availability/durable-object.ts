@@ -16,16 +16,11 @@ import {
 
 /**
  * The weekly availability check-in. One instance per availability channel
- * (`env.AVAILABILITY_SHEET.getByName(channelId)`).
+ * (`env.AVAILABILITY_SHEET.getByName(channelId)`); KV storage only, so no migration step.
  *
- * Slack's reaction list is the source of truth for who signed up (ADR 0009): this DO stores
- * only the two day-message `ts` pointers (plus the cached bot user id) and re-renders a day
- * message from `reactions.get` on every refresh, so a dropped or duplicated reaction event
- * self-heals on the next one. No SQL tables → no migration step.
- *
- * ⚠️ Input gates only cover storage ops; other requests are delivered while a handler awaits a
- * Slack `fetch`. `inflight` is the serialization primitive for refreshes: concurrent refreshes
- * of one message coalesce into "one more render after the current one" (same lesson as ADR 0003).
+ * Slack's reactions are the source of truth and only message pointers are stored (ADR 0009).
+ * Refreshes of one message coalesce through `inflight` because input gates don't cover the
+ * Slack `fetch` (ADR 0003).
  */
 
 /** This week's day-message pointers, plus when they were posted (so a refresh re-renders the same dates). */
@@ -88,8 +83,7 @@ export class AvailabilitySheet extends DurableObject<Env> {
 
   /**
    * Re-render the day message `ts` from its current reactions. `"ignored"` when `ts` isn't one
-   * of this week's day messages or the reactor is the bot itself (its seed reactions fire
-   * events too — `ignoreSelfEvents: false`, ADR 0007).
+   * of this week's day messages or the reactor is the bot itself (its seeds fire events — ADR 0007).
    */
   async refresh(ts: string, reactorUserId?: string): Promise<RefreshResult> {
     const dayMessages = await this.ctx.storage.get<DayMessages>(DAY_MESSAGES_KEY);
