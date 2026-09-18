@@ -1,6 +1,6 @@
 import { DateTime } from "luxon";
-import type { ReminderEvent } from "../../events";
-import type { CalendarEventLookup, InvalidEventReason } from "../../google/calendar";
+import type { InvalidEventReason, ReminderEvent } from "../../events";
+import type { CalendarEventLookup } from "../../google/calendar";
 import type { ReminderMessage } from "../reminders/blocks";
 import { buildCancellationMessage, buildRescheduleMessage } from "../reminders/blocks";
 

@@ -1,11 +1,16 @@
 import { DateTime } from "luxon";
 import type { Env } from "../env";
-import type { EventRange, JoinInfo, ReminderEvent } from "../events";
+import {
+  deriveJoinInfo,
+  type EventRange,
+  type InvalidEventReason,
+  type JoinInfo,
+  type ReminderEvent,
+} from "../events";
 import type { components, paths } from "../generated/google-calendar-v3";
 import { apiError, createApiClient } from "../http/client";
 import { log } from "../log";
 import { notifyBotLog } from "../slack/notify";
-import { parseHttpUrl, parseZoomMeetingId } from "../zoom/join-link";
 import { fetchGoogleAccessToken } from "./auth";
 
 /**
@@ -65,9 +70,6 @@ export type CalendarEventLookup =
   | { kind: "all-day" }
   /** Live and timed, but unannounceable (docs/adr/0002). */
   | { kind: "invalid"; reason: InvalidEventReason };
-
-/** Why a timed, live event can't be announced. */
-export type InvalidEventReason = "zoom-no-host-key";
 
 /** Total result of mapping a wire event: an event, a benign skip, or an invalid entry. */
 export type MappedEvent =
@@ -280,7 +282,7 @@ function mapTimedEvent(
     endsAt = end.isValid ? (end.toUTC().toISO() ?? null) : null;
   }
 
-  const join = deriveJoinInfo(e);
+  const join = joinInfoOf(e);
   if (join === null) return { kind: "invalid", reason: "zoom-no-host-key" };
 
   return {
@@ -297,26 +299,16 @@ function mapTimedEvent(
 }
 
 /**
- * Join Link → `JoinInfo`. `location` is canonical (blank/whitespace counts as absent); a video
- * conferenceData entry is the fallback. A Zoom url must come with the private `hostCode`
- * property (empty/whitespace counts as absent) — without it the event is invalid (`null`). The
- * host code is ignored for every other kind. Anything else that parses as an http(s) url is
- * `"url"`; everything else (including non-http(s) schemes like `ftp:`) is free-text `"place"`.
+ * The wire fields behind the Join Link rule (`deriveJoinInfo`, `src/events.ts`): `location` is
+ * canonical (blank/whitespace counts as absent), a video conferenceData entry is the fallback,
+ * and the host code is the private `hostCode` property (empty/whitespace counts as absent).
  */
-function deriveJoinInfo(e: GoogleCalendarEvent): JoinInfo | null {
+function joinInfoOf(e: GoogleCalendarEvent): JoinInfo | null {
   const videoEntryPoint = e.conferenceData?.entryPoints?.find(
     (ep) => ep.entryPointType === "video" && ep.uri !== undefined,
   );
   const location = e.location?.trim() || null;
   const link = location ?? videoEntryPoint?.uri ?? null;
-  if (link === null) return { kind: "none" };
-
-  const meetingId = parseZoomMeetingId(link);
-  if (meetingId !== null) {
-    const hostKey = e.extendedProperties?.private?.hostCode?.trim() || null;
-    if (hostKey === null) return null;
-    return { kind: "zoom", url: link, meetingId, hostKey };
-  }
-  if (parseHttpUrl(link) !== null) return { kind: "url", url: link };
-  return { kind: "place", text: link };
+  const hostCode = e.extendedProperties?.private?.hostCode?.trim() || null;
+  return deriveJoinInfo(link, hostCode);
 }

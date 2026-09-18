@@ -1,3 +1,5 @@
+import { parseHttpUrl, parseZoomMeetingId } from "./zoom/join-link";
+
 /**
  * Source-agnostic event model shared by the reminders bot and the calendar sync.
  *
@@ -37,4 +39,26 @@ export interface ReminderEvent {
 export interface EventRange {
   rangeStart: string;
   rangeEnd: string;
+}
+
+/** Why a timed, live event can't be announced (docs/adr/0002). */
+export type InvalidEventReason = "zoom-no-host-key";
+
+/**
+ * Join Link → `JoinInfo` — the one rule every source applies (docs/adr/0002). `link` is the
+ * event's Join Link (callers pass `null` for blank/whitespace). A Zoom url must come with a host
+ * code (`null` when empty/whitespace) — without it the event is invalid and this returns `null`.
+ * The host code is ignored for every other kind. Anything else that parses as an http(s) url is
+ * `"url"`; everything else (including non-http(s) schemes like `ftp:`) is free-text `"place"`.
+ */
+export function deriveJoinInfo(link: string | null, hostCode: string | null): JoinInfo | null {
+  if (link === null) return { kind: "none" };
+
+  const meetingId = parseZoomMeetingId(link);
+  if (meetingId !== null) {
+    if (hostCode === null) return null;
+    return { kind: "zoom", url: link, meetingId, hostKey: hostCode };
+  }
+  if (parseHttpUrl(link) !== null) return { kind: "url", url: link };
+  return { kind: "place", text: link };
 }
