@@ -75,6 +75,45 @@ describe("post", () => {
     expect(adds).toEqual([...names.map((n) => [TUE_TS, n]), ...names.map((n) => [THU_TS, n])]);
   });
 
+  it("deletes what it already posted when a day message fails to post, then rethrows", async () => {
+    fetched.respondWith((call) =>
+      call.url.includes("/api/chat.postMessage") && call.body.includes("Thursday")
+        ? Response.json({ ok: false, error: "ratelimited" })
+        : undefined,
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stub = sheet();
+
+    await runInDurableObject(stub, async (i) => {
+      const instance = i as AvailabilitySheet;
+      await expect(instance.post(NOW)).rejects.toThrow(/ratelimited/);
+    });
+
+    const deleted = callsTo("/api/chat.delete").map((c) => form(c).get("ts"));
+    expect(deleted).toEqual([INTRO_TS, TUE_TS]);
+    expect(callsTo("/api/reactions.add")).toHaveLength(0);
+    await runInDurableObject(stub, async (_i, state) => {
+      expect(await state.storage.get("day_messages")).toBeUndefined();
+    });
+  });
+
+  it("keeps the trio and its pointers when a seed reaction fails", async () => {
+    fetched.respondWith((call) =>
+      call.url.includes("/api/reactions.add")
+        ? Response.json({ ok: false, error: "ratelimited" })
+        : undefined,
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stub = sheet();
+
+    await expect(stub.post(NOW)).resolves.toEqual({ tuesday: TUE_TS, thursday: THU_TS });
+
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(3);
+    expect(callsTo("/api/chat.delete")).toHaveLength(0);
+    expect(warn).toHaveBeenCalledTimes(10);
+    expect(await stub.refresh(TUE_TS, "U1")).toBe("refreshed");
+  });
+
   it("tolerates already_reacted while seeding", async () => {
     fetched.respondWith((call) =>
       call.url.includes("/api/reactions.add")

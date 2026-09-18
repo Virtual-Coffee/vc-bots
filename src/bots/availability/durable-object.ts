@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { SlackAPIError } from "slack-cloudflare-workers";
+import { SlackAPIError, type SlackAPIClient } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
 import { createSlackClient } from "../../slack/client";
@@ -47,22 +47,29 @@ export class AvailabilitySheet extends DurableObject<Env> {
    * Post the Monday trio (intro → Tuesday → Thursday) and seed each day message with the five
    * role reactions so people can one-click. Always posts fresh and repoints: an older trio
    * simply stops updating. Pointers are stored *before* seeding so a human reaction that lands
-   * mid-seed is already recognized.
+   * mid-seed is already recognized. A post that fails partway deletes what it already posted
+   * (best-effort) so no orphan `@channel` intro survives; seeding is best-effort.
    */
   async post(nowMs: number = Date.now()): Promise<Record<Day, string>> {
     const channel = this.env.SLACK_AVAILABILITY_CHANNEL_ID;
     const client = createSlackClient(this.env);
     const dates = weekDays(nowMs);
 
-    const intro = buildIntroMessage();
-    await client.chat.postMessage({ channel, ...intro });
-
+    const posted: string[] = [];
     const ts: Partial<Record<Day, string>> = {};
-    for (const day of DAYS) {
-      const message = buildDayMessage(day, dates[day], emptySheet());
-      const res = await client.chat.postMessage({ channel, ...message });
-      if (!res.ts) throw new Error(`chat.postMessage returned no ts for ${day}`);
-      ts[day] = res.ts;
+    try {
+      const intro = await client.chat.postMessage({ channel, ...buildIntroMessage() });
+      if (intro.ts) posted.push(intro.ts);
+      for (const day of DAYS) {
+        const message = buildDayMessage(day, dates[day], emptySheet());
+        const res = await client.chat.postMessage({ channel, ...message });
+        if (!res.ts) throw new Error(`chat.postMessage returned no ts for ${day}`);
+        posted.push(res.ts);
+        ts[day] = res.ts;
+      }
+    } catch (err) {
+      await this.deletePosted(client, channel, posted);
+      throw err;
     }
     const dayMessages: DayMessages = { ...(ts as Record<Day, string>), postedAtMs: nowMs };
     await this.ctx.storage.put(DAY_MESSAGES_KEY, dayMessages);
@@ -73,12 +80,29 @@ export class AvailabilitySheet extends DurableObject<Env> {
         try {
           await client.reactions.add({ channel, timestamp: dayMessages[day], name: reaction });
         } catch (err) {
-          if (slackErrorCode(err) === "already_reacted") continue;
-          throw err;
+          const code = slackErrorCode(err);
+          if (code === "already_reacted") continue;
+          // The trio is up and pointed at; a missing seed just costs someone a click.
+          log.warn("availability.seed_failed", { ts: dayMessages[day], reaction, error: code });
         }
       }
     }
     return { tuesday: dayMessages.tuesday, thursday: dayMessages.thursday };
+  }
+
+  /** Roll back a half-posted trio. Best-effort: a delete that fails is logged, never thrown. */
+  private async deletePosted(
+    client: SlackAPIClient,
+    channel: string,
+    tss: string[],
+  ): Promise<void> {
+    for (const ts of tss) {
+      try {
+        await client.chat.delete({ channel, ts });
+      } catch (err) {
+        log.warn("availability.rollback_failed", { ts, error: slackErrorCode(err) });
+      }
+    }
   }
 
   /**
