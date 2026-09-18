@@ -293,7 +293,9 @@ export class CalendarSync extends DurableObject<Env> {
     // startsAt and the Eastern-offset range bounds.
     try {
       const dailyEvents = await this.calendar.listEvents(daily);
-      await reconcileStartingSoon(client, this.env, dailyEvents, nowMs, daily);
+      await reconcileStartingSoon(client, this.env, dailyEvents, nowMs, daily, {
+        immediate: false,
+      });
     } catch (error) {
       log.error("calendar_sync.reconcile_failed", { error: String(error) });
       failures.push(`reconcile: ${String(error)}`);

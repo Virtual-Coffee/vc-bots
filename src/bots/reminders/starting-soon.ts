@@ -55,17 +55,23 @@ export function buildStartingSoonAdminMessage(
 
 /**
  * Reconcile the bot's scheduled "Starting Soon" messages for the given daily window against
- * `events`. Clears this bot's scheduled messages in the window first, then re-queues each
- * event's public + event-admin pair for start − 10 min (or posts immediately if the slot has
- * already passed). Returns the number of events handled. The event-admin mirror carries the
- * event's host key; a Zoom event without one never reaches here — the Google adapter rejects it
- * at derivation (docs/adr/0002).
+ * `events`. Clears this bot's pending scheduled messages in the window first, then re-queues
+ * each event's starting-soon pair (public + event-admin mirror) for start − 10 min. Returns the
+ * number of events handled. The event-admin mirror carries the event's host key; a Zoom event
+ * without one never reaches here — the Google adapter rejects it at derivation (docs/adr/0002).
  *
- * Shared by:
- * - the **daily cron** (`sendDaily`) — runs at 12:00 UTC to seed the day's queue.
- * - the **CalendarSync DO** — calls this after a Google Calendar change so the scheduled queue
- *   matches the live calendar (drops cancelled events, re-queues moved ones at their new
- *   start − 10 min).
+ * When the slot is too near for Slack to schedule (`postAt` within `MIN_SCHEDULE_AHEAD_SECONDS`
+ * of now) the pair is posted immediately — the sweep has just deleted any pending pair, so no
+ * caller may skip here. When the slot is already past (`postAt <= now`) the behaviour depends on
+ * `opts.immediate`:
+ * - `true` (default) posts the pair now. The **daily cron** (`sendDaily`, 12:00 UTC, seeds the
+ *   day's queue) relies on this for an event starting within 10 min of the run.
+ * - `false` skips the event: a fired slot means Slack already delivered the scheduled pair, or a
+ *   daily run posted it immediately — the sweep cannot see either, so re-posting would duplicate.
+ *   The **CalendarSync DO** passes this on every re-sync after a Google Calendar push (drops
+ *   cancelled events, re-queues moved ones at their new start − 10 min). Accepted trade-off: an
+ *   event created or moved into its last 10 minutes on that path gets no starting-soon pair; the
+ *   reschedule notice covers a move.
  *
  * Callers can compute the daily window via `reminderRange("daily", nowMs)` (exported from
  * `./source`).
@@ -76,7 +82,9 @@ export async function reconcileStartingSoon(
   events: ReminderEvent[],
   nowMs: number,
   range: EventRange,
+  opts: { immediate?: boolean } = {},
 ): Promise<number> {
+  const { immediate = true } = opts;
   const nowSeconds = Math.floor(nowMs / 1000);
   const startSecondsOf = (event: ReminderEvent): number =>
     Math.floor(DateTime.fromISO(event.startsAt, { zone: "utc" }).toSeconds());
@@ -111,6 +119,11 @@ export async function reconcileStartingSoon(
         postAt,
         postAtEST: DateTime.fromSeconds(postAt, { zone: "America/New_York" }).toISO(),
       });
+    } else if (postAt <= nowSeconds && !immediate) {
+      // The slot already fired (Slack delivered the scheduled pair, or the daily run posted it
+      // immediately) and the sweep only sees pending messages — re-posting would duplicate.
+      log.info("reminder.slot_already_fired", { id: event.id, postAt });
+      continue;
     } else {
       // The −10 min slot is already past (or too near for Slack) but the event hasn't
       // started — announce right away instead.

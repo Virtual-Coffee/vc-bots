@@ -449,6 +449,43 @@ describe("CalendarSync — processNotification", () => {
     expect(rec.form(scheduled[1]!).get("blocks")).toContain("*Host Code:* 123456");
   });
 
+  it("does not re-post a starting-soon pair whose −10 min slot already fired", async () => {
+    const stub = syncStub();
+
+    // Starts in 5 min: the slot fired 5 min ago (Slack delivered the scheduled pair, or the daily
+    // run posted it immediately). The sweep only sees pending messages, so a re-sync must not
+    // post the pair again.
+    fake.setEvents([timedEvent("evt-1", at(5 / 60))]);
+    await withSync(stub, (instance) => instance.seed(NOW));
+
+    await withSync(stub, (instance) => instance.processNotification(NOW));
+
+    expect(rec.callsTo("/api/chat.scheduleMessage")).toHaveLength(0);
+    expect(slackPosts()).toHaveLength(0);
+    expect(postedText()).not.toContain("Starting soon:");
+  });
+
+  it("still posts the pair immediately when the slot is pending but too near for Slack to schedule", async () => {
+    const stub = syncStub();
+
+    // postAt = start − 10 min lands 30 s ahead: the sweep has just deleted the pending pair, so
+    // the re-sync must post it now rather than lose it.
+    const start = NOW_DT.plus({ minutes: 10, seconds: 30 }).toISO()!;
+    fake.setEvents([timedEvent("evt-1", start)]);
+    await withSync(stub, (instance) => instance.seed(NOW));
+
+    await withSync(stub, (instance) => instance.processNotification(NOW));
+
+    expect(rec.callsTo("/api/chat.scheduleMessage")).toHaveLength(0);
+    const posts = slackPosts();
+    expect(posts).toHaveLength(2);
+    expect(posts.map((p) => rec.form(p).get("channel"))).toEqual([
+      env.SLACK_EVENTS_CHANNEL_ID,
+      env.SLACK_EVENTADMIN_CHANNEL_ID,
+    ]);
+    expect(posts.every((p) => rec.form(p).get("text")?.includes("Starting soon:"))).toBe(true);
+  });
+
   it("surfaces a calendar failure instead of treating it as a change", async () => {
     const stub = syncStub();
     fake.setEvents([timedEvent("evt-1", at(48))]);
