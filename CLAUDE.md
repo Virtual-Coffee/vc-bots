@@ -123,3 +123,5 @@ and the calendar watch token.
 - Issue tracker: GitHub issues in `Virtual-Coffee/vc-bots` via `gh` — `docs/agents/issue-tracker.md`.
 - Triage labels: the five canonical roles, default strings — `docs/agents/triage-labels.md`.
 - Domain docs: `CONTEXT.md` + `docs/adr/` at the root — `docs/agents/domain.md`.
+- Code review: label a PR `greptile-review` (or `coderabbit-review` for CodeRabbit); Greptile's
+  config is `.greptile/`.
