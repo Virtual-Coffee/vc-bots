@@ -11,7 +11,7 @@ import {
 /**
  * The availability sheet end to end: real DO, `fetch` recorded and stubbed. Message layouts are
  * covered in availability-message.test.ts; this suite asserts posting, seeding, pointer
- * handling, and refresh coalescing — what reaches Slack and in what order.
+ * handling, and the post/refresh queue — what reaches Slack and in what order.
  */
 
 const INTRO_TS = "1700000000.000100";
@@ -103,6 +103,7 @@ describe("post", () => {
 
     await runInDurableObject(stub, async (i, state) => {
       const instance = i as AvailabilitySheet;
+      await state.storage.put("bot_user_id", BOT); // warm, so the next `put` is the pointer write
       vi.spyOn(state.storage, "put").mockRejectedValueOnce(new Error("disk full"));
       await expect(instance.post(NOW)).rejects.toThrow(/disk full/);
     });
@@ -119,6 +120,50 @@ describe("post", () => {
 
     expect(await stub.refresh(TUE_TS, BOT)).toBe("ignored");
     expect(callsTo("/api/auth.test")).toHaveLength(1);
+  });
+
+  it("posts nothing when the bot-id lookup fails on a cold cache — nothing to roll back", async () => {
+    fetched.respondWith((call) =>
+      call.url.includes("/api/auth.test")
+        ? Response.json({ ok: false, error: "invalid_auth" })
+        : undefined,
+    );
+    await runInDurableObject(sheet(), async (i) => {
+      await expect((i as AvailabilitySheet).post(NOW)).rejects.toThrow(/invalid_auth/);
+    });
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
+    expect(callsTo("/api/chat.delete")).toHaveLength(0);
+  });
+
+  it("a reaction that lands mid-post waits for the new pointers and is refreshed", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let posts = 0;
+    vi.unstubAllGlobals();
+    fetched = installFetchRecorder({
+      postTs: [INTRO_TS, TUE_TS, THU_TS],
+      botUserId: BOT,
+      respond: async (call) => {
+        // Hold the Thursday post: Tuesday is visible in Slack but its pointer isn't stored yet.
+        if (call.url.includes("/api/chat.postMessage") && ++posts === 3) await gate;
+        return undefined;
+      },
+    });
+    const stub = sheet();
+
+    await runInDurableObject(stub, async (i) => {
+      const instance = i as AvailabilitySheet;
+      const post = instance.post(NOW);
+      await vi.waitFor(() => expect(posts).toBe(3));
+      const refresh = instance.refresh(TUE_TS, "U1");
+      release();
+      await expect(post).resolves.toEqual({ tuesday: TUE_TS, thursday: THU_TS });
+      await expect(refresh).resolves.toBe("refreshed");
+    });
+
+    const updates = callsTo("/api/chat.update");
+    expect(updates).toHaveLength(1);
+    expect(form(updates[0]!).get("ts")).toBe(TUE_TS);
   });
 
   it("serializes concurrent posts: the second trio posts after the first and wins the pointers", async () => {
@@ -251,7 +296,7 @@ describe("refresh", () => {
     expect(blocks).not.toContain(BOT);
   });
 
-  it("coalesces refreshes that arrive while one is in flight into a single trailing render", async () => {
+  it("coalesces refreshes that arrive while one is in flight into a single queued render", async () => {
     const stub = sheet();
     await stub.post(NOW);
 

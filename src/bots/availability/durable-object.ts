@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { SlackAPIError, type SlackAPIClient } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
+import { SerialQueue } from "../../serial-queue";
 import { createSlackClient } from "../../slack/client";
 import {
   buildDayMessage,
@@ -19,8 +20,10 @@ import {
  * (`env.AVAILABILITY_SHEET.getByName(channelId)`); KV storage only, so no migration step.
  *
  * Slack's reactions are the source of truth and only message pointers are stored (ADR 0013).
- * Refreshes of one message coalesce through `inflight` because input gates don't cover the
- * Slack `fetch` (ADR 0003).
+ * `post` and `refresh` run through one `SerialQueue` because input gates don't cover the Slack
+ * `fetch` (ADR 0003): a reaction that lands mid-post waits for the new pointers instead of
+ * being judged against the old ones. A refresh queued behind in-flight work absorbs later
+ * events for the same message (`queuedRefresh`) — it reads Slack's state when it runs.
  */
 
 /** This week's day-message pointers, plus when they were posted (so a refresh re-renders the same dates). */
@@ -36,9 +39,10 @@ const BOT_USER_ID_KEY = "bot_user_id";
 export type RefreshResult = "refreshed" | "ignored";
 
 export class AvailabilitySheet extends DurableObject<Env> {
-  private readonly inflight = new Map<string, { done: Promise<void>; dirty: boolean }>();
-  /** Tail of the serialized `post` queue — concurrent posts run one after another (ADR 0003). */
-  private postQueue: Promise<unknown> = Promise.resolve();
+  /** Serializes `post` and `refresh` — see the class doc. */
+  private readonly queue = new SerialQueue("availability.queue");
+  /** Refreshes queued but not yet started, by day-message ts; removed the moment one starts. */
+  private readonly queuedRefresh = new Map<string, Promise<RefreshResult>>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -51,19 +55,21 @@ export class AvailabilitySheet extends DurableObject<Env> {
    * simply stops updating. Pointers are stored *before* seeding so a human reaction that lands
    * mid-seed is already recognized. A post that fails partway (a Slack post or the pointer
    * write) deletes what it already posted (best-effort) so no orphan `@channel` intro survives;
-   * seeding is best-effort. Posts are serialized: input gates don't cover the Slack `fetch`es,
-   * so without the queue a cron fire and an admin run could each post a trio.
+   * seeding is best-effort. Posts are queued: without the queue a cron fire and an admin run
+   * could each post a trio.
    */
   post(nowMs: number = Date.now()): Promise<Record<Day, string>> {
-    const run = this.postQueue.then(() => this.postNow(nowMs));
-    this.postQueue = run.catch(() => undefined);
-    return run;
+    return this.queue.run("post", () => this.postNow(nowMs));
   }
 
   private async postNow(nowMs: number): Promise<Record<Day, string>> {
     const channel = this.env.SLACK_AVAILABILITY_CHANNEL_ID;
     const client = createSlackClient(this.env);
     const dates = weekDays(nowMs);
+
+    // Warm the bot-id cache first: the seed events below are then dropped without an `auth.test`
+    // each, and a failed lookup happens before anything is posted — nothing to roll back.
+    await this.botUserId();
 
     const posted: string[] = [];
     const ts: Partial<Record<Day, string>> = {};
@@ -86,8 +92,6 @@ export class AvailabilitySheet extends DurableObject<Env> {
     }
     log.info("availability.posted", { channel, tuesday: ts.tuesday, thursday: ts.thursday });
 
-    // Warm the bot-id cache so the seed events below are dropped without an `auth.test` each.
-    await this.botUserId();
     for (const day of DAYS) {
       for (const { reaction } of ROLES) {
         try {
@@ -121,33 +125,30 @@ export class AvailabilitySheet extends DurableObject<Env> {
   /**
    * Re-render the day message `ts` from its current reactions. `"ignored"` when `ts` isn't one
    * of this week's day messages or the reactor is the bot itself (its seeds fire events — ADR 0007).
+   * The pointer check waits behind an in-flight post so a reaction on a just-posted message is
+   * recognized; a refresh already queued for `ts` absorbs this one.
    */
   async refresh(ts: string, reactorUserId?: string): Promise<RefreshResult> {
+    if (reactorUserId && reactorUserId === (await this.botUserId())) return "ignored";
+
+    const queued = this.queuedRefresh.get(ts);
+    if (queued) {
+      log.info("availability.refresh.coalesced", { ts });
+      return queued;
+    }
+    const run = this.queue.run("refresh", async () => {
+      this.queuedRefresh.delete(ts); // started: events from here on need a render of their own
+      return this.refreshNow(ts);
+    });
+    this.queuedRefresh.set(ts, run);
+    return run;
+  }
+
+  private async refreshNow(ts: string): Promise<RefreshResult> {
     const dayMessages = await this.ctx.storage.get<DayMessages>(DAY_MESSAGES_KEY);
     const day = DAYS.find((d) => dayMessages?.[d] === ts);
     if (!day || !dayMessages) return "ignored";
-    if (reactorUserId && reactorUserId === (await this.botUserId())) return "ignored";
-
-    const inflight = this.inflight.get(ts);
-    if (inflight) {
-      inflight.dirty = true; // one more render after the current one covers every event so far
-      log.info("availability.refresh.coalesced", { ts });
-      await inflight.done;
-      return "refreshed";
-    }
-    const entry = { dirty: false, done: Promise.resolve() };
-    entry.done = (async () => {
-      try {
-        do {
-          entry.dirty = false;
-          await this.render(day, ts, dayMessages.postedAtMs);
-        } while (entry.dirty);
-      } finally {
-        this.inflight.delete(ts);
-      }
-    })();
-    this.inflight.set(ts, entry);
-    await entry.done;
+    await this.render(day, ts, dayMessages.postedAtMs);
     return "refreshed";
   }
 
