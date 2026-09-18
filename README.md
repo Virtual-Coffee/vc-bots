@@ -188,6 +188,7 @@ wrangler secret put ZOOM_WEBHOOK_SECRET_TOKEN
 wrangler secret put ZOOM_S2S_CLIENT_ID
 wrangler secret put ZOOM_S2S_CLIENT_SECRET
 wrangler secret put ZOOM_S2S_ACCOUNT_ID
+wrangler secret put CMS_TOKEN   # interim, until the Google cutover (#28)
 wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY
 wrangler secret put GOOGLE_WATCH_TOKEN
 
