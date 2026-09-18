@@ -1,6 +1,6 @@
 # VirtualCoffee bots
 
-The Slack and Zoom automation for the VirtualCoffee community: the co-working room, the new-member welcome, the App Home tab, and event announcements. This glossary names the concepts the code and docs should use.
+The Slack and Zoom automation for the VirtualCoffee community: the co-working room, the new-member welcome, the App Home tab, event announcements, and the weekly availability check-in. This glossary names the concepts the code and docs should use.
 
 ## Co-working room
 
@@ -95,3 +95,30 @@ _Avoid_: reminder pair, scheduled messages
 **Event-admin mirror**:
 The copy of a starting-soon message posted to the event-admin channel with moderator extras (the host key, where the public message went).
 _Avoid_: admin copy, admin message
+
+## Availability check-in
+
+**Availability check-in**:
+The weekly ask, posted to the hosts channel every Monday, for who can take which role on each event day that week. It is three messages: the intro message and two day messages.
+_Avoid_: reminder, poll, roster call
+
+**Intro message**:
+The first message of the check-in: the channel-wide ask plus the legend of roles and their emoji.
+
+**Day message**:
+One message per event day (Tuesday, Thursday) that carries that day's sign-up sheet. It is edited in place as people react.
+_Avoid_: thread, day post
+
+**Role**:
+One of the five things a person can sign up for on a day: Host, MC, Notetaker, Room leader, or Unavailable. Each role has one emoji.
+
+**Sign-up**:
+One person on one role for one day, expressed by reacting with that role's emoji on the day message. Removing the reaction withdraws it.
+_Avoid_: vote, RSVP
+
+**Sign-up sheet**:
+The per-role lists of sign-ups on a day message, projected from the message's own reactions. Slack's reactions are the source of truth; the sheet is a rendering of them.
+_Avoid_: roster (that is the co-working session's), availability roster
+
+**Seed reactions**:
+The five role reactions the bot adds to each day message right after posting, so people can sign up with one click. They are never sign-ups.

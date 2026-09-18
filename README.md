@@ -10,11 +10,13 @@ co-working room, the new-member welcome, the App Home tab, and event announcemen
 | **Co-working room** | Zoom webhooks + a Slack Join button | Posts a fresh "open room" message in the co-working channel each time a session starts (so the channel gets notified): who's in the room, a ☕ Join button that hands each member a personal Zoom invite link, and a stats summary when the meeting ends — which also carries the button that starts the next session. |
 | **Welcome** | Slack `team_join` event | DMs new members a welcome message. |
 | **App Home** | Slack `app_home_opened` event | Publishes the bot's App Home tab. |
+| **Availability check-in** | Cron trigger (Mondays) + Slack reaction events | Posts the Monday trio to the hosts channel — an `@channel` intro with the role legend, then a Tuesday and a Thursday message seeded with the five role emoji — and edits each day message as people react so every role line lists who signed up. Slack's reactions are the source of truth (ADR 0013); `/vc-bot-admin availability` posts it on demand. |
 | **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee Google Calendar (service-account auth; the Join Link is the event's `location`, descriptions are Markdown), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel with the Zoom host key (read from the event's private `hostCode` calendar property). Crons are live (daily + weekly); `/vc-bot-admin` can also fire a run manually. |
 
 There's also a `/vc-bot-admin` slash command for manual previews and admin actions
 (`daily` / `weekly [source]` to fire an announcement run now, `welcome [@user]`, `home`,
-`coworking open|close`, `watch status|start|stop` for the Calendar push channel); run it with
+`coworking open|close`, `watch status|start|stop` for the Calendar push channel,
+`availability` to post this week's check-in); run it with
 no arguments for a button panel of the same actions.
 
 ## Architecture at a glance
@@ -49,6 +51,15 @@ or an admin announcement) posts its own message and retires the button off the o
 one standing invite exists at a time. A stale-session alarm force-closes sessions whose
 `meeting.ended` webhook never arrived.
 
+**The availability check-in is the other stateful piece**, and deliberately a thin one.
+`AvailabilitySheet` (`src/bots/availability/durable-object.ts`), one instance per availability
+channel, stores only the two day-message pointers (with the post time) and the cached bot user
+id; every `reaction_added` / `reaction_removed`
+on a day message re-reads `reactions.get` and rewrites the message's sign-up sheet. Posting
+and refreshing share the DO's `SerialQueue` (a reaction that lands mid-post waits for the new
+pointers), and refreshes queued for the same message coalesce. The layouts and
+the reaction → sheet projection are pure functions in `src/bots/availability/message.ts`.
+
 **Joining is per-user.** The message's Join button mints a personal Zoom invite link
 (`src/zoom/invite-links.ts`) with the member's name pre-filled — no Zoom registration involved
 (the meeting must *not* require registration) — and answers with an ephemeral message holding
@@ -65,18 +76,21 @@ Correlating Zoom participants back to Slack members is best-effort by display na
 
 ```
 src/
-  index.ts            Worker entrypoint: fetch + scheduled cron, re-exports the DO
+  index.ts            Worker entrypoint: fetch + scheduled cron, re-exports the DOs
   router.ts           method + path routing, signature verification, fast ACKs
+  cron.ts             the cron schedule: cron string → job (single owner of the strings)
   env.ts              hand-maintained Env interface (bindings, secrets, vars)
   crypto.ts           timing-safe HMAC helpers on crypto.subtle
   log.ts              leveled logger (threshold from LOG_LEVEL)
   events.ts           source-agnostic event model (ReminderEvent, EventRange)
   bots/
+    availability/     weekly check-in: Durable Object (message pointers, post/refresh queue),
+                      pure message builders + reaction → sign-up-sheet projection, Worker glue
     calendar-sync/    Durable Object: Calendar watch lifecycle + change notices (over CalendarPort)
     coworking/        the room: Durable Object (session state), RoomMessage (the channel message
                       + its Slack port), Zoom event helpers, join flow + ephemeral
-    reminders/        cron dispatch, event-source registry, Block Kit builders,
-                      the starting-soon.ts scheduled pair
+    reminders/        event-source registry, Block Kit builders, the starting-soon.ts
+                      scheduled pair
     welcome.ts        new-member welcome DM + App Home tab
     admin/            /vc-bot-admin: actions.ts (the AdminAction union, gate + error handling),
                       slash.ts (the text command), panel.ts (the button panel + its modals)
@@ -112,7 +126,8 @@ Config and secrets are split deliberately:
   (maintainers @-mentioned in the welcome message and App Home), the three announcement
   channels — `SLACK_EVENTS_CHANNEL_ID` (starting-soon messages),
   `SLACK_ANNOUNCEMENTS_CHANNEL_ID` (daily/weekly summaries), `SLACK_EVENTADMIN_CHANNEL_ID`
-  (admin mirror with the Zoom host key) — `SLACK_BOTLOG_CHANNEL_ID` (private `#bot-log`
+  (admin mirror with the Zoom host key) — `SLACK_AVAILABILITY_CHANNEL_ID` (the hosts channel
+  for the Monday availability check-in; empty turns the feature off), `SLACK_BOTLOG_CHANNEL_ID` (private `#bot-log`
   channel for error alerts; empty disables alerting and the bot must be invited before it can
   post), `EVENT_SOURCE` (active event source: `"cms"`, the interim default until the Google
   cutover, or `"google"` — see `docs/adr/0001`), `CMS_GRAPHQL_URL`, `GOOGLE_CALENDAR_ID`, and
@@ -128,9 +143,11 @@ Config and secrets are split deliberately:
 
 ### Provider setup
 
-- **Slack app**: event subscriptions for `team_join` and `app_home_opened` pointed at
-  `/slack/events`, interactivity at `/slack/interactivity`, and the `/vc-bot-admin` slash
-  command at `/slack/commands`.
+- **Slack app**: event subscriptions for `team_join`, `app_home_opened`, `reaction_added`
+  and `reaction_removed` pointed at `/slack/events`, interactivity at `/slack/interactivity`,
+  and the `/vc-bot-admin` slash command at `/slack/commands`. The availability check-in needs
+  the `reactions:read` and `reactions:write` bot scopes (reinstall the app after adding them)
+  and the bot invited to `SLACK_AVAILABILITY_CHANNEL_ID`.
 - **Zoom app**: webhook subscriptions for `meeting.started`, `meeting.ended`,
   `meeting.participant_joined`, and `meeting.participant_left` pointed at `/zoom/webhook`,
   plus a Server-to-Server OAuth app for the invite-link API (`meeting:write:invite_links:admin`).
@@ -143,9 +160,10 @@ Config and secrets are split deliberately:
   through the Calendar API (the website admin page, once it lands). A Zoom-link event without a
   `hostCode` is skipped with a `#bot-log` alert; other events proceed (see `docs/adr/0002`).
 - **Cron triggers** fire in **UTC**. The cron strings in `wrangler.jsonc` `triggers.crons`
-  must stay byte-identical to `CRON_TO_KIND` in `src/bots/reminders/index.ts` — the fired
-  cron string is the lookup key for the reminder kind. Two crons drive everything: `0 12 * * *`
-  (daily) and `0 12 * * MON` (weekly), both at 12:00 UTC (8am EDT / 7am EST). Cloudflare parses
+  must stay byte-identical to the `CRON_JOBS` keys in `src/cron.ts` — the fired cron string
+  is the lookup key for the job (`test/cron.test.ts` enforces it). Three crons: `0 12 * * *`
+  (daily announcements) and `0 12 * * MON` (weekly announcements) at 12:00 UTC (8am EDT / 7am
+  EST), and `0 13 * * MON` (availability check-in) at 13:00 UTC (9am EDT / 8am EST). Cloudflare parses
   weekdays Quartz-style (`1` = Sunday … `7` = Saturday, unlike Unix cron's `0` = Sunday), so
   weekdays are spelled as 3-letter abbreviations to keep the intended day unambiguous. The per-event
   starting-soon messages need no extra cron granularity because the daily run schedules them

@@ -3,8 +3,8 @@
 ## What this is
 
 One Cloudflare Worker (`vc-bots`) hosting VirtualCoffee's Slack/Zoom automation: the
-co-working room, the new-member welcome, the App Home tab, and event announcements. It runs on
-`workerd`: Web APIs only (`fetch`, `crypto.subtle`, `btoa`, `URLSearchParams`). ESLint
+co-working room, the new-member welcome, the App Home tab, event announcements, and the weekly
+availability check-in. It runs on `workerd`: Web APIs only (`fetch`, `crypto.subtle`, `btoa`, `URLSearchParams`). ESLint
 (`eslint.config.ts`) enforces the import and logging rules — a failing rule's message names the
 reason; `docs/adr/0008-eslint-prettier-toolchain.md` is the toolchain.
 
@@ -31,11 +31,12 @@ Objects and bindings behave as in production; bindings and migrations come from
 
 `CONTEXT.md` is the glossary. Use its terms — room message, open/ended card, standing invite,
 retire, member/guest, invite link, join token, invalid event, starting-soon pair, event-admin
-mirror — in code, tests, commits and issues; `docs/agents/domain.md` says how.
+mirror, day message, sign-up sheet, seed reactions — in code, tests, commits and issues; `docs/agents/domain.md` says how.
 
 ## Request flow
 
-`src/index.ts` is the entrypoint (`fetch` + `scheduled` cron). `fetch` delegates to
+`src/index.ts` is the entrypoint (`fetch` + `scheduled` cron; the latter goes to `runCron` in
+`src/cron.ts`, whose `CRON_JOBS` map is the single owner of every cron string). `fetch` delegates to
 `src/router.ts`, a plain `method + path` switch: `POST /zoom/webhook`
 (`handleZoomWebhook`, `src/zoom/webhook.ts`), `POST /google/notify` (the calendar watch
 callback), the three `POST /slack/*` routes (one path-agnostic `SlackApp` built per request
@@ -76,18 +77,28 @@ A new admin operation starts in `actions.ts`, then the surfaces —
 `docs/adr/0010-one-admin-action-union.md`.
 
 **Event announcements** (`src/bots/reminders/`, `src/google/`, `src/bots/calendar-sync/`).
-The cron `scheduled()` handler posts daily/weekly summaries and schedules each event's
-starting-soon pair; `sendReminder` is shared with the slash command. Events come from the
+The daily/weekly cron jobs post the summaries and schedule each event's starting-soon pair;
+`sendReminder` is shared with the slash command. Events come from the
 `EVENT_SOURCE` registry (`reminders/source.ts`): `google` is the Google Calendar adapter behind
 `CalendarPort`, with the `CalendarSync` DO keeping the watch (it serializes its own work through
 `SerialQueue`, ADR 0003); `cms` (Craft GraphQL, `reminders/sources/cms.ts`) is the interim default
 until the cutover (ADR 0001, issue #28). Before
-changing any of it, read `docs/adr/0005-event-announcement-crons.md` (`CRON_TO_KIND` must
-match `wrangler.jsonc` byte-for-byte — `test/reminders-cron.test.ts` enforces it),
+changing any of it, read `docs/adr/0005-event-announcement-crons.md` (`CRON_JOBS` must
+match `wrangler.jsonc` byte-for-byte — `test/cron.test.ts` enforces it),
 `docs/adr/0001-event-model-join-link-and-host-key.md` and
 `docs/adr/0002-join-info-union-and-invalid-events.md` (the event model), and
 `docs/adr/0011-one-google-calendar-adapter-behind-calendarport.md` (the adapter and the
 watch).
+
+**Availability check-in** (`src/bots/availability/`). The Monday 13:00 UTC cron (and
+`/vc-bot-admin availability`) posts the trio — intro message + Tuesday/Thursday day messages,
+each seeded with the five role reactions — to `SLACK_AVAILABILITY_CHANNEL_ID` (empty = feature
+off); every `reaction_added` / `reaction_removed` on a day message re-renders its sign-up sheet.
+Slack's reactions are the source of truth — `docs/adr/0013-slack-reactions-are-the-availability-source-of-truth.md`:
+`AvailabilitySheet` (one instance per channel) stores only the day-message pointers and the
+cached bot user id, and runs `post` and `refresh` through one `SerialQueue` (ADR 0003).
+Layouts and the reaction → sheet projection are pure in `message.ts`. Never call the sheet a
+roster — that word belongs to the co-working session.
 
 **Provider HTTP.** Every Google and Zoom REST call goes through `createApiClient` in
 `src/http/client.ts` — `openapi-fetch` typed by `src/generated/*.d.ts`, which

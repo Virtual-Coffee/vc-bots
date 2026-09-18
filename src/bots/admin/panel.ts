@@ -35,6 +35,7 @@ export const PANEL_REMINDER_ACTION_ID = "admin_panel_reminder";
 export const PANEL_WELCOME_ACTION_ID = "admin_panel_welcome";
 export const PANEL_COWORKING_ACTION_ID = "admin_panel_coworking";
 export const PANEL_HOME_ACTION_ID = "admin_panel_home";
+export const PANEL_AVAILABILITY_ACTION_ID = "admin_panel_availability";
 export const PANEL_WATCH_STATUS_ACTION_ID = "admin_panel_watch_status";
 export const PANEL_WATCH_START_ACTION_ID = "admin_panel_watch_start";
 export const PANEL_WATCH_STOP_ACTION_ID = "admin_panel_watch_stop";
@@ -74,6 +75,11 @@ export function adminPanelBlocks(): AnyMessageBlock[] {
           type: "button",
           action_id: PANEL_HOME_ACTION_ID,
           text: { type: "plain_text", text: "Publish App Home", emoji: true },
+        },
+        {
+          type: "button",
+          action_id: PANEL_AVAILABILITY_ACTION_ID,
+          text: { type: "plain_text", text: "Post availability check-in", emoji: true },
         },
       ],
     },
@@ -347,6 +353,21 @@ export async function handlePanelHomeClick(
 ): Promise<void> {
   // The App Home tab is self-verifiable → dismiss.
   await runClick(payload, env, { kind: "home", userId: payload.user.id }, true);
+}
+
+export async function handlePanelAvailabilityClick(
+  payload: AdminPanelActionPayload,
+  env: Env,
+): Promise<void> {
+  const responseUrl = payload.response_url;
+  if (!responseUrl) {
+    log.warn("admin.panel.no_response_url", { user: payload.user.id });
+    return;
+  }
+  const result = await runAdminAction(env, payload.user.id, { kind: "availability" });
+  // The trio is visible in-channel → dismiss; only the off state needs telling.
+  const dismiss = result.kind === "availability" && result.posted;
+  await deliver(responseUrl, result, dismiss);
 }
 
 // ── Calendar Watch handlers (panel buttons) ─────────────────────────────────

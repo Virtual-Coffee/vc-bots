@@ -7,6 +7,7 @@ import { ADMIN_COMMAND, handleAdminCommand } from "../bots/admin/slash";
 import {
   COWORKING_MODAL_CALLBACK_ID,
   handleCoworkingSubmit,
+  handlePanelAvailabilityClick,
   handlePanelCoworkingClick,
   handlePanelHomeClick,
   handlePanelReminderClick,
@@ -16,6 +17,7 @@ import {
   handlePanelWelcomeClick,
   handleReminderSubmit,
   handleWelcomeSubmit,
+  PANEL_AVAILABILITY_ACTION_ID,
   PANEL_COWORKING_ACTION_ID,
   PANEL_HOME_ACTION_ID,
   PANEL_REMINDER_ACTION_ID,
@@ -26,6 +28,7 @@ import {
   REMINDER_MODAL_CALLBACK_ID,
   WELCOME_MODAL_CALLBACK_ID,
 } from "../bots/admin/panel";
+import { handleReactionChange } from "../bots/availability";
 import {
   CANCEL_ACTION_ID,
   JOIN_REDIRECT_ACTION_ID,
@@ -99,6 +102,16 @@ export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
       .event(
         "app_home_opened",
         lazy("app_home_opened", async ({ payload }) => handleAppHomeOpened(payload, env)),
+      )
+      // Availability check-in: any reaction change on a day message re-renders its sign-up
+      // sheet. Reactions elsewhere are dropped inside the handler.
+      .event(
+        "reaction_added",
+        lazy("reaction_added", async ({ payload }) => handleReactionChange(payload, env)),
+      )
+      .event(
+        "reaction_removed",
+        lazy("reaction_removed", async ({ payload }) => handleReactionChange(payload, env)),
       )
       // ⚠️ Shared channel message: its response_url's "original" IS the room card — respondEphemeral
       // only, never replace/delete (ADR 0004).
@@ -186,6 +199,13 @@ export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
         ack,
         lazy<ActionRequest>("admin.panel.watch_stop", async ({ payload }) =>
           handlePanelWatchStopClick(payload, env),
+        ),
+      )
+      .action(
+        PANEL_AVAILABILITY_ACTION_ID,
+        ack,
+        lazy<ActionRequest>("admin.panel.availability", async ({ payload }) =>
+          handlePanelAvailabilityClick(payload, env),
         ),
       )
       // Modal submits. The empty ack closes the modal; the real work runs in the lazy handler,

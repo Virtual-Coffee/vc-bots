@@ -11,8 +11,9 @@ import { vi } from "vitest";
  * token, Google Calendar events list → the next page in `googlePages` else `{ items: googleEvents }`,
  * a single-event GET → `googleEvent(id)` else the matching `googleEvents` item else 404,
  * `events/watch` → a `res-1` channel expiring in 7 days, `channels/stop` → `{}`,
- * `users.profile.get` → `profileName`, `chat.postMessage` → the next ts in `postTs` (the last
- * one repeats), and anything else → `{ ok: true }` with `defaultTs`.
+ * `users.profile.get` → `profileName`, `auth.test` → `botUserId`, `reactions.get` → no
+ * reactions, `chat.postMessage` → the next ts in `postTs` (the last one repeats), and anything
+ * else → `{ ok: true }` with `defaultTs`.
  */
 
 export interface RecordedCall {
@@ -46,6 +47,8 @@ export interface FetchRecorderOptions {
   googlePages?: object[];
   /** Answer a single-event GET yourself (a body, a Response, or `undefined` for the default). */
   googleEvent?: (id: string) => object | Response | undefined;
+  /** `user_id` the `auth.test` stub returns. */
+  botUserId?: string;
 }
 
 export interface FetchRecorder {
@@ -78,6 +81,7 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
     return typeof events === "function" ? events() : events;
   };
   const googlePages = options.googlePages ?? [];
+  const botUserId = options.botUserId ?? "UBOT";
 
   const spy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     // One effective Request, so `fetch(request, init)` overrides are recorded like the rest.
@@ -112,6 +116,12 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
     }
     if (url.includes("/api/users.profile.get")) {
       return Response.json({ ok: true, profile: { real_name: profileName } });
+    }
+    if (url.includes("/api/auth.test")) {
+      return Response.json({ ok: true, user_id: botUserId, bot_id: "B-BOT" });
+    }
+    if (url.includes("/api/reactions.get")) {
+      return Response.json({ ok: true, type: "message", message: { reactions: [] } });
     }
     if (url.includes("/api/chat.postMessage")) {
       const ts = postTs[Math.min(postCount++, postTs.length - 1)] ?? defaultTs;

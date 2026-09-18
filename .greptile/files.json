@@ -22,7 +22,7 @@
     },
     {
       "path": "docs/adr/0005-event-announcement-crons.md",
-      "description": "Cron → kind mapping; CRON_TO_KIND matches wrangler.jsonc"
+      "description": "Cron → job mapping; CRON_JOBS in src/cron.ts matches wrangler.jsonc"
     },
     {
       "path": "docs/adr/0006-bot-log-alerting-policy.md",
@@ -51,6 +51,10 @@
     {
       "path": "docs/adr/0012-provider-wire-types-from-vendored-openapi-specs.md",
       "description": "createApiClient, generated types, vendored specs"
+    },
+    {
+      "path": "docs/adr/0013-slack-reactions-are-the-availability-source-of-truth.md",
+      "description": "Availability check-in: reactions are the source of truth; post/refresh share the DO queue"
     }
   ]
 }

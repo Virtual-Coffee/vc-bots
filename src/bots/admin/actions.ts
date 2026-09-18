@@ -2,6 +2,7 @@ import type { SlackAPIClient } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
+import { postAvailabilityCheckIn } from "../availability";
 import type { WatchStatus } from "../calendar-sync/durable-object";
 import { type ReminderName, type SendResult, sendReminder } from "../reminders";
 import { publishHomeTab, sendWelcomeDm } from "../welcome";
@@ -21,7 +22,8 @@ export type AdminAction =
   | { kind: "welcome"; target: string }
   | { kind: "home"; userId: string }
   | { kind: "coworking"; op: "open" | "close" }
-  | { kind: "watch"; op: "status" | "start" | "stop" };
+  | { kind: "watch"; op: "status" | "start" | "stop" }
+  | { kind: "availability" };
 
 export type AdminResult =
   | { kind: "denied" }
@@ -32,7 +34,9 @@ export type AdminResult =
   | { kind: "coworking"; op: "open" }
   | { kind: "coworking"; op: "close"; closed: boolean }
   | { kind: "watch"; op: "status" | "start"; status: WatchStatus }
-  | { kind: "watch"; op: "stop"; stopped: boolean };
+  | { kind: "watch"; op: "stop"; stopped: boolean }
+  /** `posted` is false when the feature is off (`SLACK_AVAILABILITY_CHANNEL_ID` empty). */
+  | { kind: "availability"; posted: boolean };
 
 /**
  * TEMPORARY: user IDs allowed to run admin commands without the workspace-admin role.
@@ -118,6 +122,11 @@ async function perform(env: Env, action: AdminAction): Promise<AdminResult> {
       const status = action.op === "start" ? await stub.ensureWatch() : await stub.watchStatus();
       return { kind: "watch", op: action.op, status };
     }
+
+    case "availability": {
+      const posted = await postAvailabilityCheckIn(env);
+      return { kind: "availability", posted: posted !== null };
+    }
   }
 }
 
@@ -150,6 +159,10 @@ export function adminReplyText(result: AdminResult): string {
           : ":information_source: No active calendar watch to stop.";
       }
       return watchStatusText(result.status);
+    case "availability":
+      return result.posted
+        ? ":white_check_mark: Posted the availability check-in."
+        : ":information_source: Availability check-in is off — `SLACK_AVAILABILITY_CHANNEL_ID` is empty.";
   }
 }
 

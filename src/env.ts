@@ -1,4 +1,4 @@
-import type { CalendarSync, CoworkingRoom } from "./index";
+import type { AvailabilitySheet, CalendarSync, CoworkingRoom } from "./index";
 
 /**
  * Worker bindings, secrets, and config vars.
@@ -13,6 +13,8 @@ export interface Env {
   COWORKING_ROOM: DurableObjectNamespace<CoworkingRoom>;
   /** Google Calendar sync Durable Object — one singleton instance via getByName("default"). */
   CALENDAR_SYNC: DurableObjectNamespace<CalendarSync>;
+  /** Availability check-in Durable Object, keyed by the availability channel ID via `getByName`. */
+  AVAILABILITY_SHEET: DurableObjectNamespace<AvailabilitySheet>;
 
   // --- Secrets (wrangler secret put / .dev.vars) ---
   SLACK_BOT_TOKEN: string;
@@ -49,6 +51,8 @@ export interface Env {
   SLACK_ANNOUNCEMENTS_CHANNEL_ID: string;
   /** #vc-events-admin — gets a mirror of each starting-soon message with extra info (the event's host key, from the calendar's private `hostCode` property). */
   SLACK_EVENTADMIN_CHANNEL_ID: string;
+  /** Hosts channel for the Monday availability check-in. Empty/unset turns the feature off. */
+  SLACK_AVAILABILITY_CHANNEL_ID: string;
   /**
    * Private #bot-log channel for important error alerts (cron + co-working DO/Zoom failures).
    * Empty/unset disables alerting (the bot must be invited to the channel to post). See

@@ -25,6 +25,7 @@ const USAGE = [
   "• `home` — publish your App Home (preview)",
   "• `coworking open` · `coworking close` — announce the co-working room",
   "• `watch status` · `watch start` · `watch stop` — the Google Calendar watch channel",
+  "• `availability` — post this week's availability check-in (intro + Tuesday + Thursday)",
 ].join("\n");
 
 /**
@@ -128,6 +129,9 @@ function parseAdminCommand(text: string, userId: string): ParsedCommand {
         text: `Usage: \`watch status\`, \`watch start\` or \`watch stop\`.\n\n${USAGE}`,
       };
     }
+
+    case "availability":
+      return { kind: "action", action: { kind: "availability" } };
 
     default:
       return { kind: "reply", text: USAGE };

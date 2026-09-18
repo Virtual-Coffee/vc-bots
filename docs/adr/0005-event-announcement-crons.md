@@ -1,6 +1,8 @@
 # 0005 — Event announcements: two UTC crons keyed by their literal string, starting-soon via `chat.scheduleMessage`
 
-**Status:** Accepted (2026-09-17)
+**Status:** Accepted (2026-09-17). Amended 2026-09-18: the cron map moved from
+`CRON_TO_KIND` in `src/bots/reminders/index.ts` to `CRON_JOBS` in `src/cron.ts` (enforced by
+`test/cron.test.ts`) when a third, non-reminder cron was added. The decision is unchanged.
 
 ## Context
 
@@ -19,10 +21,9 @@ firing against the new code.
 
 - **Two crons, both at 12:00 UTC**: `0 12 * * *` (daily) and `0 12 * * MON` (weekly). 12:00
   UTC is 8am EDT / 7am EST; the DST drift is accepted rather than adding a timezone layer.
-- **`CRON_TO_KIND` (`src/bots/reminders/index.ts`) is keyed on the literal cron string**,
-  because that is what `controller.cron` carries. A key that differs from `triggers.crons` by
-  one byte means that reminder silently never runs, so `test/reminders-cron.test.ts` asserts
-  the two sets are equal.
+- **`CRON_JOBS` (`src/cron.ts`) is keyed on the literal cron string**, because that is what
+  `controller.cron` carries. A key that differs from `triggers.crons` by one byte means that
+  job silently never runs, so `test/cron.test.ts` asserts the two sets are equal.
 - **Weekdays are spelled (`MON`, `SUN`), never numeric.** The same test rejects a numeric
   day-of-week field. Luxon's `weekday === 1` in `sendDaily` is ISO Monday and unrelated —
   leave it.
@@ -39,7 +40,7 @@ firing against the new code.
 
 - Both crons are live. Turning them off is a deploy of `[]`, and turning them back on is a
   deploy of the two strings above.
-- Changing a cron means changing it in `wrangler.jsonc` and `CRON_TO_KIND` together; the test
+- Changing a cron means changing it in `wrangler.jsonc` and `CRON_JOBS` together; the test
   fails otherwise.
 - The starting-soon pairs exist only as Slack scheduled messages. If Slack drops them there is
   no retry until the next daily run; an event added after 12:00 UTC is announced only by a
