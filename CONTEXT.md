@@ -113,8 +113,8 @@ _Avoid_: thread, day post
 One of the four things a person can sign up for on a day: Host, MC, Notetaker, or Room leader. Each role has one emoji. Being out is not a role.
 
 **Out**:
-A person who reacted `:x:` on a day message. It overrides their sign-ups for that day: they are dropped from every role while the `:x:` stands, and rendered on the day message's own "Out <day>" line.
-_Avoid_: unavailable role, fifth role
+A person who reacted `:x:` on a day message. It overrides their sign-ups for that day: they are dropped from every role while the `:x:` stands, and rendered on the day message's own "Out <day>" line. In code, tests and docs it is _out_; the intro legend labels the `:x:` emoji _Unavailable_ because that is the word people in the channel use — the label is copy, not a term.
+_Avoid_: unavailable role, fifth role (in code and docs)
 
 **Sign-up**:
 One person on one role for one day, expressed by reacting with that role's emoji on the day message. Removing the reaction withdraws it. The easter egg `:all-the-things:` is a sign-up for every role at once.
