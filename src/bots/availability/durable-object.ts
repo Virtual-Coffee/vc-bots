@@ -18,7 +18,7 @@ import {
  * The weekly availability check-in. One instance per availability channel
  * (`env.AVAILABILITY_SHEET.getByName(channelId)`); KV storage only, so no migration step.
  *
- * Slack's reactions are the source of truth and only message pointers are stored (ADR 0009).
+ * Slack's reactions are the source of truth and only message pointers are stored (ADR 0013).
  * Refreshes of one message coalesce through `inflight` because input gates don't cover the
  * Slack `fetch` (ADR 0003).
  */
@@ -37,6 +37,8 @@ export type RefreshResult = "refreshed" | "ignored";
 
 export class AvailabilitySheet extends DurableObject<Env> {
   private readonly inflight = new Map<string, { done: Promise<void>; dirty: boolean }>();
+  /** Tail of the serialized `post` queue — concurrent posts run one after another (ADR 0003). */
+  private postQueue: Promise<unknown> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -47,16 +49,25 @@ export class AvailabilitySheet extends DurableObject<Env> {
    * Post the Monday trio (intro → Tuesday → Thursday) and seed each day message with the five
    * role reactions so people can one-click. Always posts fresh and repoints: an older trio
    * simply stops updating. Pointers are stored *before* seeding so a human reaction that lands
-   * mid-seed is already recognized. A post that fails partway deletes what it already posted
-   * (best-effort) so no orphan `@channel` intro survives; seeding is best-effort.
+   * mid-seed is already recognized. A post that fails partway (a Slack post or the pointer
+   * write) deletes what it already posted (best-effort) so no orphan `@channel` intro survives;
+   * seeding is best-effort. Posts are serialized: input gates don't cover the Slack `fetch`es,
+   * so without the queue a cron fire and an admin run could each post a trio.
    */
-  async post(nowMs: number = Date.now()): Promise<Record<Day, string>> {
+  post(nowMs: number = Date.now()): Promise<Record<Day, string>> {
+    const run = this.postQueue.then(() => this.postNow(nowMs));
+    this.postQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async postNow(nowMs: number): Promise<Record<Day, string>> {
     const channel = this.env.SLACK_AVAILABILITY_CHANNEL_ID;
     const client = createSlackClient(this.env);
     const dates = weekDays(nowMs);
 
     const posted: string[] = [];
     const ts: Partial<Record<Day, string>> = {};
+    let dayMessages: DayMessages;
     try {
       const intro = await client.chat.postMessage({ channel, ...buildIntroMessage() });
       if (intro.ts) posted.push(intro.ts);
@@ -67,14 +78,16 @@ export class AvailabilitySheet extends DurableObject<Env> {
         posted.push(res.ts);
         ts[day] = res.ts;
       }
+      dayMessages = { ...(ts as Record<Day, string>), postedAtMs: nowMs };
+      await this.ctx.storage.put(DAY_MESSAGES_KEY, dayMessages);
     } catch (err) {
       await this.deletePosted(client, channel, posted);
       throw err;
     }
-    const dayMessages: DayMessages = { ...(ts as Record<Day, string>), postedAtMs: nowMs };
-    await this.ctx.storage.put(DAY_MESSAGES_KEY, dayMessages);
     log.info("availability.posted", { channel, tuesday: ts.tuesday, thursday: ts.thursday });
 
+    // Warm the bot-id cache so the seed events below are dropped without an `auth.test` each.
+    await this.botUserId();
     for (const day of DAYS) {
       for (const { reaction } of ROLES) {
         try {

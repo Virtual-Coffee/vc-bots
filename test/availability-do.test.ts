@@ -97,6 +97,71 @@ describe("post", () => {
     });
   });
 
+  it("rolls back the posted messages when the pointer write fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stub = sheet();
+
+    await runInDurableObject(stub, async (i, state) => {
+      const instance = i as AvailabilitySheet;
+      vi.spyOn(state.storage, "put").mockRejectedValueOnce(new Error("disk full"));
+      await expect(instance.post(NOW)).rejects.toThrow(/disk full/);
+    });
+
+    const deleted = callsTo("/api/chat.delete").map((c) => form(c).get("ts"));
+    expect(deleted).toEqual([INTRO_TS, TUE_TS, THU_TS]);
+    expect(callsTo("/api/reactions.add")).toHaveLength(0);
+  });
+
+  it("warms the bot-id cache so the seed events never trigger auth.test", async () => {
+    const stub = sheet();
+    await stub.post(NOW);
+    expect(callsTo("/api/auth.test")).toHaveLength(1);
+
+    expect(await stub.refresh(TUE_TS, BOT)).toBe("ignored");
+    expect(callsTo("/api/auth.test")).toHaveLength(1);
+  });
+
+  it("serializes concurrent posts: the second trio posts after the first and wins the pointers", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let gated = true;
+    vi.unstubAllGlobals();
+    fetched = installFetchRecorder({
+      postTs: [INTRO_TS, TUE_TS, THU_TS, "2.0", "2.1", "2.2"],
+      botUserId: BOT,
+      respond: async (call) => {
+        if (gated && call.url.includes("/api/chat.postMessage")) {
+          gated = false;
+          await gate; // hold the first trio's intro so the second call arrives mid-flight
+        }
+        return undefined;
+      },
+    });
+    const stub = sheet();
+
+    await runInDurableObject(stub, async (i) => {
+      const instance = i as AvailabilitySheet;
+      const first = instance.post(NOW);
+      const second = instance.post(NOW);
+      release();
+      await expect(first).resolves.toEqual({ tuesday: TUE_TS, thursday: THU_TS });
+      await expect(second).resolves.toEqual({ tuesday: "2.1", thursday: "2.2" });
+    });
+
+    // Without the queue the second intro would post while the first was held at the gate.
+    const order = callsTo("/api/chat.postMessage").map((c) => form(c).get("text")?.split(" ")[0]);
+    expect(order).toEqual([
+      "<!channel>",
+      "Tuesday",
+      "Thursday",
+      "<!channel>",
+      "Tuesday",
+      "Thursday",
+    ]);
+    expect(await stub.refresh(TUE_TS, "U1")).toBe("ignored");
+    expect(await stub.refresh("2.1", "U1")).toBe("refreshed");
+  });
+
   it("keeps the trio and its pointers when a seed reaction fails", async () => {
     fetched.respondWith((call) =>
       call.url.includes("/api/reactions.add")

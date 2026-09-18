@@ -1,4 +1,4 @@
-# 0009 — Availability sign-ups live in Slack's reactions; the DO stores only message pointers
+# 0013 — Availability sign-ups live in Slack's reactions; the DO stores only message pointers
 
 **Status:** Accepted (2026-09-18)
 
@@ -23,14 +23,20 @@ Durable Object that keeps the sign-up lists and applies each `reaction_added` /
 - **`AvailabilitySheet` stores only pointers**: the two day-message `ts` (with the post time,
   so re-renders keep their dates) and the cached bot user id. No SQL tables.
 - **Refreshes coalesce per message.** DO input gates don't serialize across a Slack `fetch`,
-  so an in-memory map marks a message dirty while a render is in flight and runs exactly one
-  more render after it. Any burst of events collapses to at most two renders, and the last
-  one reflects Slack's current state.
+  so an in-memory map marks a message dirty while a render is in flight and re-renders until a
+  render completes with no event landing during it. Events never queue up one render each:
+  a burst collapses to the in-flight render plus one trailing render per "dirty" pass, and the
+  last render reflects Slack's current state.
 - **The bot seeds the five reactions** on each day message so people one-click; its own user
   id is filtered out of the sheet, and its own events (`ignoreSelfEvents: false`, ADR 0007)
-  are dropped by reactor id before any Slack call.
-- **Every post is fresh.** Re-running the post (cron double-fire, an admin run) posts a new
-  trio and repoints; the old messages simply stop updating. No week bookkeeping.
+  are dropped by reactor id before any render call (`reactions.get` / `chat.update`). The bot
+  user id is looked up once (`auth.test`) and cached — `post()` warms the cache before seeding,
+  so the seed events find it already there.
+- **Every post is fresh, and posts are serialized.** Re-running the post (cron double-fire,
+  an admin run) posts a new trio and repoints; the old messages simply stop updating. No week
+  bookkeeping. Concurrent `post()` calls on the one instance run one after another through a
+  DO-owned promise queue (ADR 0003's pattern), so two callers can't each post a trio with only
+  one of them pointed at.
 
 Alternatives rejected: a DO-held ledger of sign-ups (drifts on any lost or duplicated event,
 with no way to notice); day messages as thread replies (Slack doesn't notify the channel for

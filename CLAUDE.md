@@ -152,7 +152,7 @@ Tuesday/Thursday *day messages*, each seeded with the five *role* reactions) to
 `SLACK_AVAILABILITY_CHANNEL_ID` (empty = feature off) and rewrites a day message's *sign-up
 sheet* on every `reaction_added` / `reaction_removed` (registered in `src/slack/app.ts`;
 `handleReactionChange` drops anything not on that channel). **Slack's reactions are the source
-of truth** (ADR 0009): `AvailabilitySheet` (`durable-object.ts`, one instance per channel, KV
+of truth** (ADR 0013): `AvailabilitySheet` (`durable-object.ts`, one instance per channel, KV
 storage only — no `migrate()`) stores just `day_messages` `{ tuesday, thursday, postedAtMs }`
 and the cached `bot_user_id`; `refresh(ts, reactor)` returns `"ignored"` for any other ts or
 for the bot's own seed events, else re-reads `reactions.get` and `chat.update`s. Concurrent
