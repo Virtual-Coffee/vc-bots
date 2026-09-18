@@ -80,7 +80,8 @@ const INTRO_TEXT =
 const INTRO_HINT =
   "React on each day's message with the emoji for the roles you can take — the lists update automatically.";
 
-const DAY_HINT = "React with the emoji for each role you can take — remove your reaction to withdraw.";
+const DAY_HINT =
+  "React with the emoji for each role you can take — remove your reaction to withdraw.";
 
 export function buildIntroMessage(): BuiltMessage {
   const legend = ROLES.map((r) => `• ${r.label}: :${r.reaction}: (\`:${r.reaction}:\`)`).join("\n");

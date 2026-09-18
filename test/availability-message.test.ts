@@ -39,7 +39,7 @@ describe("buildIntroMessage", () => {
 describe("buildDayMessage", () => {
   const date = DateTime.fromISO("2026-09-15T12:00", { zone: "America/New_York" });
 
-  it("headers the day and date, renders a dash for every empty role, and carries the un-sign hint", () => {
+  it("headers the day and date, renders a dash for every empty role, and carries the withdraw hint", () => {
     const { text, blocks } = buildDayMessage("tuesday", date, emptySheet());
     const rendered = mrkdwn(blocks);
 
