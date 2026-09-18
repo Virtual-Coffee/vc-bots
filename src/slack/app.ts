@@ -3,12 +3,14 @@ import { ADMIN_COMMAND, handleAdminCommand } from "../bots/admin";
 import {
   COWORKING_MODAL_CALLBACK_ID,
   handleCoworkingSubmit,
+  handlePanelAvailabilityClick,
   handlePanelCoworkingClick,
   handlePanelHomeClick,
   handlePanelReminderClick,
   handlePanelWelcomeClick,
   handleReminderSubmit,
   handleWelcomeSubmit,
+  PANEL_AVAILABILITY_ACTION_ID,
   PANEL_COWORKING_ACTION_ID,
   PANEL_HOME_ACTION_ID,
   PANEL_REMINDER_ACTION_ID,
@@ -16,6 +18,7 @@ import {
   REMINDER_MODAL_CALLBACK_ID,
   WELCOME_MODAL_CALLBACK_ID,
 } from "../bots/admin-panel";
+import { handleReactionChange } from "../bots/availability";
 import {
   CANCEL_ACTION_ID,
   JOIN_REDIRECT_ACTION_ID,
@@ -58,6 +61,10 @@ export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
     })
       .event("team_join", async ({ payload }) => handleTeamJoin(payload, env))
       .event("app_home_opened", async ({ payload }) => handleAppHomeOpened(payload, env))
+      // Availability check-in: any reaction change on a day message re-renders its sign-up
+      // sheet. Reactions elsewhere are dropped inside the handler.
+      .event("reaction_added", async ({ payload }) => handleReactionChange(payload, env))
+      .event("reaction_removed", async ({ payload }) => handleReactionChange(payload, env))
       // ⚠️ Shared channel message: its response_url's "original" IS the room card — respondEphemeral
       // only, never replace/delete (ADR 0004).
       .action(JOIN_ACTION_ID, ack, async ({ payload }) =>
@@ -85,6 +92,9 @@ export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
         handlePanelCoworkingClick(payload, env),
       )
       .action(PANEL_HOME_ACTION_ID, ack, async ({ payload }) => handlePanelHomeClick(payload, env))
+      .action(PANEL_AVAILABILITY_ACTION_ID, ack, async ({ payload }) =>
+        handlePanelAvailabilityClick(payload, env),
+      )
       // Modal submits. The empty ack closes the modal; the real work runs in the lazy handler,
       // which reaches the panel ephemeral via the response_url carried in private_metadata.
       .viewSubmission(

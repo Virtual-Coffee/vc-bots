@@ -6,6 +6,7 @@ import {
   type AdminViewSubmissionPayload,
   COWORKING_MODAL_CALLBACK_ID,
   handleCoworkingSubmit,
+  handlePanelAvailabilityClick,
   handlePanelCoworkingClick,
   handlePanelHomeClick,
   handlePanelReminderClick,
@@ -157,6 +158,22 @@ describe("admin panel — button clicks open modals", () => {
     expect(new URLSearchParams(publish[0]!.body).get("user_id")).toBe("U1");
     expect(panelReply()).toEqual({ delete_original: true });
   });
+
+  it("post availability check-in fires directly and dismisses the panel", async () => {
+    await handlePanelAvailabilityClick(action("admin_panel_availability"), env);
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(3);
+    expect(callsTo("/api/reactions.add")).toHaveLength(10);
+    expect(panelReply()).toEqual({ delete_original: true });
+  });
+
+  it("post availability check-in reports the off state instead of dismissing", async () => {
+    await handlePanelAvailabilityClick(action("admin_panel_availability"), {
+      ...env,
+      SLACK_AVAILABILITY_CHANNEL_ID: "",
+    });
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
+    expect(panelReply()!.text).toContain("SLACK_AVAILABILITY_CHANNEL_ID");
+  });
 });
 
 describe("admin panel — reminder submit", () => {
@@ -254,6 +271,11 @@ describe("admin panel — authorization & errors", () => {
     isAdmin = false;
     await handlePanelReminderClick(action("admin_panel_reminder"), env);
     expect(callsTo("/api/views.open")).toHaveLength(0);
+    expect(panelReply()!.text).toContain("admins only");
+
+    recorded = [];
+    await handlePanelAvailabilityClick(action("admin_panel_availability"), env);
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
     expect(panelReply()!.text).toContain("admins only");
   });
 

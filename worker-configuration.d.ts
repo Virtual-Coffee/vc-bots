@@ -20,13 +20,15 @@ interface __BaseEnv_Env {
 	SLACK_EVENTS_CHANNEL_ID: string;
 	SLACK_ANNOUNCEMENTS_CHANNEL_ID: string;
 	SLACK_EVENTADMIN_CHANNEL_ID: string;
+	SLACK_AVAILABILITY_CHANNEL_ID: string;
 	GOOGLE_SERVICE_ACCOUNT_KEY: string;
 	COWORKING_ROOM: DurableObjectNamespace<import("./src/index").CoworkingRoom>;
+	AVAILABILITY_SHEET: DurableObjectNamespace<import("./src/index").AvailabilitySheet>;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./src/index");
-		durableNamespaces: "CoworkingRoom";
+		durableNamespaces: "CoworkingRoom" | "AvailabilitySheet";
 	}
 	interface Env extends __BaseEnv_Env {}
 }

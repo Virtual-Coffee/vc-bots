@@ -3,7 +3,6 @@ import type { ChatScheduledMessagesListRequest, SlackAPIClient } from "slack-clo
 import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
-import { notifyBotLog } from "../../slack/notify";
 import {
   buildDailyMessage,
   buildStartingSoonAdminMessage,
@@ -16,25 +15,14 @@ import { getEventSource, reminderRange } from "./source";
 export type { ReminderName } from "./source";
 
 /**
- * Event announcements. `sendReminder` does the actual work and is shared by the cron
- * `scheduled()` handler and the `/vc-bot-admin` slash command.
+ * Event announcements. `sendReminder` does the actual work and is shared by the cron schedule
+ * (`src/cron.ts`, which owns the cron strings — ADR 0005) and the `/vc-bot-admin` slash command.
  *
  * - `daily` (12:00 UTC): schedules each event's "Starting Soon" message (and an event-admin
  *   mirror) for start − 10 min via `chat.scheduleMessage`, then posts the "Today's Events"
  *   summary — except Mondays, when the weekly summary covers it (scheduling still runs).
  * - `weekly` (Mondays 12:00 UTC): posts the "This Week's Events" summary.
- *
- * Cron triggers fire in UTC; 12:00 UTC = 8am EDT / 7am EST (accepted DST drift). Both crons
- * are live in wrangler.jsonc.
- * ⚠️ `CRON_TO_KIND` keys MUST equal `triggers.crons` byte-for-byte — enforced by test/reminders-cron.test.ts; ADR 0005.
- * ⚠️ Weekdays are spelled (`MON`), never numeric (Cloudflare is Quartz-style) — same test; ADR 0005.
  */
-
-// Maps each cron expression → reminder name. Pinned to wrangler.jsonc by test/reminders-cron.test.ts.
-export const CRON_TO_KIND: Record<string, ReminderName> = {
-  "0 12 * * *": "daily",
-  "0 12 * * MON": "weekly",
-};
 
 /** Post the starting-soon pair this many seconds before the event starts. */
 const STARTING_SOON_LEAD_SECONDS = 600;
@@ -70,24 +58,6 @@ export async function sendReminder(
   nowMs: number = Date.now(),
 ): Promise<SendResult> {
   return SENDERS[name](getEventSource(env), env, nowMs);
-}
-
-export async function runReminders(
-  controller: ScheduledController,
-  env: Env,
-  _ctx: ExecutionContext,
-  send: typeof sendReminder = sendReminder,
-): Promise<void> {
-  const name = CRON_TO_KIND[controller.cron];
-  if (!name) return; // unrecognized cron — nothing to do
-  try {
-    await send(name, env, controller.scheduledTime);
-  } catch (error) {
-    // No user surface on the cron path — log, alert #bot-log, and swallow so a CMS/Slack
-    // hiccup doesn't surface as an unhandled rejection in `scheduled()`.
-    log.error("reminder.run_failed", { cron: controller.cron, error: String(error) });
-    await notifyBotLog(env, "reminder.run_failed", { cron: controller.cron, error: String(error) });
-  }
 }
 
 async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<SendResult> {

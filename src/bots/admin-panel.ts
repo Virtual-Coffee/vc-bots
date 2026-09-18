@@ -4,7 +4,8 @@ import type { Env } from "../env";
 import { log } from "../log";
 import { createSlackClient } from "../slack/client";
 import { deleteOriginal, replaceEphemeral } from "../slack/response";
-import { isWorkspaceAdmin, reminderReply } from "./admin";
+import { AVAILABILITY_DISABLED_TEXT, isWorkspaceAdmin, reminderReply } from "./admin";
+import { postAvailabilityCheckIn } from "./availability";
 import { sendReminder } from "./reminders";
 import { publishHomeTab, sendWelcomeDm } from "./welcome";
 
@@ -26,6 +27,7 @@ export const PANEL_REMINDER_ACTION_ID = "admin_panel_reminder";
 export const PANEL_WELCOME_ACTION_ID = "admin_panel_welcome";
 export const PANEL_COWORKING_ACTION_ID = "admin_panel_coworking";
 export const PANEL_HOME_ACTION_ID = "admin_panel_home";
+export const PANEL_AVAILABILITY_ACTION_ID = "admin_panel_availability";
 
 export const REMINDER_MODAL_CALLBACK_ID = "admin_reminder_modal";
 export const WELCOME_MODAL_CALLBACK_ID = "admin_welcome_modal";
@@ -67,6 +69,11 @@ export function adminPanelBlocks(): AnyMessageBlock[] {
           type: "button",
           action_id: PANEL_HOME_ACTION_ID,
           text: { type: "plain_text", text: "Publish App Home", emoji: true },
+        },
+        {
+          type: "button",
+          action_id: PANEL_AVAILABILITY_ACTION_ID,
+          text: { type: "plain_text", text: "Post availability check-in", emoji: true },
         },
       ],
     },
@@ -302,6 +309,26 @@ export async function handlePanelHomeClick(
     await deleteOriginal(responseUrl);
   } catch (err) {
     log.error("admin.panel.home_failed", { user: payload.user.id, err: String(err) });
+    await replaceEphemeral(responseUrl, ERROR_TEXT);
+  }
+}
+
+export async function handlePanelAvailabilityClick(
+  payload: AdminPanelActionPayload,
+  env: Env,
+): Promise<void> {
+  const responseUrl = await guardClick(payload, env);
+  if (!responseUrl) return;
+  try {
+    const posted = await postAvailabilityCheckIn(env);
+    // The trio is visible in-channel → dismiss; only the off state needs telling.
+    if (posted) {
+      await deleteOriginal(responseUrl);
+    } else {
+      await replaceEphemeral(responseUrl, AVAILABILITY_DISABLED_TEXT);
+    }
+  } catch (err) {
+    log.error("admin.panel.availability_failed", { user: payload.user.id, err: String(err) });
     await replaceEphemeral(responseUrl, ERROR_TEXT);
   }
 }

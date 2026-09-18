@@ -4,6 +4,7 @@ import { log } from "../log";
 import { createSlackClient } from "../slack/client";
 import { respondEphemeral } from "../slack/response";
 import { adminPanelBlocks, PANEL_TEXT } from "./admin-panel";
+import { postAvailabilityCheckIn } from "./availability";
 import { type SendResult, sendReminder } from "./reminders";
 import { publishHomeTab, sendWelcomeDm } from "./welcome";
 
@@ -23,6 +24,7 @@ const USAGE = [
   "• `welcome` — DM you the welcome message (preview)",
   "• `home` — publish your App Home (preview)",
   "• `coworking open` · `coworking close` — announce the co-working room",
+  "• `availability` — post this week's availability check-in (intro + Tuesday + Thursday)",
 ].join("\n");
 
 /**
@@ -77,6 +79,10 @@ export async function handleAdminCommand(cmd: AdminCommandPayload, env: Env): Pr
     );
   }
 }
+
+export const AVAILABILITY_POSTED_TEXT = ":white_check_mark: Posted the availability check-in.";
+export const AVAILABILITY_DISABLED_TEXT =
+  ":information_source: Availability check-in is off — `SLACK_AVAILABILITY_CHANNEL_ID` is empty.";
 
 export function reminderReply(sub: string, result: SendResult): string {
   const events = `${result.count} event${result.count === 1 ? "" : "s"}`;
@@ -150,6 +156,15 @@ async function runAdminCommand(
       await respondEphemeral(
         cmd.response_url,
         `Usage: \`coworking open\` or \`coworking close\`.\n\n${USAGE}`,
+      );
+      return;
+    }
+
+    case "availability": {
+      const posted = await postAvailabilityCheckIn(env);
+      await respondEphemeral(
+        cmd.response_url,
+        posted ? AVAILABILITY_POSTED_TEXT : AVAILABILITY_DISABLED_TEXT,
       );
       return;
     }

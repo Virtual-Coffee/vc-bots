@@ -1,4 +1,9 @@
-import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
+import {
+  createExecutionContext,
+  env,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hmacSha256Hex } from "../src/crypto";
 import { route } from "../src/router";
@@ -38,6 +43,15 @@ beforeEach(() => {
     }
     if (url.includes("/api/users.profile.get")) {
       return Response.json({ ok: true, profile: { real_name: "Ada" } });
+    }
+    if (url.includes("/api/auth.test")) {
+      return Response.json({ ok: true, user_id: "UBOT" });
+    }
+    if (url.includes("/api/reactions.get")) {
+      return Response.json({
+        ok: true,
+        message: { reactions: [{ name: "computer", users: ["UBOT", "U9"] }] },
+      });
     }
     if (url.includes("zoom.us/oauth/token")) {
       return Response.json({ access_token: "zt", token_type: "bearer", expires_in: 3600 });
@@ -152,6 +166,62 @@ describe("events", () => {
     const publishes = callsTo("/api/views.publish");
     expect(publishes).toHaveLength(1);
     expect(new URLSearchParams(publishes[0]!.body).get("user_id")).toBe("U456");
+  });
+
+  describe("reaction_added / reaction_removed", () => {
+    const DAY_TS = "1700000001.000100";
+
+    function reactionEvent(type: "reaction_added" | "reaction_removed", item: object): string {
+      return JSON.stringify({
+        type: "event_callback",
+        team_id: "T1",
+        api_app_id: "A1",
+        event: { type, user: "U9", reaction: "computer", item_user: "UBOT", item, event_ts: "3" },
+        event_id: "Ev3",
+        event_time: 3,
+      });
+    }
+
+    beforeEach(async () => {
+      // Make DAY_TS this week's Tuesday message on the availability sheet.
+      await runInDurableObject(
+        env.AVAILABILITY_SHEET.getByName(env.SLACK_AVAILABILITY_CHANNEL_ID),
+        async (_i, state) => {
+          await state.storage.put("day_messages", {
+            tuesday: DAY_TS,
+            thursday: "1700000002.000100",
+            postedAtMs: Date.parse("2026-09-14T13:00:00Z"),
+          });
+        },
+      );
+    });
+
+    it.each(["reaction_added", "reaction_removed"] as const)(
+      "%s on a day message re-reads its reactions and rewrites it",
+      async (type) => {
+        const item = { type: "message", channel: env.SLACK_AVAILABILITY_CHANNEL_ID, ts: DAY_TS };
+        const res = await post("/slack/events", reactionEvent(type, item), "application/json");
+        expect(res.status).toBe(200);
+
+        expect(callsTo("/api/reactions.get")).toHaveLength(1);
+        const updates = callsTo("/api/chat.update");
+        expect(updates).toHaveLength(1);
+        expect(new URLSearchParams(updates[0]!.body).get("ts")).toBe(DAY_TS);
+      },
+    );
+
+    it("a reaction in another channel does nothing", async () => {
+      const item = { type: "message", channel: "C-ELSEWHERE", ts: DAY_TS };
+      await post("/slack/events", reactionEvent("reaction_added", item), "application/json");
+      expect(callsTo("/api/reactions.get")).toHaveLength(0);
+      expect(callsTo("/api/chat.update")).toHaveLength(0);
+    });
+
+    it("a reaction on a file does nothing", async () => {
+      const item = { type: "file", file: "F1" };
+      await post("/slack/events", reactionEvent("reaction_added", item), "application/json");
+      expect(callsTo("/api/reactions.get")).toHaveLength(0);
+    });
   });
 });
 

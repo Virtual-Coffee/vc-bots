@@ -5,16 +5,24 @@
   // Pinned past date for stable runtime behavior. Bump deliberately, not casually.
   "compatibility_date": "2026-01-01",
 
-  // Co-working room state. One DO instance per Zoom meeting ID (addressed via getByName).
+  // Co-working room state: one DO instance per Zoom meeting ID (addressed via getByName).
+  // Availability sheet: one instance per availability channel ID.
   "durable_objects": {
-    "bindings": [{ "name": "COWORKING_ROOM", "class_name": "CoworkingRoom" }]
+    "bindings": [
+      { "name": "COWORKING_ROOM", "class_name": "CoworkingRoom" },
+      { "name": "AVAILABILITY_SHEET", "class_name": "AvailabilitySheet" }
+    ]
   },
   // SQLite-backed DO storage (GA, included on the Workers free plan).
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["CoworkingRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["AvailabilitySheet"] }
+  ],
 
-  // Event announcements (UTC). Disable with [] — dropping the key leaves deployed crons running.
-  // Weekdays spelled (MON): Cloudflare is Quartz-style. Pinned by test/reminders-cron.test.ts; ADR 0005.
-  "triggers": { "crons": ["0 12 * * *", "0 12 * * MON"] },
+  // Crons fire in UTC. Disable with [] — dropping the key leaves deployed crons running.
+  // Weekdays spelled (MON): Cloudflare is Quartz-style. Pinned to src/cron.ts by test/cron.test.ts; ADR 0005.
+  // 12:00 daily/weekly event announcements; 13:00 MON (9am EDT) availability check-in.
+  "triggers": { "crons": ["0 12 * * *", "0 12 * * MON", "0 13 * * MON"] },
 
   "observability": { "enabled": true },
 
@@ -34,6 +42,8 @@
     "SLACK_EVENTS_CHANNEL_ID": "C017WAKN883",
     "SLACK_ANNOUNCEMENTS_CHANNEL_ID": "C014AAPC09K",
     "SLACK_EVENTADMIN_CHANNEL_ID": "C0360K84NEQ",
+    // Hosts channel for the Monday availability check-in. Empty turns the feature off.
+    "SLACK_AVAILABILITY_CHANNEL_ID": "C0B4LSMQK19",
     // Private bot-log channel for error alerts (cron + co-working DO/Zoom failures). Empty
     // disables alerting; the bot must be invited to the channel before it can post there.
     "SLACK_BOTLOG_CHANNEL_ID": "C0BATRPD3QC",

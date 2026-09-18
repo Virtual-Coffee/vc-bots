@@ -1,4 +1,4 @@
-import type { CoworkingRoom } from "./index";
+import type { AvailabilitySheet, CoworkingRoom } from "./index";
 
 /**
  * Worker bindings, secrets, and config vars.
@@ -11,6 +11,8 @@ export interface Env {
   // --- Bindings ---
   /** Co-working room Durable Object, keyed by Zoom meeting ID via `getByName`. */
   COWORKING_ROOM: DurableObjectNamespace<CoworkingRoom>;
+  /** Availability check-in Durable Object, keyed by the availability channel ID via `getByName`. */
+  AVAILABILITY_SHEET: DurableObjectNamespace<AvailabilitySheet>;
 
   // --- Secrets (wrangler secret put / .dev.vars) ---
   SLACK_BOT_TOKEN: string;
@@ -36,6 +38,8 @@ export interface Env {
   SLACK_ANNOUNCEMENTS_CHANNEL_ID: string;
   /** #vc-events-admin — gets a mirror of each starting-soon message with extra info (e.g. the Zoom host code). */
   SLACK_EVENTADMIN_CHANNEL_ID: string;
+  /** Hosts channel for the Monday availability check-in. Empty/unset turns the feature off. */
+  SLACK_AVAILABILITY_CHANNEL_ID: string;
   /**
    * Private #bot-log channel for important error alerts (cron + co-working DO/Zoom failures).
    * Empty/unset disables alerting (the bot must be invited to the channel to post). See

@@ -2,7 +2,7 @@ import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 import { unstable_readConfig } from "wrangler";
 
-// The live cron strings, so test/reminders-cron.test.ts can pin CRON_TO_KIND to wrangler.jsonc.
+// The live cron strings, so test/cron.test.ts can pin CRON_JOBS to wrangler.jsonc.
 const { crons } = unstable_readConfig({ config: "./wrangler.jsonc" }).triggers;
 
 /**
@@ -21,6 +21,7 @@ export default defineConfig({
           SLACK_EVENTS_CHANNEL_ID: "C-TEST-EVENTS",
           SLACK_ANNOUNCEMENTS_CHANNEL_ID: "C-TEST-ANNOUNCE",
           SLACK_EVENTADMIN_CHANNEL_ID: "C-TEST-EVENTADMIN",
+          SLACK_AVAILABILITY_CHANNEL_ID: "C-TEST-AVAIL",
           // Pinned so the signed-request tests (slack-app.test.ts) don't depend on a
           // machine-local `.dev.vars` value; tests sign with env.SLACK_SIGNING_SECRET.
           SLACK_SIGNING_SECRET: "test-signing-secret",

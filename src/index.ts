@@ -1,9 +1,10 @@
-import { runReminders } from "./bots/reminders";
+import { runCron } from "./cron";
 import type { Env } from "./env";
 import { log, setLogLevel } from "./log";
 import { route } from "./router";
 
-// The DO class must be exported from the Worker's main module so the runtime can bind it.
+// DO classes must be exported from the Worker's main module so the runtime can bind them.
+export { AvailabilitySheet } from "./bots/availability/durable-object";
 export { CoworkingRoom } from "./bots/coworking/durable-object";
 
 /**
@@ -15,9 +16,9 @@ export default {
     return route(req, env, ctx);
   },
 
-  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     setLogLevel(env.LOG_LEVEL);
     log.info("cron.fired", { cron: controller.cron });
-    return runReminders(controller, env, ctx);
+    return runCron(controller, env);
   },
 } satisfies ExportedHandler<Env>;

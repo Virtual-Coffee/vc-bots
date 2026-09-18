@@ -8,8 +8,9 @@ import { vi } from "vitest";
  * `installFetchRecorder` stubs the global `fetch` (undo it with `vi.unstubAllGlobals()` in
  * `afterEach`). Answers come from the test's own `respond` override first, then the defaults:
  * Zoom OAuth → a token, Zoom invite links → one attendee with `zoomJoinUrl`, `users.profile.get`
- * → `profileName`, `chat.postMessage` → the next ts in `postTs` (the last one repeats), and
- * anything else → `{ ok: true }` with `defaultTs`.
+ * → `profileName`, `chat.postMessage` → the next ts in `postTs` (the last one repeats),
+ * `auth.test` → `botUserId`, `reactions.get` → no reactions, and anything else → `{ ok: true }`
+ * with `defaultTs`.
  */
 
 export interface RecordedCall {
@@ -33,6 +34,8 @@ export interface FetchRecorderOptions {
   zoomJoinUrl?: string;
   /** `real_name` the `users.profile.get` stub returns. */
   profileName?: string;
+  /** `user_id` the `auth.test` stub returns. */
+  botUserId?: string;
 }
 
 export interface FetchRecorder {
@@ -58,6 +61,7 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
   const defaultTs = options.defaultTs ?? DEFAULT_TS;
   const zoomJoinUrl = options.zoomJoinUrl ?? "https://zoom.us/w/personal-1";
   const profileName = options.profileName ?? "Ada";
+  const botUserId = options.botUserId ?? "UBOT";
 
   const spy = vi.fn(async (input: unknown, init?: { body?: unknown }) => {
     let url: string;
@@ -83,6 +87,12 @@ export function installFetchRecorder(options: FetchRecorderOptions = {}): FetchR
     }
     if (url.includes("/api/users.profile.get")) {
       return Response.json({ ok: true, profile: { real_name: profileName } });
+    }
+    if (url.includes("/api/auth.test")) {
+      return Response.json({ ok: true, user_id: botUserId, bot_id: "B-BOT" });
+    }
+    if (url.includes("/api/reactions.get")) {
+      return Response.json({ ok: true, type: "message", message: { reactions: [] } });
     }
     if (url.includes("/api/chat.postMessage")) {
       const ts = postTs[Math.min(postCount++, postTs.length - 1)] ?? defaultTs;

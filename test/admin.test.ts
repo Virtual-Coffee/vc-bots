@@ -121,6 +121,23 @@ describe("handleAdminCommand — coworking announce", () => {
     expect(replyText()).toContain("Closed the co-working announcement");
   });
 
+  it("availability posts the check-in trio and confirms", async () => {
+    await handleAdminCommand(cmd("availability"), env);
+    const posts = callsTo("/api/chat.postMessage");
+    expect(posts).toHaveLength(3);
+    for (const p of posts) {
+      expect(new URLSearchParams(p.body).get("channel")).toBe(env.SLACK_AVAILABILITY_CHANNEL_ID);
+    }
+    expect(callsTo("/api/reactions.add")).toHaveLength(10);
+    expect(replyText()).toContain("Posted the availability check-in");
+  });
+
+  it("availability reports the feature is off when the channel var is empty", async () => {
+    await handleAdminCommand(cmd("availability"), { ...env, SLACK_AVAILABILITY_CHANNEL_ID: "" });
+    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
+    expect(replyText()).toContain("SLACK_AVAILABILITY_CHANNEL_ID");
+  });
+
   it("shows usage for an unknown subcommand", async () => {
     await handleAdminCommand(cmd("nonsense"), env);
     expect(replyText()).toContain("/vc-bot-admin");
