@@ -92,16 +92,19 @@ function handleGoogleNotify(req: Request, env: Env, ctx: ExecutionContext): Resp
   const channelId = goog["x-goog-channel-id"];
   const resourceId = goog["x-goog-resource-id"];
   const messageNumber = goog["x-goog-message-number"];
-  // Never log the channel token or the full header bag — x-goog-channel-token is a credential.
-  log.info("google.notify", { state, channelId, resourceId, messageNumber });
 
-  // Authenticate via the per-channel token. Drop silently (200) on mismatch so spoofed/stale
-  // notifications don't trigger a Google retry-storm. Never log the provided/expected value.
+  // Authenticate via the per-channel token before anything else — even the info log below, so an
+  // unauthenticated caller can't write its header values into our logs as a "notification". Drop
+  // silently (200) on mismatch so spoofed/stale notifications don't trigger a Google retry-storm.
+  // Never log the provided/expected value.
   const provided = req.headers.get("x-goog-channel-token");
   if (provided !== env.GOOGLE_WATCH_TOKEN) {
     log.warn("google.notify.bad_token", { channelId });
     return new Response(null, { status: 200 });
   }
+
+  // Never log the channel token or the full header bag — x-goog-channel-token is a credential.
+  log.info("google.notify", { state, channelId, resourceId, messageNumber });
 
   // Initial handshake when a watch channel is created — no change to process.
   if (state === "sync") {
