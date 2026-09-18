@@ -60,10 +60,10 @@ export function departedUpcoming(
  *
  * - Departed (in `prior`, not in `current`, announced start still upcoming), by its lookup:
  *   `cancelled` → cancellation notice; `live` → reschedule notice to the new start (an
- *   out-of-window move); `all-day` → nothing (no timed slot to correct to); `invalid` →
- *   nothing, reported in `invalid` (the adapter already alerted #bot-log). A departed id with
- *   no lookup shouldn't happen (`departedUpcoming` names exactly the ids to fetch) — treated as
- *   no notice.
+ *   out-of-window move); `all-day` / `bad-start` → nothing (no timed slot to correct to; the
+ *   adapter already warned about the unparseable start); `invalid` → nothing, reported in
+ *   `invalid` (the adapter already alerted #bot-log). A departed id with no lookup shouldn't
+ *   happen (`departedUpcoming` names exactly the ids to fetch) — treated as no notice.
  * - In both, announced start still upcoming, start changed → reschedule notice.
  * - New ids → nothing: the scheduling reconcile handles them.
  *
@@ -112,6 +112,7 @@ export function diffSnapshot(
         invalid.push({ id, reason: lookup.reason });
         break;
       case "all-day":
+      case "bad-start":
       case undefined:
         break;
     }

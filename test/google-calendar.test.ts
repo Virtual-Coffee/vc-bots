@@ -409,16 +409,13 @@ describe("getEvent", () => {
     expect(await port().getEvent("ev-1")).toEqual({ kind: "all-day" });
   });
 
-  it("keeps an unparseable start.dateTime as a live event with the raw string", async () => {
+  it("reports an unparseable start.dateTime as bad-start, not a live event with the raw string", async () => {
     singleEvents.set("ev-1", {
       id: "ev-1",
       status: "confirmed",
       start: { dateTime: "not-a-date" },
     });
-    expect(await port().getEvent("ev-1")).toEqual({
-      kind: "live",
-      event: expect.objectContaining({ id: "ev-1", startsAt: "not-a-date" }),
-    });
+    expect(await port().getEvent("ev-1")).toEqual({ kind: "bad-start" });
   });
 
   it("throws on any other non-OK response (a transient failure isn't a deletion)", async () => {

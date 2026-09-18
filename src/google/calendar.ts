@@ -68,6 +68,8 @@ export type CalendarEventLookup =
   | { kind: "cancelled" }
   /** Live but `start.date` only — no timed slot to announce. */
   | { kind: "all-day" }
+  /** Live and timed but `start.dateTime` is unparseable — nothing to correct to. */
+  | { kind: "bad-start" }
   /** Live and timed, but unannounceable (docs/adr/0002). */
   | { kind: "invalid"; reason: InvalidEventReason };
 
@@ -191,16 +193,13 @@ export function createGoogleCalendarPort(env: Env): CalendarPort {
       }
       const e = data;
       if (e.status === "cancelled") return { kind: "cancelled" };
-      const startDateTime = e.start?.dateTime;
-      if (startDateTime === undefined) return { kind: "all-day" };
+      if (e.start?.dateTime === undefined) return { kind: "all-day" };
       const mapped = toReminderEvent(e);
       if (mapped.kind === "event") return { kind: "live", event: mapped.event };
       if (mapped.kind === "invalid") return { kind: "invalid", reason: mapped.reason };
-      // An unparseable start.dateTime is still a live timed event here: fall back to the raw
-      // string (what the sync did before the port) rather than dropping it as `listEvents` does.
-      const fallback = mapTimedEvent(e, startDateTime);
-      if (fallback.kind === "invalid") return fallback;
-      return { kind: "live", event: fallback.event };
+      // Cancelled and all-day were returned above, so `bad-start` is the only skip left. Never a
+      // `live` event with the raw string: the diff would read it as a reschedule to garbage.
+      return { kind: "bad-start" };
     },
 
     async watch(address) {

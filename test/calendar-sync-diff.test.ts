@@ -89,6 +89,12 @@ describe("diffSnapshot", () => {
     expect(diff).toEqual({ notices: [], cancellations: 0, reschedules: 0, invalid: [] });
   });
 
+  it("a departed event whose start became unparseable → nothing (bad-start, not a reschedule)", () => {
+    const prior = snapshot(timedEvent("evt-1", at(48)));
+    const diff = diffSnapshot(prior, live(), lookups({ "evt-1": { kind: "bad-start" } }), NOW);
+    expect(diff).toEqual({ notices: [], cancellations: 0, reschedules: 0, invalid: [] });
+  });
+
   it("a departed event that turned invalid → no notice, reported in `invalid`", () => {
     const prior = snapshot(timedEvent("evt-1", at(48)));
     const diff = diffSnapshot(
