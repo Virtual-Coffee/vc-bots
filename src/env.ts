@@ -34,9 +34,11 @@ export interface Env {
   /**
    * Public base URL the Worker is reachable at (the Netlify rewrite in front of the Worker). May
    * include a path prefix. Used for the join redirect surfaced in Slack AND as the base for the
-   * Google Calendar watch address (`${PUBLIC_BASE_URL}/google/notify`) — its host must be
-   * domain-verified in Google Cloud Console. Empty/unset falls back to the request origin for the
-   * join redirect (wrangler dev), but a watch can't be registered without it.
+   * Google Calendar watch address (`${PUBLIC_BASE_URL}/google/notify`) — Google requires a
+   * trusted HTTPS certificate there (the push guide lists no domain-registration step; if
+   * `watch start` is refused for the domain, verify it under Cloud Console → Domain verification).
+   * Empty/unset falls back to the request origin for the join redirect (wrangler dev), but a
+   * watch can't be registered without it.
    */
   PUBLIC_BASE_URL: string;
   SLACK_COWORKING_CHANNEL_ID: string;

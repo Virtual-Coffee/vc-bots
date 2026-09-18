@@ -332,9 +332,10 @@ export class CalendarSync extends DurableObject<Env> {
 
   /**
    * The public URL Google posts change notifications to — the Worker's `/google/notify` route under
-   * `PUBLIC_BASE_URL` (the Netlify rewrite host, which must be domain-verified in Google Cloud
-   * Console). There's no inbound request here (cron/alarm), so unlike the join redirect there's no
-   * origin fallback: an empty `PUBLIC_BASE_URL` means no watch can be registered.
+   * `PUBLIC_BASE_URL` (the Netlify rewrite host; Google needs a trusted HTTPS certificate there —
+   * see the `PUBLIC_BASE_URL` note in `src/env.ts`). There's no inbound request here (cron/alarm),
+   * so unlike the join redirect there's no origin fallback: an empty `PUBLIC_BASE_URL` means no
+   * watch can be registered.
    */
   private notifyAddress(): string {
     const base = (this.env.PUBLIC_BASE_URL ?? "").replace(/\/+$/, "");

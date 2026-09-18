@@ -51,8 +51,8 @@
     // cutover is this one line → "google" (docs/adr/0001 §Consequences).
     "EVENT_SOURCE": "cms",
     // Note: the Google Calendar push-notification (watch) address is derived from PUBLIC_BASE_URL
-    // as `${PUBLIC_BASE_URL}/google/notify`; its host must be domain-verified in Google Cloud
-    // Console. Override PUBLIC_BASE_URL in .dev.vars to point a watch at a local tunnel.
+    // as `${PUBLIC_BASE_URL}/google/notify`; Google needs a trusted HTTPS certificate there (see
+    // src/env.ts). Override PUBLIC_BASE_URL in .dev.vars to point a watch at a local tunnel.
     "LOG_LEVEL": "info" // debug | info | warn | error (set LOG_LEVEL=debug in .dev.vars locally)
   }
 }
