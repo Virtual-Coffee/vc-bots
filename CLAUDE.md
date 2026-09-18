@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A single Cloudflare Worker (`vc-bots`) hosting all of VirtualCoffee's Slack/Zoom automation:
-the co-working room, the new-member welcome, the App Home tab, and event announcements. Everything
+the co-working room, the new-member welcome, the App Home tab, event announcements, and the
+weekly availability check-in. Everything
 runs on the edge runtime (`workerd`) — **no `node:*` modules**. Use Web APIs only: `fetch`,
 `crypto.subtle`, `btoa`, `URLSearchParams`, etc.
 
@@ -34,8 +35,9 @@ room message has its own unit suite (`test/room-message.test.ts`) against the fa
 
 ## Architecture
 
-**Request flow.** `src/index.ts` is the Worker entrypoint (`fetch` + `scheduled` cron). `fetch`
-delegates to `src/router.ts`, a plain `method + path` switch (no router lib) over the provider
+**Request flow.** `src/index.ts` is the Worker entrypoint (`fetch` + `scheduled` cron; the
+latter goes to `runCron` in `src/cron.ts`, whose `CRON_JOBS` map is the **single owner of every
+cron string** — cron ↔ job, keyed by the literal expression). `fetch` delegates to `src/router.ts`, a plain `method + path` switch (no router lib) over the provider
 routes `/zoom/webhook`, `/slack/events`, `/slack/interactivity`, `/slack/commands`, plus
 `GET /join/<token>` (the co-working join redirect), `/health` and `HEAD /`.
 All three `POST /slack/*` routes delegate to one path-agnostic `SlackApp`
@@ -135,14 +137,31 @@ the window so re-runs reconcile instead of duplicating; on Mondays it skips its 
 weekly covers it) but still schedules. Event windows are computed in `America/New_York`. Events
 come through the `EventSource` abstraction (`source.ts`); the CMS GraphQL adapter
 (`sources/cms.ts`) is the only source today — a Google Calendar source is planned. Crons fire
-in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * MON` weekly); `CRON_TO_KIND`
-(`src/bots/reminders/index.ts`) must match `triggers.crons` in wrangler.jsonc byte-for-byte,
-weekdays spelled `MON`/`SUN` (Cloudflare is Quartz-style), disable by deploying
-`triggers.crons: []` — `test/reminders-cron.test.ts` enforces the first two (ADR 0005). The
-same `sendReminder` is reused by the `/vc-bot-admin` slash command for manual runs/previews.
-Failure paths with no other surface (the cron run, the Zoom webhook → DO dispatch, the join
-flow) alert `#bot-log` via an explicit `notifyBotLog` call (`src/slack/notify.ts`; a no-op when
-`SLACK_BOTLOG_CHANNEL_ID` is empty) — never hooked into `log` (ADR 0006).
+in **UTC** and are **live** (`0 12 * * *` daily, `0 12 * * MON` weekly, `0 13 * * MON`
+availability); the `CRON_JOBS` keys (`src/cron.ts`) must match `triggers.crons` in
+wrangler.jsonc byte-for-byte, weekdays spelled `MON`/`SUN` (Cloudflare is Quartz-style),
+disable by deploying `triggers.crons: []` — `test/cron.test.ts` enforces the first two (ADR
+0005). The same `sendReminder` is reused by the `/vc-bot-admin` slash command for manual
+runs/previews. Failure paths with no other surface (the cron run, the Zoom webhook → DO
+dispatch, the join flow, the availability refresh) alert `#bot-log` via an explicit
+`notifyBotLog` call (`src/slack/notify.ts`; a no-op when `SLACK_BOTLOG_CHANNEL_ID` is empty)
+— never hooked into `log` (ADR 0006).
+
+**Availability check-in** (`src/bots/availability/`) posts the Monday trio (intro message +
+Tuesday/Thursday *day messages*, each seeded with the five *role* reactions) to
+`SLACK_AVAILABILITY_CHANNEL_ID` (empty = feature off) and rewrites a day message's *sign-up
+sheet* on every `reaction_added` / `reaction_removed` (registered in `src/slack/app.ts`;
+`handleReactionChange` drops anything not on that channel). **Slack's reactions are the source
+of truth** (ADR 0009): `AvailabilitySheet` (`durable-object.ts`, one instance per channel, KV
+storage only — no `migrate()`) stores just `day_messages` `{ tuesday, thursday, postedAtMs }`
+and the cached `bot_user_id`; `refresh(ts, reactor)` returns `"ignored"` for any other ts or
+for the bot's own seed events, else re-reads `reactions.get` and `chat.update`s. Concurrent
+refreshes of one message coalesce through an in-memory `inflight` map (input gates don't cover
+the Slack `fetch`) into one trailing render. `post()` always posts fresh and repoints — no week
+bookkeeping. Layouts and the reaction → sheet projection are pure in `message.ts`
+(`test/availability-message.test.ts`); posting/seeding/coalescing are in
+`test/availability-do.test.ts`. Never call it a roster — that word belongs to the co-working
+session (CONTEXT.md).
 
 **Slack client.** Always `createSlackClient(env)` for outbound calls with no inbound Slack
 request (the CoworkingRoom DO, the cron reminders); inside `SlackApp` handlers it's the same
