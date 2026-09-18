@@ -1,0 +1,56 @@
+{
+  "files": [
+    {
+      "path": "CONTEXT.md",
+      "description": "Domain glossary: the terms to use and the synonyms to avoid"
+    },
+    {
+      "path": "docs/adr/0001-event-model-join-link-and-host-key.md",
+      "description": "Event model, Join Link, host key"
+    },
+    {
+      "path": "docs/adr/0002-join-info-union-and-invalid-events.md",
+      "description": "JoinInfo union and invalid events"
+    },
+    {
+      "path": "docs/adr/0003-zoom-events-serialized-in-the-do.md",
+      "description": "Why CoworkingRoom serialises everything through enqueue"
+    },
+    {
+      "path": "docs/adr/0004-slack-replies-ack-noop-lazy-handler-response-url.md",
+      "description": "Ack no-op, lazy handler, replies via response.ts"
+    },
+    {
+      "path": "docs/adr/0005-event-announcement-crons.md",
+      "description": "Cron → kind mapping; CRON_TO_KIND matches wrangler.jsonc"
+    },
+    {
+      "path": "docs/adr/0006-bot-log-alerting-policy.md",
+      "description": "When a failure path must notifyBotLog"
+    },
+    {
+      "path": "docs/adr/0007-static-slack-authorize-and-self-event-filter.md",
+      "description": "Static Slack authorize; self-event filter; slack-cloudflare-workers imports"
+    },
+    {
+      "path": "docs/adr/0008-eslint-prettier-toolchain.md",
+      "description": "What ESLint/Prettier already enforce — do not re-review it"
+    },
+    {
+      "path": "docs/adr/0009-room-message-owns-the-channel-message.md",
+      "description": "Cards, retire chain, storage pointers, join flow"
+    },
+    {
+      "path": "docs/adr/0010-one-admin-action-union.md",
+      "description": "AdminAction union; slash command and panel are adapters"
+    },
+    {
+      "path": "docs/adr/0011-one-google-calendar-adapter-behind-calendarport.md",
+      "description": "CalendarPort adapter and the calendar watch"
+    },
+    {
+      "path": "docs/adr/0012-provider-wire-types-from-vendored-openapi-specs.md",
+      "description": "createApiClient, generated types, vendored specs"
+    }
+  ]
+}

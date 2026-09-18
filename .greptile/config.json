@@ -1,0 +1,36 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax", "style"],
+  "autoReview": ["open", "push"],
+  "labels": ["greptile-review"],
+  "excludeAuthors": ["app/renovate", "renovate[bot]", "dependabot[bot]", "*-bot"],
+  "ignorePatterns": "worker-configuration.d.ts\npnpm-lock.yaml\nsrc/generated/**\nspecs/google-calendar-v3.openapi.json\nspecs/zoom-meetings.openapi.json\n.wrangler/**\ndist/**",
+  "fixWithAI": true,
+  "sequenceDiagramSection": { "included": false },
+  "rules": [
+    {
+      "id": "verify-before-parse",
+      "rule": "Every provider route (POST /zoom/webhook, POST /slack/*, POST /google/notify) verifies the request signature against the raw body before the body is parsed. Flag any handler that reads or parses the body first.",
+      "scope": ["src/router.ts", "src/zoom/**", "src/slack/**", "src/google/**"],
+      "severity": "high"
+    },
+    {
+      "id": "no-credentials-in-logs",
+      "rule": "Personal join_url values, join tokens, the Zoom host key, GOOGLE_SERVICE_ACCOUNT_KEY, signed JWT assertions, access tokens and the calendar watch token never go into `log.*` or `notifyBotLog` fields. Log event names and ids only.",
+      "scope": ["src/**"],
+      "severity": "high"
+    },
+    {
+      "id": "cron-to-kind-sync",
+      "rule": "CRON_TO_KIND in src/bots/reminders and `triggers.crons` in wrangler.jsonc must match byte-for-byte (ADR 0005). Flag a change to one without the other.",
+      "scope": ["src/bots/reminders/**", "wrangler.jsonc"],
+      "severity": "high"
+    },
+    {
+      "id": "vars-env-sync",
+      "rule": "A new non-secret entry in wrangler.jsonc `vars` needs a matching hand-typed field in src/env.ts (then `pnpm cf-types`). Secrets (`*_TOKEN`, `*_SECRET`, `*_KEY`) never go in `vars`.",
+      "scope": ["wrangler.jsonc", "src/env.ts"],
+      "severity": "medium"
+    }
+  ]
+}
