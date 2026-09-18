@@ -384,6 +384,69 @@ describe("CalendarSync — notify", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Serialization (ADR 0003) — the instance alone doesn't order its handlers; the queue does
+// ---------------------------------------------------------------------------
+
+describe("CalendarSync — serialization (ADR 0003)", () => {
+  /** Park the DO inside its next `listEvents`; `release` lets it continue. */
+  function holdListEvents() {
+    let release!: () => void;
+    fake.hold.listEvents = new Promise<void>((resolve) => (release = resolve));
+    return release;
+  }
+  /** Wait until the DO has entered its `n`th `listEvents` (i.e. it's parked there). */
+  const parkedAt = (n: number) => vi.waitFor(() => expect(fake.attempts.listEvents).toBe(n));
+
+  it("two pushes for the same cancellation post one notice, not two", async () => {
+    const stub = syncStub();
+    const status = await withSync(stub, (instance) => instance.ensureWatch(NOW));
+    fake.setEvents([timedEvent("evt-1", at(48))]);
+    await withSync(stub, (instance) => instance.seed(NOW));
+    fake.setEvents([]); // evt-1 cancelled
+    fake.attempts.listEvents = 0;
+
+    await withSync(stub, async (instance) => {
+      const release = holdListEvents();
+      // Google delivers pushes in bursts: the second lands while the first is still fetching.
+      const first = instance.notify(status.channelId!, NOW);
+      await parkedAt(1);
+      const second = instance.notify(status.channelId!, NOW);
+      expect(instance.queueDepth).toBe(2); // queued behind the parked push, not interleaved
+      release();
+      await Promise.all([first, second]);
+    });
+
+    // One cancellation × three channels — the second push diffed the committed snapshot.
+    expect(slackPosts()).toHaveLength(3);
+    expect(fake.callsTo("getEvent").map((c) => c.args)).toEqual([["evt-1"]]);
+  });
+
+  it("a push arriving while ensureWatch is re-seeding waits for the seed", async () => {
+    const stub = syncStub();
+    const status = await withSync(stub, (instance) => instance.ensureWatch(NOW));
+    await clearSnapshot(stub);
+    fake.setEvents([timedEvent("evt-1", at(48))]);
+    fake.attempts.listEvents = 0;
+
+    await withSync(stub, async (instance) => {
+      const release = holdListEvents();
+      const seeding = instance.ensureWatch(NOW); // no baseline → seeds, parked in listEvents
+      await parkedAt(1);
+      const push = instance.notify(status.channelId!, NOW);
+      expect(instance.queueDepth).toBe(2);
+      release();
+      await Promise.all([seeding, push]);
+    });
+
+    // The push diffed against the seed's baseline: evt-1 was already there, so nothing was
+    // announced as new and no lookup was needed.
+    expect(slackPosts()).toHaveLength(0);
+    expect(fake.callsTo("getEvent")).toHaveLength(0);
+    expect(fake.attempts.listEvents).toBe(3); // seed, then the push's weekly + daily fetches
+  });
+});
+
+// ---------------------------------------------------------------------------
 // processNotification — the I/O around the diff (rules: test/calendar-sync-diff.test.ts)
 // ---------------------------------------------------------------------------
 

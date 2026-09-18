@@ -4,6 +4,7 @@ import type { ReminderEvent } from "../../events";
 import type { CalendarEventLookup, CalendarPort } from "../../google/calendar";
 import { createGoogleCalendarPort } from "../../google/calendar";
 import { log, setLogLevel } from "../../log";
+import { SerialQueue } from "../../serial-queue";
 import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
 import { reconcileStartingSoon } from "../reminders/starting-soon";
@@ -12,9 +13,13 @@ import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
 
 /**
  * Calendar sync — a single singleton Durable Object (addressed elsewhere via
- * `env.CALENDAR_SYNC.getByName("default")`). It serializes Google Calendar push notifications and
- * the daily cron's `ensureWatch` through one instance, so a notification's snapshot diff never
- * races a baseline seed (same race-free rationale as CoworkingRoom).
+ * `env.CALENDAR_SYNC.getByName("default")`). One instance alone does not serialize its handlers
+ * (ADR 0003): every state-mutating entry point — `notify`, `ensureWatch`, `stopWatch`, `seed`,
+ * the alarm — runs through `this.queue`, so a notification's snapshot diff never races a baseline
+ * seed or a second push (two concurrent pushes would each diff the same prior snapshot and post
+ * the same notice everywhere). `watchStatus` is a synchronous read and stays outside the queue.
+ * The queue is in-memory; Google re-delivers a push its receiver died on, so an evicted isolate
+ * costs a retry, not a change.
  *
  * Two jobs:
  * - **Watch lifecycle** (`ensureWatch` / `stopWatch` / `watchStatus`): register a Calendar
@@ -72,6 +77,8 @@ export class CalendarSync extends DurableObject<Env> {
   private readonly sql: SqlStorage;
   // Not readonly: tests swap in a fake (`installCalendarFake`).
   private calendar: CalendarPort;
+  /** Serializes the state-mutating entry points (ADR 0003) — see the class doc. */
+  private readonly queue = new SerialQueue("calendar_sync.queue");
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -98,6 +105,11 @@ export class CalendarSync extends DurableObject<Env> {
     `);
   }
 
+  /** Work items queued or running — readable via `runInDurableObject` so tests can prove interleaving. */
+  get queueDepth(): number {
+    return this.queue.depth;
+  }
+
   // --- Watch lifecycle ---
 
   /**
@@ -106,7 +118,12 @@ export class CalendarSync extends DurableObject<Env> {
    * alarm. Healthy channels are left in place — just re-arm the alarm. Returns the current status
    * (no token).
    */
-  async ensureWatch(nowMs: number = Date.now()): Promise<WatchStatus> {
+  ensureWatch(nowMs: number = Date.now()): Promise<WatchStatus> {
+    return this.queue.run("ensure_watch", () => this.ensureWatchNow(nowMs));
+  }
+
+  /** `ensureWatch` body — for callers already inside the queue (the alarm). */
+  private async ensureWatchNow(nowMs: number): Promise<WatchStatus> {
     const existing = this.getChannel();
 
     if (
@@ -117,7 +134,7 @@ export class CalendarSync extends DurableObject<Env> {
       // Still healthy — keep the renewal alarm armed, and heal the baseline if the first seed
       // failed after this row was persisted or the announced week has rolled over since.
       await this.ctx.storage.setAlarm(existing.expiration_ms - RENEW_BUFFER_MS);
-      if (!(await this.snapshotIsCurrent(nowMs))) await this.seed(nowMs);
+      if (!(await this.snapshotIsCurrent(nowMs))) await this.seedNow(nowMs);
       log.info("calendar_sync.watch_healthy", {
         channelId: existing.id,
         expiresAt: existing.expiration_ms,
@@ -153,7 +170,7 @@ export class CalendarSync extends DurableObject<Env> {
     // Establish the snapshot baseline when it's missing (first-time setup) or stale (the announced
     // week rolled over) so the next notification has something to diff against — otherwise every
     // event would look "new". A current baseline is left alone: see the class doc.
-    if (!(await this.snapshotIsCurrent(nowMs))) await this.seed(nowMs);
+    if (!(await this.snapshotIsCurrent(nowMs))) await this.seedNow(nowMs);
 
     log.info("calendar_sync.watch_created", { channelId, expiresAt: expirationMs });
     return { active: true, channelId, expiresAt: expirationMs };
@@ -164,20 +181,22 @@ export class CalendarSync extends DurableObject<Env> {
    * refuses the stop, the row and alarm are kept and this throws — the watch is still live, and
    * reporting "stopped" would leave a channel pushing at us with no record of it.
    */
-  async stopWatch(): Promise<{ stopped: boolean }> {
-    const existing = this.getChannel();
-    if (!existing) return { stopped: false };
+  stopWatch(): Promise<{ stopped: boolean }> {
+    return this.queue.run("stop_watch", async () => {
+      const existing = this.getChannel();
+      if (!existing) return { stopped: false };
 
-    const result = await this.calendar.stopChannel(existing.id, existing.resource_id);
-    if (result === "failed") {
-      throw new Error(
-        "Google refused to stop the calendar watch channel; the watch is still registered",
-      );
-    }
-    this.sql.exec("DELETE FROM channel");
-    await this.ctx.storage.deleteAlarm();
-    log.info("calendar_sync.watch_stopped", { channelId: existing.id });
-    return { stopped: true };
+      const result = await this.calendar.stopChannel(existing.id, existing.resource_id);
+      if (result === "failed") {
+        throw new Error(
+          "Google refused to stop the calendar watch channel; the watch is still registered",
+        );
+      }
+      this.sql.exec("DELETE FROM channel");
+      await this.ctx.storage.deleteAlarm();
+      log.info("calendar_sync.watch_stopped", { channelId: existing.id });
+      return { stopped: true };
+    });
   }
 
   /**
@@ -197,7 +216,12 @@ export class CalendarSync extends DurableObject<Env> {
    * baseline mid-week notifications diff against; `ensureWatch` calls it only when the snapshot is
    * missing or belongs to a previous week (it is never a routine refresh — see the class doc).
    */
-  async seed(nowMs: number = Date.now()): Promise<void> {
+  seed(nowMs: number = Date.now()): Promise<void> {
+    return this.queue.run("seed", () => this.seedNow(nowMs));
+  }
+
+  /** `seed` body — for callers already inside the queue (`ensureWatchNow`). */
+  private async seedNow(nowMs: number): Promise<void> {
     const range = reminderRange("weekly", nowMs);
     const events = await this.calendar.listEvents(range);
     await this.writeSnapshot(events, range.rangeStart);
@@ -207,15 +231,18 @@ export class CalendarSync extends DurableObject<Env> {
   /**
    * Entry point for the `/google/notify` route. The route already checked the channel token;
    * this checks the channel *id* against the stored row so a stale channel (one a failed stop
-   * left live at Google, or the one just replaced by `ensureWatch`) can't drive a sync.
+   * left live at Google, or the one just replaced by `ensureWatch`) can't drive a sync. The check
+   * runs inside the queue: a queued `ensureWatch` ahead of this push may have replaced the channel.
    */
-  async notify(channelId: string, nowMs: number = Date.now()): Promise<void> {
-    const existing = this.getChannel();
-    if (!existing || existing.id !== channelId) {
-      log.warn("calendar_sync.notify_unknown_channel", { channelId });
-      return;
-    }
-    await this.processNotification(nowMs);
+  notify(channelId: string, nowMs: number = Date.now()): Promise<void> {
+    return this.queue.run("notify", async () => {
+      const existing = this.getChannel();
+      if (!existing || existing.id !== channelId) {
+        log.warn("calendar_sync.notify_unknown_channel", { channelId });
+        return;
+      }
+      await this.processNotificationNow(nowMs);
+    });
   }
 
   /**
@@ -227,7 +254,12 @@ export class CalendarSync extends DurableObject<Env> {
    * Delivery failures don't stop the run: each post and the reconcile are isolated, and one
    * aggregate error is thrown at the end so the caller can alert #bot-log.
    */
-  async processNotification(nowMs: number = Date.now()): Promise<void> {
+  processNotification(nowMs: number = Date.now()): Promise<void> {
+    return this.queue.run("process_notification", () => this.processNotificationNow(nowMs));
+  }
+
+  /** `processNotification` body — for callers already inside the queue (`notify`). */
+  private async processNotificationNow(nowMs: number): Promise<void> {
     const weekly = reminderRange("weekly", nowMs);
     const daily = reminderRange("daily", nowMs);
 
@@ -322,7 +354,7 @@ export class CalendarSync extends DurableObject<Env> {
    */
   override async alarm(): Promise<void> {
     try {
-      await this.ensureWatch();
+      await this.queue.run("alarm", () => this.ensureWatchNow(Date.now()));
     } catch (error) {
       log.error("calendar_sync.alarm_failed", { error: String(error) });
       await notifyBotLog(this.env, "calendar_sync.alarm_failed", { error: String(error) });

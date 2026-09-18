@@ -32,7 +32,8 @@ events (ADR 0002). Written twice, those rules diverged.
   registered one. `reminderRange` computes the window in `America/New_York` (`EASTERN`).
 - **The `CalendarSync` Durable Object (`src/bots/calendar-sync/durable-object.ts`) takes the
   port as an injected field.** It is a singleton (`env.CALENDAR_SYNC.getByName("default")`)
-  that serializes push notifications and the daily cron's `ensureWatch` through one instance.
+  whose `SerialQueue` orders push notifications, the daily cron's `ensureWatch` and the alarm
+  ([0003](0003-zoom-events-serialized-in-the-do.md) — the instance alone does not).
   It owns the watch lifecycle (register, renew a day before the 7-day expiry via its alarm,
   stop) and the snapshot; the diff is pure in `diff.ts` (`departedUpcoming` / `diffSnapshot`)
   and unit-tested without the DO. Tests swap in `test/helpers/calendar-fake.ts`.

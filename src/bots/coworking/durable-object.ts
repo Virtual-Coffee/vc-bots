@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
+import { SerialQueue } from "../../serial-queue";
 import type { InviteLinkPort } from "../../zoom/invite-links";
 import { createZoomInviteLinkPort } from "../../zoom/invite-links";
 import type { ZoomMeetingEvent, ZoomParticipant } from "../../zoom/types";
@@ -70,9 +71,8 @@ export class CoworkingRoom extends DurableObject<Env> {
   // Not readonly: tests swap in fakes (`installInviteLinkFake` / `installRoomChannelFake`).
   private inviteLinks: InviteLinkPort;
   private roomMessage: RoomMessage;
-  /** Tail of the serialized work queue — see `enqueue`. */
-  private queue: Promise<unknown> = Promise.resolve();
-  private pending = 0;
+  /** Serializes the state-mutating handlers — see `enqueue`. */
+  private readonly queue = new SerialQueue("coworking.queue");
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -156,7 +156,7 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   /** Work items queued or running — readable via `runInDurableObject` so tests can prove interleaving. */
   get queueDepth(): number {
-    return this.pending;
+    return this.queue.depth;
   }
 
   /**
@@ -166,25 +166,7 @@ export class CoworkingRoom extends DurableObject<Env> {
    * the interleaving the queue exists for actually happened.
    */
   private enqueue<T>(label: string, work: () => Promise<T>): Promise<T> {
-    const depth = ++this.pending;
-    const queuedAt = Date.now();
-    if (depth > 1) log.info("coworking.queue.wait", { work: label, depth });
-    const run = this.queue.then(async () => {
-      log.debug("coworking.queue.run", { work: label, waitedMs: Date.now() - queuedAt });
-      const startedAt = Date.now();
-      try {
-        return await work();
-      } finally {
-        this.pending--;
-        log.debug("coworking.queue.done", {
-          work: label,
-          ranMs: Date.now() - startedAt,
-          depth: this.pending,
-        });
-      }
-    });
-    this.queue = run.catch(() => undefined);
-    return run;
+    return this.queue.run(label, work);
   }
 
   // --- RPC surface ---

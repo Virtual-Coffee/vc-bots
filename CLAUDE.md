@@ -79,8 +79,9 @@ A new admin operation starts in `actions.ts`, then the surfaces —
 The cron `scheduled()` handler posts daily/weekly summaries and schedules each event's
 starting-soon pair; `sendReminder` is shared with the slash command. Events come from the
 `EVENT_SOURCE` registry (`reminders/source.ts`): `google` is the Google Calendar adapter behind
-`CalendarPort`, with the `CalendarSync` DO keeping the watch; `cms` (Craft GraphQL,
-`reminders/sources/cms.ts`) is the interim default until the cutover (ADR 0001, issue #28). Before
+`CalendarPort`, with the `CalendarSync` DO keeping the watch (it serializes its own work through
+`SerialQueue`, ADR 0003); `cms` (Craft GraphQL, `reminders/sources/cms.ts`) is the interim default
+until the cutover (ADR 0001, issue #28). Before
 changing any of it, read `docs/adr/0005-event-announcement-crons.md` (`CRON_TO_KIND` must
 match `wrangler.jsonc` byte-for-byte — `test/reminders-cron.test.ts` enforces it),
 `docs/adr/0001-event-model-join-link-and-host-key.md` and

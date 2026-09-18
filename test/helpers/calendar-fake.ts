@@ -36,6 +36,13 @@ export interface FakeCalendar extends CalendarPort {
   stopResult: StopChannelResult;
   /** Make the next call of `method` throw `error` (one-shot). */
   failNext(method: CalendarMethod, error: Error): void;
+  /**
+   * When set, every `listEvents` parks on this promise before answering — the in-flight Google
+   * call the DO's queue exists to serialize behind (ADR 0003). `attempts` counts calls as they
+   * *enter* (parked ones included), so a test can wait for the DO to be parked.
+   */
+  hold: { listEvents: Promise<void> | null };
+  readonly attempts: { listEvents: number };
 }
 
 const WEEK_MS = 7 * 86_400_000;
@@ -61,6 +68,8 @@ export function createCalendarFake(initial: ReminderEvent[] = []): FakeCalendar 
     lookups,
     watchResponse: {},
     stopResult: "stopped",
+    hold: { listEvents: null },
+    attempts: { listEvents: 0 },
     callsTo: (method) => calls.filter((c) => c.method === method),
     setEvents(next) {
       events.clear();
@@ -69,6 +78,8 @@ export function createCalendarFake(initial: ReminderEvent[] = []): FakeCalendar 
     failNext: (method, error) => failures.set(method, error),
 
     async listEvents(range: EventRange) {
+      fake.attempts.listEvents++;
+      if (fake.hold.listEvents) await fake.hold.listEvents;
       record("listEvents", range);
       const start = millis(range.rangeStart);
       const end = millis(range.rangeEnd);
