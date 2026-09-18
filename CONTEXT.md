@@ -110,15 +110,19 @@ One message per event day (Tuesday, Thursday) that carries that day's sign-up sh
 _Avoid_: thread, day post
 
 **Role**:
-One of the five things a person can sign up for on a day: Host, MC, Notetaker, Room leader, or Unavailable. Each role has one emoji.
+One of the four things a person can sign up for on a day: Host, MC, Notetaker, or Room leader. Each role has one emoji. Being out is not a role.
+
+**Out**:
+A person who reacted `:x:` on a day message. It overrides their sign-ups for that day: they are dropped from every role while the `:x:` stands, and rendered on the day message's own "Out <day>" line.
+_Avoid_: unavailable role, fifth role
 
 **Sign-up**:
-One person on one role for one day, expressed by reacting with that role's emoji on the day message. Removing the reaction withdraws it.
+One person on one role for one day, expressed by reacting with that role's emoji on the day message. Removing the reaction withdraws it. The easter egg `:all-the-things:` is a sign-up for every role at once.
 _Avoid_: vote, RSVP
 
 **Sign-up sheet**:
-The per-role lists of sign-ups on a day message, projected from the message's own reactions. Slack's reactions are the source of truth; the sheet is a rendering of them.
+The per-role lists of sign-ups on a day message, plus its out line, projected from the message's own reactions. Slack's reactions are the source of truth; the sheet is a rendering of them (ADR 0013, "Projection rules").
 _Avoid_: roster (that is the co-working session's), availability roster
 
 **Seed reactions**:
-The five role reactions the bot adds to each day message right after posting, so people can sign up with one click. They are never sign-ups.
+The four role reactions and `:x:` that the bot adds to each day message right after posting, so people can sign up with one click. They are never sign-ups. `:all-the-things:` is never seeded.

@@ -92,7 +92,7 @@ watch).
 
 **Availability check-in** (`src/bots/availability/`). The Monday 13:00 UTC cron (and
 `/vc-bot-admin availability`) posts the trio — intro message + Tuesday/Thursday day messages,
-each seeded with the five role reactions — to `SLACK_AVAILABILITY_CHANNEL_ID` (empty = feature
+each seeded with the four role reactions plus `:x:` — to `SLACK_AVAILABILITY_CHANNEL_ID` (empty = feature
 off); every `reaction_added` / `reaction_removed` on a day message re-renders its sign-up sheet.
 Slack's reactions are the source of truth — `docs/adr/0013-slack-reactions-are-the-availability-source-of-truth.md`:
 `AvailabilitySheet` (one instance per channel) stores only the day-message pointers and the
