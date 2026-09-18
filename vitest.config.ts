@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 import { unstable_readConfig } from "wrangler";
 import { generateServiceAccountKey } from "./test/helpers/google-key";
 
-// The live cron strings, so test/reminders-cron.test.ts can pin CRON_TO_KIND to wrangler.jsonc.
+// The live cron strings, so test/cron.test.ts can pin CRON_JOBS to wrangler.jsonc.
 const { crons } = unstable_readConfig({ config: "./wrangler.jsonc" }).triggers;
 
 /**

@@ -21,9 +21,9 @@
       "severity": "high"
     },
     {
-      "id": "cron-to-kind-sync",
-      "rule": "CRON_TO_KIND in src/bots/reminders and `triggers.crons` in wrangler.jsonc must match byte-for-byte (ADR 0005). Flag a change to one without the other.",
-      "scope": ["src/bots/reminders/**", "wrangler.jsonc"],
+      "id": "cron-jobs-sync",
+      "rule": "The `CRON_JOBS` keys in src/cron.ts and `triggers.crons` in wrangler.jsonc must match byte-for-byte, weekdays spelled (`MON`), never numeric (ADR 0005). Flag a change to one without the other.",
+      "scope": ["src/cron.ts", "wrangler.jsonc"],
       "severity": "high"
     },
     {
