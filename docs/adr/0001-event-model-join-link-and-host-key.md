@@ -42,7 +42,8 @@ answer is "keep your own datastore" — see
   at derivation, not in `reconcileStartingSoon`.
 - **The host key appears only in the event-admin mirror** and is never logged.
 - **Descriptions are Markdown**, rendered with `slackify-markdown` (pure ESM on unified/remark,
-  runs on workerd). The local `html-to-mrkdwn` converter is gone; there is no HTML tolerance.
+  runs on workerd). The local `html-to-mrkdwn` converter is gone; the Google source has no HTML
+  tolerance. _(The interim CMS source converts Craft's HTML at the edge — 2026-09-18 note below.)_
 - **The CMS source is removed** with the cutover. The `EventSource` registry stays as the
   `EVENT_SOURCE` / admin `[source]` seam, with `google` as its only entry. _(Deferred — see the
   2026-09-18 note below.)_
