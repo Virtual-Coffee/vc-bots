@@ -138,10 +138,12 @@ export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
           handleJoinDismiss(payload, env),
         ),
       )
-      // The reminders "Join Event" button is also a url button — the browser opens Zoom on its
-      // own. This registration exists purely so the click is ACKed instead of 404ing ("no listener
-      // found"), which Slack renders as a warning triangle. No lazy handler: nothing to do.
+      // url buttons: the browser opens the link itself, but Slack still posts a block_actions
+      // payload and renders a warning triangle if it isn't ACKed (404 "no listener found"). No
+      // lazy handler: nothing to do. Ours is the reminders "Join Event" button; virtualcoffee.io's
+      // link buttons all carry a `website_` action_id prefix (its ADR 0016).
       .action(JOIN_EVENT_ACTION_ID, ack)
+      .action(/^website_/, ack)
       .command(
         ADMIN_COMMAND,
         ack,

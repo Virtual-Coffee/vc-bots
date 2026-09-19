@@ -295,6 +295,28 @@ describe("interactivity", () => {
     expect(res.status).toBe(200);
     expect(callsTo(RESPONSE_URL)).toHaveLength(0);
   });
+
+  // virtualcoffee.io's link buttons (its ADR 0016) carry a `website_` action_id prefix and are
+  // matched by a regex, so any of them is ACKed without a per-button registration here.
+  it("website_* url buttons from virtualcoffee.io are ACKed with no follow-up work", async () => {
+    const res = await post(
+      "/slack/interactivity",
+      blockActionBody("website_view_in_admin"),
+      "application/x-www-form-urlencoded",
+    );
+    expect(res.status).toBe(200);
+    expect(callsTo(RESPONSE_URL)).toHaveLength(0);
+  });
+
+  // Pins the catch-all to the prefix: anything else still falls through to slack-edge's 404.
+  it("an unregistered action_id still 404s", async () => {
+    const res = await post(
+      "/slack/interactivity",
+      blockActionBody("unknown_button"),
+      "application/x-www-form-urlencoded",
+    );
+    expect(res.status).toBe(404);
+  });
 });
 
 function viewSubmissionBody(callbackId: string, values: unknown): string {
