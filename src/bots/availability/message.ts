@@ -101,7 +101,7 @@ export interface BuiltMessage {
 const INTRO_TITLE = ":spiral_calendar_pad: Who can help out this week?";
 
 const INTRO_TEXT =
-  "<!channel> Hey friends, who's available this week and is up for leading or taking notes? Both days posted below. Feel free to choose one or multiple options for each day:";
+  "<!channel> Hey friends, who’s available to help out this week? Both days posted below. Feel free to choose one or multiple options for each day:";
 
 const INTRO_HINT =
   ":point_down: Sign up by reacting on a day message — the lists there update themselves.";

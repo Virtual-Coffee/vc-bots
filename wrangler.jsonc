@@ -45,7 +45,7 @@
     "SLACK_ANNOUNCEMENTS_CHANNEL_ID": "C014AAPC09K",
     "SLACK_EVENTADMIN_CHANNEL_ID": "C0360K84NEQ",
     // Hosts channel for the Monday availability check-in. Empty turns the feature off.
-    "SLACK_AVAILABILITY_CHANNEL_ID": "C0B4LSMQK19",
+    "SLACK_AVAILABILITY_CHANNEL_ID": "G01GR1BGRL7",
     // Private bot-log channel for error alerts (cron + co-working DO/Zoom failures). Empty
     // disables alerting; the bot must be invited to the channel before it can post there.
     "SLACK_BOTLOG_CHANNEL_ID": "C0BATRPD3QC",
