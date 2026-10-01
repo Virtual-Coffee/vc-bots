@@ -169,21 +169,6 @@ describe("CoworkingRoom — room message lifecycle", () => {
     expect(retired).not.toContain("coworking_join");
   });
 
-  it("deletes the standing invite left over from the retired lifecycle", async () => {
-    const stub = room("legacy1");
-    const legacyTs = "1699999999.000001";
-    await runInDurableObject(stub, async (_i, state) =>
-      state.storage.put("idle_invite_ts", legacyTs),
-    );
-
-    await send(stub, event("meeting.started", "uuid-1"));
-
-    expect(port.deletes).toEqual([legacyTs]);
-    expect(
-      await runInDurableObject(stub, (_i, state) => state.storage.get("idle_invite_ts")),
-    ).toBeUndefined();
-  });
-
   it("a start with a new uuid force-closes a stale session instead of wedging the room", async () => {
     const stub = room("dbl1");
     await send(stub, event("meeting.started", "uuid-1")); // post #1

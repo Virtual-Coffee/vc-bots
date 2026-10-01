@@ -8,7 +8,7 @@ import {
 import type { Env } from "../../src/env";
 
 /**
- * An in-memory `RoomChannelPort`: records every post / update / delete with its text and blocks,
+ * An in-memory `RoomChannelPort`: records every post / update with its text and blocks,
  * hands out incrementing ts values, and lets a test declare a ts vanished (deleted by hand) so
  * updates against it report `"vanished"` the way the Slack adapter does.
  */
@@ -26,15 +26,12 @@ export interface FakeUpdate extends FakeMessage {
 export interface FakeRoomChannelPort extends RoomChannelPort {
   readonly posts: FakeMessage[];
   readonly updates: FakeUpdate[];
-  readonly deletes: string[];
   /** Updates against this ts report `"vanished"` from now on. */
   vanish(ts: string): void;
   /** When true, `post` resolves to null (Slack answered without a ts). */
   postWithoutTs: boolean;
   /** When set, `update` rejects with this error (a non-vanished Slack failure) instead of recording. */
   updateError: Error | null;
-  /** When set, `delete` rejects with this error. */
-  deleteError: Error | null;
   /**
    * When set, every `post` / `update` parks on this promise before recording — the in-flight
    * Slack call the DO's event queue exists to serialize behind (ADR 0003). `attempts` counts
@@ -51,17 +48,14 @@ export interface FakeRoomChannelPort extends RoomChannelPort {
 export function createFakeRoomChannelPort(): FakeRoomChannelPort {
   const posts: FakeMessage[] = [];
   const updates: FakeUpdate[] = [];
-  const deletes: string[] = [];
   const vanished = new Set<string>();
   let nextTs = 1;
 
   const port: FakeRoomChannelPort = {
     posts,
     updates,
-    deletes,
     postWithoutTs: false,
     updateError: null,
-    deleteError: null,
     hold: { posts: null, updates: null },
     attempts: { posts: 0, updates: 0 },
     vanish: (ts) => vanished.add(ts),
@@ -82,10 +76,6 @@ export function createFakeRoomChannelPort(): FakeRoomChannelPort {
       const result = vanished.has(ts) ? "vanished" : "ok";
       updates.push({ ts, text, blocks, result });
       return result;
-    },
-    async delete(ts) {
-      if (port.deleteError) throw port.deleteError;
-      deletes.push(ts);
     },
   };
   return port;

@@ -34,7 +34,7 @@ differently: a Slack edit that fails should never wedge a session.
   live in `test/zoom-invite-links.test.ts`):
   - `InviteLinkPort` (`createZoomInviteLinkPort`, `src/zoom/invite-links.ts`): S2S token +
     `createInviteLink`.
-  - `RoomChannelPort` (`createSlackRoomChannelPort`): post / update / delete on the co-working
+  - `RoomChannelPort` (`createSlackRoomChannelPort`): post / update on the co-working
     channel. It classifies `message_not_found` / `channel_not_found` as `"vanished"`, so a
     hand-deleted card never wedges the room.
 - **Lifecycle.** `meeting.started` → `open` **always posts** a fresh open card (an edit would
@@ -45,11 +45,10 @@ differently: a Slack edit that fails should never wedge a session.
   roster) with the invite, and it becomes the last closed card.
 - **Retire.** The next room message (`open` for a session, `announceOpen` for an
   announcement) retires the previous card itself, right after posting: it re-renders the
-  last closed card with `{ invite: false }`, closes any lingering open announcement (without
-  invite), and runs the one-shot legacy `idle_invite_ts` delete — so exactly one standing
-  invite exists at a time. Retiring is best-effort: each step is try/caught on its own,
+  last closed card with `{ invite: false }` and closes any lingering open announcement
+  (without invite) — so exactly one standing invite exists at a time. Retiring is best-effort: each step is try/caught on its own,
   warns `coworking.room_msg.retire_failed`, and keeps its pointer for the next takeover to
-  retry (the legacy delete stays one-shot). It never blocks the session.
+  retry. It never blocks the session.
 - **Pointers live in DO storage, written and read only by `RoomMessage`**:
   `room_message:open` (the live card, `{ ts, startedAtMs }` — `open` writes it,
   `showPresence` / `close` read it), `last_closed_message` (the cached `SessionStats`:
