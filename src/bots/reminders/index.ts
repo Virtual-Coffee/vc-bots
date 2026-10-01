@@ -29,20 +29,19 @@ export interface SendResult {
   reason?: "monday" | "no-events";
 }
 
-type Sender = (calendar: CalendarPort, env: Env, nowMs: number) => Promise<SendResult>;
-
-const SENDERS: Record<ReminderName, Sender> = {
-  daily: sendDaily,
-  weekly: sendWeekly,
-};
-
 /** Run one reminder kind. `nowMs` is injectable for tests / the cron's scheduled time. */
 export async function sendReminder(
   name: ReminderName,
   env: Env,
   nowMs: number = Date.now(),
+  calendar: CalendarPort = createGoogleCalendarPort(env),
 ): Promise<SendResult> {
-  return SENDERS[name](createGoogleCalendarPort(env), env, nowMs);
+  switch (name) {
+    case "daily":
+      return sendDaily(calendar, env, nowMs);
+    case "weekly":
+      return sendWeekly(calendar, env, nowMs);
+  }
 }
 
 async function sendDaily(calendar: CalendarPort, env: Env, nowMs: number): Promise<SendResult> {
