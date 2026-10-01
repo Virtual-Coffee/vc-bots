@@ -8,7 +8,7 @@ import type { Env } from "../../env";
 import { log } from "../../log";
 import { descriptionContext, fallbackDate, header, section, titleSection } from "./blocks";
 import type { ReminderMessage } from "./blocks";
-import type { EventRange, ReminderEvent } from "./source";
+import type { EventRange, ReminderEvent } from "../../events";
 
 /**
  * The per-event "Starting Soon" pair: a public announcement to the events channel and an

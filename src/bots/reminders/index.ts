@@ -4,12 +4,9 @@ import { type CalendarPort, createGoogleCalendarPort } from "../../google/calend
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { buildDailyMessage, buildWeeklyMessage } from "./blocks";
-import type { ReminderName } from "./source";
-import { reminderRange } from "./source";
+import type { ReminderName } from "../../events";
+import { reminderRange } from "../../events";
 import { reconcileStartingSoon } from "./starting-soon";
-
-export type { ReminderName } from "./source";
-export { EASTERN } from "./source";
 
 /**
  * Event announcements. `sendReminder` does the actual work and is shared by the cron schedule

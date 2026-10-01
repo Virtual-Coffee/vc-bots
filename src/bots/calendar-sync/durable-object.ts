@@ -8,7 +8,7 @@ import { SerialQueue } from "../../serial-queue";
 import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
 import { reconcileStartingSoon } from "../reminders/starting-soon";
-import { reminderRange } from "../reminders/source";
+import { reminderRange } from "../../events";
 import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
 
 /**

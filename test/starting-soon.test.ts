@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendReminder } from "../src/bots/reminders";
 import { JOIN_EVENT_ACTION_ID } from "../src/bots/reminders/blocks";
-import type { ReminderEvent } from "../src/bots/reminders/source";
+import type { ReminderEvent } from "../src/events";
 import {
   buildStartingSoonAdminMessage,
   buildStartingSoonMessage,
