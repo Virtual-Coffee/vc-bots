@@ -19,32 +19,48 @@ export interface ReminderMessage {
 }
 
 /** "Today's Events" summary for the announcements channel. */
-export function buildDailyMessage(events: ReminderEvent[]): ReminderMessage {
+export function buildDailyMessage(
+  events: ReminderEvent[],
+  eventsChannelId: string,
+): ReminderMessage {
   const blocks: AnyMessageBlock[] = [header("📆 Today's Events Are:")];
   for (const event of events) {
     blocks.push(titleSection(event, false));
     const description = descriptionContext(event);
     if (description) blocks.push(description);
     blocks.push(
-      context("ℹ️ Link to join will be posted about 10 minutes before the event starts."),
+      context(
+        `ℹ️ Link to join will be posted in <#${eventsChannelId}> about 10 minutes before the event starts.`,
+      ),
       { type: "divider" },
     );
   }
 
-  return { text: `Today's events are: ${eventListText(events)}`, blocks };
+  return {
+    text: `Today's events are: ${eventListText(events)}. Links to join will be posted in <#${eventsChannelId}> about 10 minutes before.`,
+    blocks,
+  };
 }
 
 /** "This Week's Events" summary for the announcements channel. */
-export function buildWeeklyMessage(events: ReminderEvent[]): ReminderMessage {
+export function buildWeeklyMessage(
+  events: ReminderEvent[],
+  eventsChannelId: string,
+): ReminderMessage {
   const blocks: AnyMessageBlock[] = [
     header("📆 This Week's Events Are:"),
     ...events.map((event) => section(`*${eventDateToken(event)}*\n${event.title}`)),
-    context("ℹ️ Links to join will be posted about 10 minutes before the event starts."),
+    context(
+      `ℹ️ Links to join will be posted in <#${eventsChannelId}> about 10 minutes before the event starts.`,
+    ),
     { type: "divider" as const },
     context("See details and more events at <https://virtualcoffee.io/events|VirtualCoffee.IO>!"),
   ];
 
-  return { text: `This weeks events are: ${eventListText(events)}`, blocks };
+  return {
+    text: `This weeks events are: ${eventListText(events)}. Links to join will be posted in <#${eventsChannelId}> about 10 minutes before.`,
+    blocks,
+  };
 }
 
 function eventStart(event: ReminderEvent): DateTime {

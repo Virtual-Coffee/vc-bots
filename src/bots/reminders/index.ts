@@ -77,7 +77,7 @@ async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<
     return { posted: false, count: 0, scheduled, reason: "no-events", source: source.name };
   }
 
-  const { text, blocks } = buildDailyMessage(events);
+  const { text, blocks } = buildDailyMessage(events, env.SLACK_EVENTS_CHANNEL_ID);
   await client.chat.postMessage({
     channel: env.SLACK_ANNOUNCEMENTS_CHANNEL_ID,
     text,
@@ -97,7 +97,7 @@ async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise
     return { posted: false, count: 0, reason: "no-events", source: source.name };
   }
 
-  const { text, blocks } = buildWeeklyMessage(events);
+  const { text, blocks } = buildWeeklyMessage(events, env.SLACK_EVENTS_CHANNEL_ID);
   await createSlackClient(env).chat.postMessage({
     channel: env.SLACK_ANNOUNCEMENTS_CHANNEL_ID,
     text,
