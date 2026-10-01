@@ -19,10 +19,9 @@ const STARTED_AT = Date.parse("2026-07-28T13:03:00Z");
 const ENDED_AT = Date.parse("2026-07-28T14:33:00Z");
 const NOW = Date.parse("2026-07-28T15:00:00Z");
 
-/** Storage keys RoomMessage owns (the last two predate the module and carry over from a deployed DO). */
+/** Storage keys RoomMessage owns (the last predates the module and carries over from a deployed DO). */
 const OPEN_KEY = "room_message:open";
 const LAST_CLOSED_KEY = "last_closed_message";
-const LEGACY_KEY = "idle_invite_ts";
 
 let port: FakeRoomChannelPort;
 let storage: ReturnType<typeof createMemoryStorage>;
@@ -435,31 +434,5 @@ describe("announcements", () => {
     port.postWithoutTs = true;
     await room.announceOpen();
     expect(await room.announceClose()).toEqual({ closed: false });
-  });
-});
-
-describe("legacy standing-invite cleanup", () => {
-  it("deletes the retired lifecycle's message once and forgets the pointer", async () => {
-    await storage.put(LEGACY_KEY, "1699999999.000001");
-
-    await room.open(STARTED_AT);
-    expect(port.deletes).toEqual(["1699999999.000001"]);
-    expect(storage.map.has(LEGACY_KEY)).toBe(false);
-
-    await room.open(STARTED_AT);
-    expect(port.deletes).toHaveLength(1); // one-shot
-  });
-
-  it("swallows a failed delete but still forgets the pointer (one-shot either way)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await storage.put(LEGACY_KEY, "1699999999.000001");
-    port.deleteError = new Error("message_not_found");
-
-    await room.open(STARTED_AT);
-    expect(storage.map.get(OPEN_KEY)).toMatchObject({ ts: port.posts[0]!.ts }); // still opens
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("coworking.legacy_invite.delete_failed"),
-    );
-    expect(storage.map.has(LEGACY_KEY)).toBe(false);
   });
 });

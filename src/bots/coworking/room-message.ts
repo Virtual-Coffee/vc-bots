@@ -16,7 +16,7 @@ import { dateToken } from "../../slack/date";
  * happened (`open` / `showPresence` / `close` / `announceOpen` / `announceClose`); the module
  * decides what the channel should look like, and no message ts ever crosses back to the DO.
  *
- * Slack itself sits behind `RoomChannelPort` — three calls (post / update / delete) against the
+ * Slack itself sits behind `RoomChannelPort` — two calls (post / update) against the
  * co-working channel — so the message lifecycle is testable against a fake port with no network.
  *
  * Standing-invite chain: every ended card is rendered with the "start the next session" button,
@@ -28,7 +28,7 @@ import { dateToken } from "../../slack/date";
  * (without invite) by the next takeover.
  */
 
-/** The seam to Slack: the three operations the room message needs against the co-working channel. */
+/** The seam to Slack: the two operations the room message needs against the co-working channel. */
 export interface RoomChannelPort {
   /** Post a new message; resolves to its ts, or null when Slack returned none. */
   post(text: string, blocks: AnyMessageBlock[]): Promise<string | null>;
@@ -38,12 +38,11 @@ export interface RoomChannelPort {
    * wedging the room on a dead ts. Any other failure throws.
    */
   update(ts: string, text: string, blocks: AnyMessageBlock[]): Promise<"ok" | "vanished">;
-  delete(ts: string): Promise<void>;
 }
 
 /**
  * The slice of Durable Object storage the room message keeps its pointers in (`room_message:open`,
- * `last_closed_message`, `room_message:announcement`, plus the one-shot legacy `idle_invite_ts`).
+ * `last_closed_message`, `room_message:announcement`).
  */
 export type RoomMessageStorage = Pick<DurableObjectStorage, "get" | "put" | "delete">;
 
@@ -81,9 +80,6 @@ const LAST_CLOSED_KEY = "last_closed_message";
 
 /** Storage key of the open announcement (an admin-posted room message with no session behind it). */
 const ANNOUNCEMENT_KEY = "room_message:announcement";
-
-/** Storage key of the retired lifecycle's standing-invite message, cleaned up once and forgotten. */
-const LEGACY_ROOM_MESSAGE_KEY = "idle_invite_ts";
 
 type OpenCard = { ts: string; startedAtMs: number };
 type LastClosed = { ts: string; stats: SessionStats };
@@ -200,8 +196,6 @@ export class RoomMessage {
    *    roster is gone from SQL by now).
    * 2. A lingering open announcement is closed without the invite (announced-at as Started, now
    *    as Ended, no roster).
-   * 3. One-shot legacy cleanup: the retired lifecycle's standing-invite message carried no
-   *    history worth keeping, so it's deleted outright rather than left with a live button.
    */
   private async retirePrevious(): Promise<void> {
     const last = await this.storage.get<LastClosed>(LAST_CLOSED_KEY);
@@ -228,18 +222,6 @@ export class RoomMessage {
           }),
         ),
       );
-    }
-
-    // One-shot regardless of outcome: `port.delete` doesn't classify a hand-deleted message as
-    // vanished, so keeping the pointer would warn on every takeover forever.
-    const legacyTs = await this.storage.get<string>(LEGACY_ROOM_MESSAGE_KEY);
-    if (legacyTs) {
-      try {
-        await this.port.delete(legacyTs);
-      } catch (err) {
-        log.warn("coworking.legacy_invite.delete_failed", { ts: legacyTs, err: String(err) });
-      }
-      await this.storage.delete(LEGACY_ROOM_MESSAGE_KEY);
     }
   }
 
@@ -330,9 +312,6 @@ export function createSlackRoomChannelPort(env: Env): RoomChannelPort {
         }
         throw err;
       }
-    },
-    async delete(ts) {
-      await createSlackClient(env).chat.delete({ channel, ts });
     },
   };
 }

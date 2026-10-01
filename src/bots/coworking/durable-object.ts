@@ -31,6 +31,15 @@ const STALE_SESSION_MS = 18 * 60 * 60 * 1000;
  *  (`DEFAULT_TTL` in zoom/invite-links.ts), past which the link is dead anyway. */
 const INVITE_LINK_TTL_MS = 7200 * 1000;
 
+/**
+ * Storage key of the joins that reached the DO before their instance's `meeting.started` — Zoom
+ * sends the pair milliseconds apart, and the join can win the race to the queue (ADR 0003).
+ */
+const PENDING_JOINS_KEY = "pending_joins";
+
+/** How long a buffered join waits for its `meeting.started` before it's dropped. */
+const PENDING_JOIN_TTL_MS = 30 * 1000;
+
 /** Zoom pre-fill name when the member's Slack profile couldn't be read. Only ever sent to Zoom —
  *  it is never stored in `member_link`, so it can't correlate anyone. */
 const FALLBACK_DISPLAY_NAME = "VirtualCoffee member";
@@ -49,6 +58,8 @@ type SessionRow = {
   status: string;
   peak_participants: number | null;
 };
+
+type PendingJoin = { uuid: string; event: ZoomMeetingEvent; at: number };
 
 type MemberLinkRow = {
   slack_user_id: string;
@@ -315,22 +326,42 @@ export class CoworkingRoom extends DurableObject<Env> {
 
     await this.ctx.storage.setAlarm(Date.now() + STALE_SESSION_MS);
     log.info("coworking.started", { instance: uuid });
+
+    await this.replayPendingJoins(uuid);
   }
 
   private async onParticipantJoined(event: ZoomMeetingEvent): Promise<void> {
     const uuid = instanceUuid(event);
     const session = this.getSession(uuid);
-    if (session?.status !== "active") {
+    if (!session) {
+      // Not started yet — hold the join until `meeting.started` replays it.
+      const pending = await this.loadPendingJoins();
+      pending.push({ uuid, event, at: Date.now() });
+      await this.savePendingJoins(pending);
+      log.info("coworking.joined.buffered", { instance: uuid });
+      return;
+    }
+    if (session.status !== "active") {
       log.warn("coworking.joined.drop_no_session", { instance: uuid });
-      return; // no open session — dropped, not buffered (ADR 0003)
+      return; // the instance already ended — a straggler, nothing to replay it into
     }
 
+    if (this.recordJoin(event)) await this.updatePresence(session);
+  }
+
+  /**
+   * Store one join against its (active) session and bump the peak. Presence is left to the
+   * caller, so a replay of several buffered joins re-renders the card once. False when the event
+   * carries no usable participant.
+   */
+  private recordJoin(event: ZoomMeetingEvent): boolean {
+    const uuid = instanceUuid(event);
     const participant = event.payload.object.participant;
-    if (!participant) return;
+    if (!participant) return false;
     const id = participantIdentity(participant);
     if (!id.zoomUserId) {
       log.debug("coworking.joined.drop_no_id", { instance: uuid });
-      return;
+      return false;
     }
 
     log.debug("coworking.join.correlate", { instance: uuid });
@@ -366,8 +397,8 @@ export class CoworkingRoom extends DurableObject<Env> {
       uuid,
     );
 
-    await this.updatePresence(session);
     log.info("coworking.joined", { instance: uuid, as: slackUserId ? "member" : "guest" });
+    return true;
   }
 
   private async onParticipantLeft(event: ZoomMeetingEvent): Promise<void> {
@@ -377,6 +408,18 @@ export class CoworkingRoom extends DurableObject<Env> {
     const participant = event.payload.object.participant;
     if (!participant) return;
     const id = participantIdentity(participant);
+
+    if (!session) {
+      // In and out before `meeting.started`: cancel the buffered join so the replay skips them.
+      const pending = await this.loadPendingJoins();
+      const kept = pending.filter((p) => !(p.uuid === uuid && joinIdentity(p) === id.zoomUserId));
+      await this.savePendingJoins(kept);
+      log.info("coworking.left.buffered_cancel", {
+        instance: uuid,
+        cancelled: pending.length - kept.length,
+      });
+      return;
+    }
 
     log.debug("coworking.left.lookup", { instance: uuid });
     const row = this.sql
@@ -399,7 +442,7 @@ export class CoworkingRoom extends DurableObject<Env> {
       uuid,
     );
 
-    if (session) await this.updatePresence(session);
+    await this.updatePresence(session);
     log.info("coworking.left", { instance: uuid });
   }
 
@@ -410,6 +453,42 @@ export class CoworkingRoom extends DurableObject<Env> {
   }
 
   // --- Helpers ---
+
+  /**
+   * Record this instance's buffered joins now that its session row exists, and only then drop
+   * them from the buffer — a throw mid-replay leaves them to expire with a warn, not vanish.
+   */
+  private async replayPendingJoins(uuid: string): Promise<void> {
+    const pending = await this.loadPendingJoins();
+    const mine = pending.filter((p) => p.uuid === uuid);
+
+    let recorded = 0;
+    for (const p of mine) if (this.recordJoin(p.event)) recorded++;
+    await this.savePendingJoins(pending.filter((p) => p.uuid !== uuid)); // also persists the prune
+    if (mine.length === 0) return;
+
+    const session = this.getSession(uuid);
+    if (recorded > 0 && session) await this.updatePresence(session);
+    log.info("coworking.joined.replayed", { instance: uuid, count: recorded });
+  }
+
+  /**
+   * The buffered joins still inside their TTL. Expired ones are data loss — their instance never
+   * started — so each warns; the caller's save drops them from storage.
+   */
+  private async loadPendingJoins(): Promise<PendingJoin[]> {
+    const all = (await this.ctx.storage.get<PendingJoin[]>(PENDING_JOINS_KEY)) ?? [];
+    const cutoff = Date.now() - PENDING_JOIN_TTL_MS;
+    for (const p of all) {
+      if (p.at < cutoff) log.warn("coworking.joined.buffer_expired", { instance: p.uuid });
+    }
+    return all.filter((p) => p.at >= cutoff);
+  }
+
+  private async savePendingJoins(pending: PendingJoin[]): Promise<void> {
+    if (pending.length > 0) await this.ctx.storage.put(PENDING_JOINS_KEY, pending);
+    else await this.ctx.storage.delete(PENDING_JOINS_KEY);
+  }
 
   private async closeSession(session: SessionRow, endedAt: number): Promise<void> {
     const stats: SessionStats = {
@@ -534,6 +613,12 @@ function instanceUuid(event: ZoomMeetingEvent): string {
 /** Event timestamp in ms — prefer Zoom's `event_ts`, fall back to wall clock. */
 function eventTimeMs(event: ZoomMeetingEvent): number {
   return typeof event.event_ts === "number" ? event.event_ts : Date.now();
+}
+
+/** The zoom user id a buffered join was for ("" when it carried no participant). */
+function joinIdentity(p: PendingJoin): string {
+  const participant = p.event.payload.object.participant;
+  return participant ? participantIdentity(participant).zoomUserId : "";
 }
 
 function participantIdentity(p: ZoomParticipant): ParticipantIdentity {
