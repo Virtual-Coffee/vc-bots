@@ -33,8 +33,15 @@ as a presence card.
 - **The router ACKs Zoom immediately.** `POST /zoom/webhook` returns `200` and dispatches to
   the DO in `ctx.waitUntil`. Awaiting the RPC never provided ordering (two Worker requests are
   independent) and, with a queue, would only risk Zoom's ~3 s timeout and a retry storm.
-- **A dropped join logs at `warn`.** `coworking.joined.drop_no_session` is data loss, not
-  chatter.
+- **A join that beats `meeting.started` is buffered, not dropped.** Zoom sends the pair
+  milliseconds apart and the join can reach the queue first (seen 2026-09-27: 1 ms apart at
+  Zoom, the join ran first). A join for an instance with no session row waits in the
+  `pending_joins` storage key for up to 30 s (`coworking.joined.buffered`, `info`);
+  `onMeetingStarted` replays that instance's joins once the session row exists
+  (`coworking.joined.replayed`), and a leave before the start cancels its buffered join.
+- **A lost join logs at `warn`.** A join for an instance that already ended
+  (`coworking.joined.drop_no_session`) and a buffered join whose start never came
+  (`coworking.joined.buffer_expired`) are data loss, not chatter.
 - **The queue logs when it actually queues.** `coworking.queue.wait` (`info`, with the work's
   label and depth) fires only when an item lands behind in-flight work — the interleaving this
   ADR exists for. Per-item `coworking.queue.run` / `.done` (wait and run ms) are `debug`.
@@ -48,9 +55,9 @@ as a presence card.
 - The queue is in-memory. If the isolate is evicted mid-queue, the pending RPCs die with it.
   Zoom has already been ACKed, so those events are lost — no worse than before, when the
   in-flight handler died the same way.
-- Zoom delivering `participant_joined` *before* `meeting.started` is still unhandled (the
-  join is dropped with a warn). It was not observed in the logs; if it turns up, the fix is to
-  buffer joins for an unknown instance and replay them on `meeting.started`.
+- The early-join buffer lives in DO storage, not the in-memory queue, so it survives an
+  isolate eviction between the join and the start. Expired entries are pruned (and warned)
+  whenever the buffer is next read.
 - Tests in `test/coworking-do.test.ts` ("event serialization") reproduce both windows by
   parking the DO inside a stubbed `fetch` and delivering a second event before releasing it.
 

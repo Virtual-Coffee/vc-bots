@@ -20,7 +20,7 @@ import {
  * room channel (`test/helpers/room-channel-fake.ts`) and the invite-link mint
  * (`test/helpers/invite-link-fake.ts`). No fetch, no Slack, no Zoom. Card layouts and the
  * standing-invite pointer transitions are covered in room-message.test.ts; this suite asserts
- * the session rows and which message the DO told RoomMessage to post / edit / delete.
+ * the session rows and which message the DO told RoomMessage to post / edit.
  */
 
 let port: FakeRoomChannelPort;
@@ -103,6 +103,9 @@ async function participants(stub: RoomStub) {
   return runInDurableObject(stub, (_i, state) =>
     state.storage.sql.exec("SELECT * FROM participant").toArray(),
   );
+}
+async function pendingJoins(stub: RoomStub) {
+  return runInDurableObject(stub, (_i, state) => state.storage.get("pending_joins"));
 }
 
 // --- tests ---
@@ -452,15 +455,80 @@ describe("CoworkingRoom — participant correlation & presence", () => {
     expect(parts[0]?.left_at).not.toBeNull();
     expect(port.lastUpdateJson()).not.toContain("Ada");
   });
+});
 
-  it("drops a participant_joined with no active session", async () => {
-    const stub = room("c5");
+describe("CoworkingRoom — joins that beat meeting.started (#25)", () => {
+  const ada = { user_id: "p1", user_name: "Ada" };
+
+  it("buffers the join and replays it onto the open card when the session starts", async () => {
+    const stub = room("e1");
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada));
     await send(
       stub,
-      event("meeting.participant_joined", "uuid-1", { user_id: "p1", user_name: "Ada" }),
+      event("meeting.participant_joined", "uuid-2", { user_id: "p2", user_name: "Bo" }),
     );
     expect(await participants(stub)).toHaveLength(0);
     expect(port.updates).toHaveLength(0);
+
+    await send(stub, event("meeting.started", "uuid-1"));
+
+    const parts = await participants(stub);
+    expect(parts).toHaveLength(1);
+    expect(parts[0]?.display_name).toBe("Ada");
+    expect((await sessions(stub))[0]?.peak_participants).toBe(1);
+    expect(port.updates).toHaveLength(1); // one presence render for the whole replay
+    expect(port.lastUpdateJson()).toContain("Ada");
+    // Only the started instance's join was taken; the other keeps waiting.
+    expect(await pendingJoins(stub)).toEqual([expect.objectContaining({ uuid: "uuid-2" })]);
+  });
+
+  it("a leave before the start cancels the buffered join", async () => {
+    const stub = room("e2");
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada));
+    await send(stub, event("meeting.participant_left", "uuid-1", ada));
+    expect(await pendingJoins(stub)).toBeUndefined();
+
+    await send(stub, event("meeting.started", "uuid-1"));
+    expect(await participants(stub)).toHaveLength(0);
+    expect(port.updates).toHaveLength(0);
+  });
+
+  it("drops a buffered join whose start comes after the TTL, with a warn", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const stub = room("e3");
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada));
+
+    now.mockReturnValue(1_700_000_000_000 + 31_000);
+    await send(stub, event("meeting.started", "uuid-1"));
+    now.mockRestore();
+
+    expect(await participants(stub)).toHaveLength(0);
+    expect(await pendingJoins(stub)).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("coworking.joined.buffer_expired"));
+    warn.mockRestore();
+  });
+
+  it("still drops a join for an instance that already ended, without buffering it", async () => {
+    const stub = room("e4");
+    await send(stub, event("meeting.started", "uuid-1"));
+    await send(stub, event("meeting.ended", "uuid-1"));
+    const updates = port.updates.length;
+
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada));
+    expect(await participants(stub)).toHaveLength(0);
+    expect(await pendingJoins(stub)).toBeUndefined();
+    expect(port.updates).toHaveLength(updates);
+  });
+
+  it("a duplicate meeting.started doesn't replay the join twice", async () => {
+    const stub = room("e5");
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada));
+    await send(stub, event("meeting.started", "uuid-1"));
+    await send(stub, event("meeting.started", "uuid-1"));
+
+    expect(await participants(stub)).toHaveLength(1);
+    expect(port.updates).toHaveLength(1);
   });
 });
 
