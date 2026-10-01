@@ -36,7 +36,10 @@ export function buildDailyMessage(
     );
   }
 
-  return { text: `Today's events are: ${eventListText(events)}`, blocks };
+  return {
+    text: `Today's events are: ${eventListText(events)}. Links to join will be posted in <#${eventsChannelId}> about 10 minutes before.`,
+    blocks,
+  };
 }
 
 /** "This Week's Events" summary for the announcements channel. */
@@ -54,7 +57,10 @@ export function buildWeeklyMessage(
     context("See details and more events at <https://virtualcoffee.io/events|VirtualCoffee.IO>!"),
   ];
 
-  return { text: `This weeks events are: ${eventListText(events)}`, blocks };
+  return {
+    text: `This weeks events are: ${eventListText(events)}. Links to join will be posted in <#${eventsChannelId}> about 10 minutes before.`,
+    blocks,
+  };
 }
 
 function eventStart(event: ReminderEvent): DateTime {

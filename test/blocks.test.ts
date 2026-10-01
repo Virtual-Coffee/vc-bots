@@ -23,6 +23,7 @@ describe("buildDailyMessage", () => {
   it("renders the header, per-event sections without buttons, and join-link notices", () => {
     const { text, blocks } = buildDailyMessage(events, "C0EVENTS");
     expect(text).toContain("Today's events are: Lunch & Learn");
+    expect(text).toContain("posted in <#C0EVENTS>");
     expect(blocks[0]).toMatchObject({ type: "header", text: { text: "📆 Today's Events Are:" } });
     expect(json(blocks)).not.toContain('"button"'); // no Join buttons in the summary
     expect(json(blocks)).toContain(
@@ -45,6 +46,7 @@ describe("buildWeeklyMessage", () => {
       "C0EVENTS",
     );
     expect(text).toContain("This weeks events are:");
+    expect(text).toContain("posted in <#C0EVENTS>");
     expect(blocks[0]).toMatchObject({
       type: "header",
       text: { text: "📆 This Week's Events Are:" },
