@@ -5,7 +5,7 @@ import type {
   SlackAPIClient,
 } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
-import { type CalendarPort } from "../../google/calendar";
+import type { CalendarPort } from "../../google/calendar";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { descriptionContext, fallbackDate, header, section, titleSection } from "./blocks";

@@ -212,7 +212,8 @@ export class CalendarSync extends DurableObject<Env> {
   }
 
   /**
-   * Overwrite the snapshot to match the current weekly window — no notices, no starting-soon sync. The
+   * Overwrite the snapshot to match the current weekly window — no notices, no starting-soon
+   * sync. The
    * baseline mid-week notifications diff against; `ensureWatch` calls it only when the snapshot is
    * missing or belongs to a previous week (it is never a routine refresh — see the class doc).
    */
@@ -251,8 +252,8 @@ export class CalendarSync extends DurableObject<Env> {
    * the three event channels and syncs the scheduled "Starting Soon" queue for the daily
    * window.
    *
-   * Delivery failures don't stop the run: each post and the starting-soon sync are isolated, and one
-   * aggregate error is thrown at the end so the caller can alert #bot-log.
+   * Delivery failures don't stop the run: each post and the starting-soon sync are isolated, and
+   * one aggregate error is thrown at the end so the caller can alert #bot-log.
    */
   processNotification(nowMs: number = Date.now()): Promise<void> {
     return this.queue.run("process_notification", () => this.processNotificationNow(nowMs));

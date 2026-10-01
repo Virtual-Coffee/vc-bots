@@ -12,14 +12,7 @@ const MONDAY_NOW = Date.parse("2026-05-25T12:00:00Z");
 let rec: FetchRecorder;
 
 beforeEach(() => {
-  rec = installFetchRecorder({
-    respond(call) {
-      if (call.url.includes("/api/chat.scheduledMessages.list")) {
-        return Response.json({ ok: true, scheduled_messages: [] });
-      }
-      return undefined;
-    },
-  });
+  rec = installFetchRecorder();
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -50,6 +43,26 @@ describe("sendReminder — daily", () => {
 
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(2);
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
+  });
+
+  it("posts the summary after the immediate post; count includes started events, scheduled does not", async () => {
+    const calendar = createCalendarFake([
+      evt("1", "2026-05-28T12:08:00"), // slot fired 2 min ago: the daily run posts the pair now
+      evt("2", "2026-05-28T18:00:00"),
+    ]);
+    const started = [evt("3", "2026-05-28T11:00:00")];
+    const listEvents = calendar.listEvents.bind(calendar);
+    calendar.listEvents = async (range) => [...started, ...(await listEvents(range))];
+
+    const result = await sendReminder("daily", env, NOW, calendar);
+    expect(result).toEqual({ posted: true, count: 3, scheduled: 2 });
+
+    const posts = forms("/api/chat.postMessage");
+    // fired pair (public + admin), then the summary
+    expect(posts).toHaveLength(3);
+    expect(posts[0]?.get("text")).toContain("Starting soon:");
+    expect(posts[2]?.get("channel")).toBe(env.SLACK_ANNOUNCEMENTS_CHANNEL_ID);
+    expect(forms("/api/chat.scheduleMessage")).toHaveLength(2);
   });
 
   it("posts nothing when there are no events", async () => {

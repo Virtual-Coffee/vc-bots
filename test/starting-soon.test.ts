@@ -7,7 +7,7 @@ import {
   buildStartingSoonMessage,
   syncStartingSoon,
 } from "../src/bots/reminders/starting-soon";
-import type { JoinInfo, ReminderEvent } from "../src/events";
+import { type JoinInfo, type ReminderEvent, reminderRange } from "../src/events";
 import type { GoogleCalendarEvent } from "../src/google/calendar";
 import { parseZoomMeetingId } from "../src/zoom/join-link";
 import { createCalendarFake } from "./helpers/calendar-fake";
@@ -77,7 +77,7 @@ function evt(id: string, startUtc: string, location?: string): GoogleCalendarEve
   };
 }
 
-/** A `ReminderEvent` at `startUtc` (ISO, UTC); Zoom join with a host key unless `join` says otherwise. */
+/** A `ReminderEvent` at `startUtc` (ISO, UTC); `reminderEvent`'s Zoom join unless `join` is given. */
 function at(id: string, startUtc: string, join?: JoinInfo): ReminderEvent {
   return reminderEvent({
     id,
@@ -152,8 +152,8 @@ describe("syncStartingSoon", () => {
   it.each(["daily-run", "calendar-change"] as const)(
     "%s: posts immediately when the slot is too near for Slack to schedule",
     async (trigger) => {
-      // +11 min: postAt is still ahead of now, but under Slack's scheduling margin.
-      const calendar = createCalendarFake([at("1", "2026-05-28T12:11:00")]);
+      // +10.5 min: postAt is 30 s ahead of now, inside Slack's 60 s scheduling margin.
+      const calendar = createCalendarFake([at("1", "2026-05-28T12:10:30")]);
       const result = await syncStartingSoon(calendar, env, NOW, trigger);
       expect(result.scheduled).toBe(1);
 
@@ -196,7 +196,9 @@ describe("syncStartingSoon", () => {
   it("lists the daily window through the calendar port", async () => {
     const calendar = createCalendarFake([at("1", "2026-05-28T18:00:00")]);
     await syncStartingSoon(calendar, env, NOW, "daily-run");
-    expect(calendar.callsTo("listEvents")).toHaveLength(1);
+    expect(calendar.callsTo("listEvents").map((c) => c.args)).toEqual([
+      [reminderRange("daily", NOW)],
+    ]);
   });
 
   it("deletes previously scheduled messages in the window before re-scheduling", async () => {
@@ -209,9 +211,10 @@ describe("syncStartingSoon", () => {
     expect(deletes[0]?.get("channel")).toBe("COLD");
     expect(deletes[0]?.get("scheduled_message_id")).toBe("QSTALE");
 
-    const order = rec.calls.map((c: { url: string }) => c.url);
-    const lastDelete = order.lastIndexOf(
-      order.filter((u) => u.includes("deleteScheduledMessage")).at(-1) ?? "",
+    const order = rec.calls.map((c) => c.url);
+    // `findLastIndex` is ES2023; the tsconfig lib is ES2022.
+    const lastDelete = Math.max(
+      ...order.flatMap((u, i) => (u.includes("deleteScheduledMessage") ? [i] : [])),
     );
     const firstSchedule = order.findIndex((u) => u.includes("chat.scheduleMessage"));
     expect(lastDelete).toBeLessThan(firstSchedule);
@@ -231,13 +234,15 @@ describe("syncStartingSoon", () => {
   });
 
   it("shows the host key only in the event-admin mirror", async () => {
-    const calendar = createCalendarFake([at("1", "2026-05-28T18:00:00")]);
-    await syncStartingSoon(calendar, env, NOW, "daily-run");
+    const event = at("1", "2026-05-28T18:00:00");
+    await syncStartingSoon(createCalendarFake([event]), env, NOW, "daily-run");
 
     const scheduled = forms("/api/chat.scheduleMessage");
     expect(scheduled).toHaveLength(2);
+    const hostKey = event.join.kind === "zoom" ? event.join.hostKey : "";
+    expect(hostKey).not.toBe("");
     expect(scheduled[0]?.get("blocks")).not.toContain("*Host Code:*"); // public
-    expect(scheduled[1]?.get("blocks")).toContain("*Host Code:* 9876"); // admin
+    expect(scheduled[1]?.get("blocks")).toContain(`*Host Code:* ${hostKey}`); // admin
   });
 
   it("omits the host code line for a non-Zoom Join Link", async () => {
