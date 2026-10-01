@@ -2,14 +2,15 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendReminder } from "../src/bots/reminders";
 import { JOIN_EVENT_ACTION_ID } from "../src/bots/reminders/blocks";
-import type { ReminderEvent } from "../src/events";
 import {
   buildStartingSoonAdminMessage,
   buildStartingSoonMessage,
+  syncStartingSoon,
 } from "../src/bots/reminders/starting-soon";
-import type { JoinInfo } from "../src/events";
+import type { JoinInfo, ReminderEvent } from "../src/events";
 import type { GoogleCalendarEvent } from "../src/google/calendar";
 import { parseZoomMeetingId } from "../src/zoom/join-link";
+import { createCalendarFake } from "./helpers/calendar-fake";
 import { type FetchRecorder, HOST_CODE, installFetchRecorder } from "./helpers/fetch-recorder";
 
 const FALLBACK_CHANNEL = "C017WAKN883";
@@ -37,14 +38,24 @@ const ZOOM_LOCATION = "https://us02web.zoom.us/j/81323022832?pwd=abc123";
 let rec: FetchRecorder;
 let googleEvents: GoogleCalendarEvent[];
 let staleScheduled: Array<{ id: string; channel_id: string; post_at: number }>;
+let scheduledPages: Array<Array<{ id: string; channel_id: string; post_at: number }>> | null;
 
 beforeEach(() => {
   googleEvents = [];
   staleScheduled = [];
+  scheduledPages = null;
   rec = installFetchRecorder({
     googleEvents: () => googleEvents,
     respond(call) {
       if (call.url.includes("/api/chat.scheduledMessages.list")) {
+        if (scheduledPages) {
+          const page = scheduledPages.shift() ?? [];
+          return Response.json({
+            ok: true,
+            scheduled_messages: page,
+            response_metadata: { next_cursor: scheduledPages.length > 0 ? "next" : "" },
+          });
+        }
         return Response.json({ ok: true, scheduled_messages: staleScheduled });
       }
       return undefined;
@@ -53,16 +64,9 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-/**
- * A timed calendar event at `startUtc` (ISO, UTC); `location` is the Join Link. A Zoom Join
- * Link carries the `HOST_CODE` private property unless `hostCode` overrides it (null = none).
- */
-function evt(
-  id: string,
-  startUtc: string,
-  location?: string,
-  hostCode: string | null = location && parseZoomMeetingId(location) ? HOST_CODE : null,
-): GoogleCalendarEvent {
+/** A Google wire event at `startUtc` (ISO, UTC), for the end-to-end smoke test. */
+function evt(id: string, startUtc: string, location?: string): GoogleCalendarEvent {
+  const hostCode = location && parseZoomMeetingId(location) ? HOST_CODE : null;
   return {
     id,
     summary: `Event ${id}`,
@@ -73,15 +77,26 @@ function evt(
   };
 }
 
+/** A `ReminderEvent` at `startUtc` (ISO, UTC); Zoom join with a host key unless `join` says otherwise. */
+function at(id: string, startUtc: string, join?: JoinInfo): ReminderEvent {
+  return reminderEvent({
+    id,
+    title: `Event ${id}`,
+    startsAt: `${startUtc}.000Z`,
+    description: null,
+    ...(join ? { join } : {}),
+  });
+}
+
 function forms(fragment: string): URLSearchParams[] {
   return rec.callsTo(fragment).map((c) => rec.form(c));
 }
 
-describe("sendReminder — daily", () => {
+describe("sendReminder — daily, end to end on Google wire events", () => {
   it("schedules a public + admin pair per event and posts the summary", async () => {
     googleEvents = [
       evt("1", "2026-05-28T18:00:00"), // +6h
-      evt("2", "2026-05-28T20:00:00"), // +8h
+      evt("2", "2026-05-28T20:00:00", ZOOM_LOCATION), // +8h
     ];
     const result = await sendReminder("daily", env, NOW);
     expect(result).toEqual({ posted: true, count: 2, scheduled: 2 });
@@ -99,93 +114,142 @@ describe("sendReminder — daily", () => {
       String(Date.parse("2026-05-28T18:00:00Z") / 1000 - 600),
     );
     expect(scheduled[0]?.get("unfurl_links")).toBe("false");
+    // The key comes from the calendar's private hostCode, never from Zoom.
+    expect(scheduled[2]?.get("blocks")).not.toContain("*Host Code:*");
+    expect(scheduled[3]?.get("blocks")).toContain(`*Host Code:* ${HOST_CODE}`);
+    expect(rec.callsTo("zoom.us")).toHaveLength(0);
 
     const posts = forms("/api/chat.postMessage");
     expect(posts).toHaveLength(1);
     expect(posts[0]?.get("channel")).toBe(env.SLACK_ANNOUNCEMENTS_CHANNEL_ID);
     expect(posts[0]?.get("text")).toContain("Today's events are:");
   });
+});
 
-  it("reconciles: deletes previously scheduled messages in the window before re-scheduling", async () => {
+describe("syncStartingSoon", () => {
+  it.each(["daily-run", "calendar-change"] as const)(
+    "%s: schedules a public + admin pair at start − 10 min and returns the window's events",
+    async (trigger) => {
+      const events = [at("1", "2026-05-28T18:00:00"), at("2", "2026-05-28T20:00:00")];
+      const result = await syncStartingSoon(createCalendarFake(events), env, NOW, trigger);
+      expect(result).toEqual({ events, scheduled: 2 });
+
+      const scheduled = forms("/api/chat.scheduleMessage");
+      expect(scheduled.map((f) => f.get("channel"))).toEqual([
+        env.SLACK_EVENTS_CHANNEL_ID,
+        env.SLACK_EVENTADMIN_CHANNEL_ID,
+        env.SLACK_EVENTS_CHANNEL_ID,
+        env.SLACK_EVENTADMIN_CHANNEL_ID,
+      ]);
+      expect(scheduled[0]?.get("post_at")).toBe(
+        String(Date.parse("2026-05-28T18:00:00Z") / 1000 - 600),
+      );
+      expect(scheduled[0]?.get("unfurl_links")).toBe("false");
+      expect(forms("/api/chat.postMessage")).toHaveLength(0);
+    },
+  );
+
+  it.each(["daily-run", "calendar-change"] as const)(
+    "%s: posts immediately when the slot is too near for Slack to schedule",
+    async (trigger) => {
+      // +11 min: postAt is still ahead of now, but under Slack's scheduling margin.
+      const calendar = createCalendarFake([at("1", "2026-05-28T12:11:00")]);
+      const result = await syncStartingSoon(calendar, env, NOW, trigger);
+      expect(result.scheduled).toBe(1);
+
+      expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
+      const posts = forms("/api/chat.postMessage");
+      expect(posts).toHaveLength(2); // public + admin
+      expect(posts[0]?.get("text")).toContain("Starting soon:");
+    },
+  );
+
+  it("a fired slot (start − 10 min past) posts the pair now on the daily run", async () => {
+    const calendar = createCalendarFake([at("1", "2026-05-28T12:08:00")]); // postAt = now − 2 min
+    const result = await syncStartingSoon(calendar, env, NOW, "daily-run");
+    expect(result.scheduled).toBe(1);
+    expect(forms("/api/chat.postMessage")).toHaveLength(2);
+  });
+
+  it("a fired slot is skipped on a calendar change: re-posting would duplicate", async () => {
+    const calendar = createCalendarFake([at("1", "2026-05-28T12:08:00")]);
+    const result = await syncStartingSoon(calendar, env, NOW, "calendar-change");
+    expect(result.scheduled).toBe(0);
+    expect(forms("/api/chat.postMessage")).toHaveLength(0);
+    expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
+  });
+
+  it.each(["daily-run", "calendar-change"] as const)(
+    "%s: skips an event that has already started",
+    async (trigger) => {
+      const started = [at("1", "2026-05-28T11:00:00")];
+      // The fake drops events before the window; a real list can still return one in progress.
+      const calendar = { ...createCalendarFake(), listEvents: async () => started };
+      const result = await syncStartingSoon(calendar, env, NOW, trigger);
+      expect(result.scheduled).toBe(0);
+      expect(result.events).toHaveLength(1);
+      expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
+      expect(forms("/api/chat.postMessage")).toHaveLength(0);
+    },
+  );
+
+  it("lists the daily window through the calendar port", async () => {
+    const calendar = createCalendarFake([at("1", "2026-05-28T18:00:00")]);
+    await syncStartingSoon(calendar, env, NOW, "daily-run");
+    expect(calendar.callsTo("listEvents")).toHaveLength(1);
+  });
+
+  it("deletes previously scheduled messages in the window before re-scheduling", async () => {
     staleScheduled = [{ id: "QSTALE", channel_id: "COLD", post_at: NOW / 1000 + 3600 }];
-    googleEvents = [evt("1", "2026-05-28T18:00:00")];
-    await sendReminder("daily", env, NOW);
+    const calendar = createCalendarFake([at("1", "2026-05-28T18:00:00")]);
+    await syncStartingSoon(calendar, env, NOW, "daily-run");
 
     const deletes = forms("/api/chat.deleteScheduledMessage");
     expect(deletes).toHaveLength(1);
     expect(deletes[0]?.get("channel")).toBe("COLD");
     expect(deletes[0]?.get("scheduled_message_id")).toBe("QSTALE");
+
+    const order = rec.calls.map((c: { url: string }) => c.url);
+    const lastDelete = order.lastIndexOf(
+      order.filter((u) => u.includes("deleteScheduledMessage")).at(-1) ?? "",
+    );
+    const firstSchedule = order.findIndex((u) => u.includes("chat.scheduleMessage"));
+    expect(lastDelete).toBeLessThan(firstSchedule);
   });
 
-  it("posts immediately when the event starts in under 10 minutes", async () => {
-    googleEvents = [evt("1", "2026-05-28T12:05:00")]; // +5 min — the −10min slot already passed
-    const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: true, count: 1, scheduled: 1 });
+  it("sweeps every page of pending messages before deleting", async () => {
+    scheduledPages = [
+      [{ id: "Q1", channel_id: "C1", post_at: NOW / 1000 + 3600 }],
+      [{ id: "Q2", channel_id: "C2", post_at: NOW / 1000 + 7200 }],
+    ];
+    await syncStartingSoon(createCalendarFake(), env, NOW, "calendar-change");
 
-    expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
-    const posts = forms("/api/chat.postMessage");
-    // starting-soon pair (public + admin) + the daily summary
-    expect(posts).toHaveLength(3);
-    expect(posts[0]?.get("text")).toContain("Starting soon:");
+    expect(forms("/api/chat.scheduledMessages.list")).toHaveLength(2);
+    expect(
+      forms("/api/chat.deleteScheduledMessage").map((f) => f.get("scheduled_message_id")),
+    ).toEqual(["Q1", "Q2"]);
   });
 
-  it("skips already-started events but still posts the summary", async () => {
-    googleEvents = [evt("1", "2026-05-28T11:00:00", ZOOM_LOCATION)]; // started 1h ago
-    const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: true, count: 1, scheduled: 0 });
-
-    expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
-    expect(forms("/api/chat.postMessage")).toHaveLength(1); // summary only
-  });
-});
-
-describe("sendReminder — daily, host key in the event-admin mirror", () => {
-  it("shows the calendar's private hostCode only in the admin mirror", async () => {
-    googleEvents = [evt("1", "2026-05-28T18:00:00", ZOOM_LOCATION)];
-    await sendReminder("daily", env, NOW);
+  it("shows the host key only in the event-admin mirror", async () => {
+    const calendar = createCalendarFake([at("1", "2026-05-28T18:00:00")]);
+    await syncStartingSoon(calendar, env, NOW, "daily-run");
 
     const scheduled = forms("/api/chat.scheduleMessage");
     expect(scheduled).toHaveLength(2);
     expect(scheduled[0]?.get("blocks")).not.toContain("*Host Code:*"); // public
-    expect(scheduled[1]?.get("blocks")).toContain(`*Host Code:* ${HOST_CODE}`); // admin
-    expect(rec.callsTo("zoom.us")).toHaveLength(0); // the key comes from the calendar, not Zoom
+    expect(scheduled[1]?.get("blocks")).toContain("*Host Code:* 9876"); // admin
   });
 
-  it("omits the host code line for a non-Zoom Join Link without failing", async () => {
-    googleEvents = [evt("1", "2026-05-28T18:00:00", "https://meet.google.com/abc-defg-hij")];
-    const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: true, count: 1, scheduled: 1 });
+  it("omits the host code line for a non-Zoom Join Link", async () => {
+    const calendar = createCalendarFake([
+      at("1", "2026-05-28T18:00:00", { kind: "url", url: "https://meet.google.com/abc-defg-hij" }),
+    ]);
+    const result = await syncStartingSoon(calendar, env, NOW, "daily-run");
+    expect(result.scheduled).toBe(1);
 
     const scheduled = forms("/api/chat.scheduleMessage");
     expect(scheduled).toHaveLength(2);
     expect(scheduled[1]?.get("blocks")).not.toContain("*Host Code:*");
-  });
-
-  it("a Zoom event without a hostCode is rejected upstream: no pair for it, siblings proceed", async () => {
-    staleScheduled = [{ id: "QSTALE", channel_id: "COLD", post_at: NOW / 1000 + 3600 }];
-    googleEvents = [
-      evt("1", "2026-05-28T18:00:00", ZOOM_LOCATION),
-      evt("2", "2026-05-28T20:00:00", ZOOM_LOCATION, null),
-    ];
-    const result = await sendReminder("daily", env, NOW);
-    // The adapter dropped event 2 before the run saw it (docs/adr/0002).
-    expect(result).toEqual({ posted: true, count: 1, scheduled: 1 });
-
-    expect(forms("/api/chat.deleteScheduledMessage")).toHaveLength(1);
-    const scheduled = forms("/api/chat.scheduleMessage");
-    expect(scheduled).toHaveLength(2);
-    expect(scheduled[1]?.get("blocks")).toContain("Event 1");
-    expect(scheduled[1]?.get("blocks")).not.toContain("Event 2");
-
-    // The summary plus one #bot-log alert naming the rejected event.
-    const posts = forms("/api/chat.postMessage");
-    expect(posts).toHaveLength(2);
-    const alert = posts.find((f) => f.get("channel") === env.SLACK_BOTLOG_CHANNEL_ID);
-    expect(alert?.get("text")).toContain("calendar.event_rejected");
-    expect(alert?.get("text")).toContain("Event 2");
-    expect(
-      posts.find((f) => f.get("channel") === env.SLACK_ANNOUNCEMENTS_CHANNEL_ID)?.get("text"),
-    ).not.toContain("Event 2");
   });
 });
 
