@@ -6,7 +6,7 @@ import { createSlackClient } from "../../slack/client";
 import { buildDailyMessage, buildWeeklyMessage } from "./blocks";
 import type { ReminderName } from "../../events";
 import { reminderRange } from "../../events";
-import { reconcileStartingSoon } from "./starting-soon";
+import { syncStartingSoon } from "./starting-soon";
 
 /**
  * Event announcements. `sendReminder` does the actual work and is shared by the cron schedule
@@ -45,11 +45,8 @@ export async function sendReminder(
 }
 
 async function sendDaily(calendar: CalendarPort, env: Env, nowMs: number): Promise<SendResult> {
-  const range = reminderRange("daily", nowMs);
-  const events = await calendar.listEvents(range);
+  const { events, scheduled } = await syncStartingSoon(calendar, env, nowMs, "daily-run");
   const client = createSlackClient(env);
-
-  const scheduled = await reconcileStartingSoon(client, env, events, nowMs, range);
 
   // Mondays get the weekly summary instead; the starting-soon scheduling above still ran.
   if (DateTime.fromMillis(nowMs, { zone: "America/New_York" }).weekday === 1) {

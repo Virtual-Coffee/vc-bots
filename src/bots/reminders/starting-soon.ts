@@ -5,17 +5,22 @@ import type {
   SlackAPIClient,
 } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
+import { type CalendarPort } from "../../google/calendar";
 import { log } from "../../log";
+import { createSlackClient } from "../../slack/client";
 import { descriptionContext, fallbackDate, header, section, titleSection } from "./blocks";
 import type { ReminderMessage } from "./blocks";
-import type { EventRange, ReminderEvent } from "../../events";
+import { type EventRange, type ReminderEvent, reminderRange } from "../../events";
 
 /**
  * The per-event "Starting Soon" pair: a public announcement to the events channel and an
- * event-admin mirror carrying the host key, scheduled for start − 10 min. `reconcileStartingSoon`
+ * event-admin mirror carrying the host key, scheduled for start − 10 min. `syncStartingSoon`
  * sweeps the bot's already-scheduled messages in the window before re-queuing, so re-runs
- * reconcile instead of duplicating.
+ * replace instead of duplicating.
  */
+
+/** What started a starting-soon sync (docs/adr/0005). */
+export type StartingSoonTrigger = "daily-run" | "calendar-change";
 
 /** Post the starting-soon pair this many seconds before the event starts. */
 const STARTING_SOON_LEAD_SECONDS = 600;
@@ -54,44 +59,28 @@ export function buildStartingSoonAdminMessage(
 }
 
 /**
- * Reconcile the bot's scheduled "Starting Soon" messages for the given daily window against
- * `events`. Clears this bot's pending scheduled messages in the window first, then re-queues
- * each event's starting-soon pair (public + event-admin mirror) for start − 10 min. Returns the
- * number of events handled. The event-admin mirror carries the event's host key; a Zoom event
- * without one never reaches here — the Google adapter rejects it at derivation (docs/adr/0002).
- *
- * When the slot is too near for Slack to schedule (`postAt` within `MIN_SCHEDULE_AHEAD_SECONDS`
- * of now) the pair is posted immediately — the sweep has just deleted any pending pair, so no
- * caller may skip here. When the slot is already past (`postAt <= now`) the behaviour depends on
- * `opts.immediate`:
- * - `true` (default) posts the pair now. The **daily cron** (`sendDaily`, 12:00 UTC, seeds the
- *   day's queue) relies on this for an event starting within 10 min of the run.
- * - `false` skips the event: a fired slot means Slack already delivered the scheduled pair, or a
- *   daily run posted it immediately — the sweep cannot see either, so re-posting would duplicate.
- *   The **CalendarSync DO** passes this on every re-sync after a Google Calendar push (drops
- *   cancelled events, re-queues moved ones at their new start − 10 min). Accepted trade-off: an
- *   event created or moved into its last 10 minutes on that path gets no starting-soon pair; the
- *   reschedule notice covers a move.
- *
- * Callers can compute the daily window via `reminderRange("daily", nowMs)` (exported from
- * `./source`).
+ * Starting-soon sync: re-queue the starting-soon pairs for the next 24h. Lists the daily window
+ * through `calendar`, sweeps the bot's pending scheduled messages in it, then schedules (or
+ * posts now) each event's pair. Returns the window's `events` and the number of pairs handled.
+ * `trigger` decides what a fired slot means — docs/adr/0005. The event-admin mirror carries the
+ * event's host key; a Zoom event without one never reaches here (docs/adr/0002).
  */
-export async function reconcileStartingSoon(
-  client: SlackAPIClient,
+export async function syncStartingSoon(
+  calendar: CalendarPort,
   env: Env,
-  events: ReminderEvent[],
   nowMs: number,
-  range: EventRange,
-  opts: { immediate?: boolean } = {},
-): Promise<number> {
-  const { immediate = true } = opts;
+  trigger: StartingSoonTrigger,
+): Promise<{ events: ReminderEvent[]; scheduled: number }> {
+  const range = reminderRange("daily", nowMs);
+  const events = await calendar.listEvents(range);
+  const client = createSlackClient(env);
   const nowSeconds = Math.floor(nowMs / 1000);
   const startSecondsOf = (event: ReminderEvent): number =>
     Math.floor(DateTime.fromISO(event.startsAt, { zone: "utc" }).toSeconds());
 
   await clearScheduledInWindow(client, nowMs, range);
 
-  let handled = 0;
+  let scheduled = 0;
   for (const event of events) {
     const startSeconds = startSecondsOf(event);
     if (startSeconds <= nowSeconds) {
@@ -119,7 +108,7 @@ export async function reconcileStartingSoon(
         postAt,
         postAtEST: DateTime.fromSeconds(postAt, { zone: "America/New_York" }).toISO(),
       });
-    } else if (postAt <= nowSeconds && !immediate) {
+    } else if (postAt <= nowSeconds && trigger === "calendar-change") {
       // The slot already fired (Slack delivered the scheduled pair, or the daily run posted it
       // immediately) and the sweep only sees pending messages — re-posting would duplicate.
       log.info("reminder.slot_already_fired", { id: event.id, postAt });
@@ -135,9 +124,9 @@ export async function reconcileStartingSoon(
       });
       log.info("reminder.posted_immediately", { id: event.id, channel });
     }
-    handled += 1;
+    scheduled += 1;
   }
-  return handled;
+  return { events, scheduled };
 }
 
 /** Delete this bot's scheduled messages with `post_at` inside the window (all channels). */

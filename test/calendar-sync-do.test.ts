@@ -575,7 +575,7 @@ describe("CalendarSync — processNotification", () => {
       /1 delivery failure/,
     );
 
-    // All three channels were attempted, and the reconcile still ran after the failure.
+    // All three channels were attempted, and the starting-soon sync still ran after the failure.
     expect(slackPosts()).toHaveLength(3);
     expect(rec.callsTo("/api/chat.scheduledMessages.list")).toHaveLength(1);
 
