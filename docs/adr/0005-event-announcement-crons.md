@@ -31,7 +31,7 @@ firing against the new code.
 - **Starting-soon messages are Slack-scheduled, not cron-scheduled.** The daily run computes
   each event's start − 10 min and calls `chat.scheduleMessage` for the pair, after deleting
   the bot's scheduled messages in the window so a re-run (manual `/vc-bot-admin daily`)
-  reconciles instead of duplicating. Finer-grained crons were rejected: they would poll all day
+  replaces instead of duplicating. Finer-grained crons were rejected: they would poll all day
   to find the same events, and a missed tick would drop an announcement.
 - **Mondays the daily skips its summary** — the weekly covers the same events — but still
   schedules the starting-soon pairs.
@@ -50,3 +50,20 @@ firing against the new code.
   starting-soon message → `SLACK_EVENTS_CHANNEL_ID`; its event-admin mirror (with the Zoom
   host key) → `SLACK_EVENTADMIN_CHANNEL_ID`. Event windows are computed in `America/New_York`
   (`reminderRange`, ADR 0011).
+
+## Starting-soon sync triggers
+
+`syncStartingSoon` (`src/bots/reminders/starting-soon.ts`) has two triggers, and they differ on
+one case: a slot that has already fired (start − 10 min is past, the event has not started).
+
+- **`daily-run`** (`sendDaily`, so the cron and `/vc-bot-admin daily`) posts the pair now. The
+  run seeds the day's queue, so an event starting within 10 min of it still needs its pair.
+- **`calendar-change`** (the CalendarSync DO after a push) skips it. A fired slot means Slack
+  already delivered the scheduled pair, or a daily run posted it immediately; the sweep only
+  sees pending messages, so re-posting would duplicate.
+- **Too near to schedule always posts now**, for either trigger. When the slot is still ahead
+  but within `MIN_SCHEDULE_AHEAD_SECONDS`, Slack rejects the schedule, and the sweep has just
+  deleted any pending pair, so skipping would lose it.
+
+Accepted trade-off: an event created or moved into its last 10 minutes on the calendar-change
+path gets no pair; the reschedule notice covers a move.
