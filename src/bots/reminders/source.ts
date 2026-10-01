@@ -1,64 +1,15 @@
 import { DateTime } from "luxon";
-import type { Env } from "../../env";
-import type { EventRange, ReminderEvent } from "../../events";
-import { createGoogleCalendarPort } from "../../google/calendar";
-import { createCmsSource } from "./sources/cms";
+import type { EventRange } from "../../events";
 
 /**
- * Event-source registry for the reminders bot.
- *
- * Senders and Block Kit builders depend only on the source-agnostic model in `src/events.ts`
- * (re-exported here) — never on a provider's field names. Two sources: `google` (the
- * `CalendarPort` adapter's `listEvents`; the system of record once cut over, docs/adr/0001)
- * and `cms` (the interim `EVENT_SOURCE` until then — docs/adr/0001 §Consequences, dated note).
- * The registry is the `EVENT_SOURCE` / admin `[source]` seam. `getEventSource` resolves: explicit
- * name (from `/vc-bot-admin daily|weekly [source]`) wins; otherwise `env.EVENT_SOURCE`, which has
- * no fallback — a missing or unknown value throws so a config omission or typo fails loudly rather
- * than silently switching sources (admin pre-validates for a friendly message).
+ * Reminder windows. Events come from the Google Calendar adapter (`CalendarPort.listEvents`,
+ * docs/adr/0011); senders and Block Kit builders see only the model in `src/events.ts`
+ * (re-exported here, docs/adr/0001).
  */
 
 export type { EventRange, ReminderEvent } from "../../events";
 
-export interface EventSource {
-  name: string;
-  fetchEvents(range: EventRange): Promise<ReminderEvent[]>;
-}
-
 export type ReminderName = "daily" | "weekly";
-
-const SOURCES = {
-  google: (env: Env): EventSource => {
-    const port = createGoogleCalendarPort(env);
-    return { name: "google", fetchEvents: (range) => port.listEvents(range) };
-  },
-  cms: createCmsSource,
-} satisfies Record<string, (env: Env) => EventSource>;
-
-export type EventSourceName = keyof typeof SOURCES;
-export const EVENT_SOURCE_NAMES = Object.keys(SOURCES) as EventSourceName[];
-
-export function isEventSourceName(name: string): name is EventSourceName {
-  // Own-property check: `in` would accept inherited names like "toString".
-  return Object.prototype.hasOwnProperty.call(SOURCES, name);
-}
-
-/** The configured source name (`EVENT_SOURCE`) — the one seam for it. Throws when unset. */
-export function activeSourceName(env: Env): string {
-  // `Env` types it as required, but a wrangler.jsonc omission would still reach here as
-  // undefined at runtime; there is deliberately no default to fall back to.
-  if (!env.EVENT_SOURCE) {
-    throw new Error(`EVENT_SOURCE is not set (valid: ${EVENT_SOURCE_NAMES.join(", ")})`);
-  }
-  return env.EVENT_SOURCE;
-}
-
-export function getEventSource(env: Env, name?: string): EventSource {
-  const resolved = name ?? activeSourceName(env);
-  if (!isEventSourceName(resolved)) {
-    throw new Error(`Unknown event source "${resolved}" (valid: ${EVENT_SOURCE_NAMES.join(", ")})`);
-  }
-  return SOURCES[resolved](env);
-}
 
 /** The zone event windows are computed in (and the admin panel picks dates in). */
 export const EASTERN = "America/New_York";

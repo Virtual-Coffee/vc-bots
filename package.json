@@ -31,8 +31,6 @@
   ],
   "license": "ISC",
   "dependencies": {
-    "graphql": "^16.14.2",
-    "graphql-request": "^7.4.0",
     "jose": "^6.2.12",
     "luxon": "^3.7.2",
     "openapi-fetch": "^0.17.0",

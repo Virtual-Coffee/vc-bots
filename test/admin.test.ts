@@ -60,20 +60,17 @@ describe("handleAdminCommand — reminders", () => {
     return { id: "1", summary: "Soon", start: { dateTime: iso }, end: { dateTime: iso } };
   }
 
-  // The command's optional `[source]` arg is how an admin pins a source for a run; "google" is
-  // also the configured default.
   it("posts the weekly reminder to the channel and confirms the count", async () => {
     googleEvents = [googleEvt(Date.now() + 3_600_000)];
-    await handleAdminCommand(cmd("weekly google"), env);
+    await handleAdminCommand(cmd("weekly"), env);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
     expect(replyText()).toContain("Posted the *weekly* reminder (1 event");
-    expect(replyText()).toContain("source: *google*");
   });
 
-  it("rejects an unknown source name with a friendly message and makes no Slack API calls", async () => {
-    await handleAdminCommand(cmd("daily nonsense"), env);
-    expect(replyText()).toContain("Unknown event source");
-    expect(replyText()).toContain("google");
+  it("rejects an argument to daily/weekly with usage and makes no Slack API calls", async () => {
+    // The retired `[source]` habit (`daily google`) must not silently post.
+    await handleAdminCommand(cmd("daily google"), env);
+    expect(replyText()).toContain("Usage: `daily` (no arguments).");
     expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
     expect(callsTo("/api/chat.scheduleMessage")).toHaveLength(0);
   });
@@ -147,9 +144,9 @@ describe("handleAdminCommand — coworking announce", () => {
     expect(replyText()).toContain("/vc-bot-admin");
   });
 
-  it("usage mentions [source] for daily/weekly, [@user] for welcome, and the watch ops", async () => {
+  it("usage mentions daily/weekly, [@user] for welcome, and the watch ops", async () => {
     await handleAdminCommand(cmd("nonsense"), env);
-    expect(replyText()).toContain("[source]");
+    expect(replyText()).toContain("`daily` · `weekly`");
     expect(replyText()).toContain("welcome [@user]");
     expect(replyText()).toContain("watch status");
   });

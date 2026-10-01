@@ -63,7 +63,6 @@ describe("sendReminder — daily", () => {
       count: 1,
       scheduled: 1,
       reason: "monday",
-      source: "google",
     });
 
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(2);
@@ -77,20 +76,8 @@ describe("sendReminder — daily", () => {
       count: 0,
       scheduled: 0,
       reason: "no-events",
-      source: "google",
     });
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
-  });
-
-  it("with the interim cms source, never touches Google (no listing, no watch bootstrap)", async () => {
-    rec.respondWith((call) =>
-      call.url === env.CMS_GRAPHQL_URL
-        ? Response.json({ data: { solspace_calendar: { calendars: [], events: [] } } })
-        : undefined,
-    );
-    const result = await sendReminder("daily", { ...env, EVENT_SOURCE: "cms" }, NOW);
-    expect(result).toMatchObject({ posted: false, reason: "no-events", source: "cms" });
-    expect(rec.callsTo("googleapis.com")).toHaveLength(0);
   });
 });
 
@@ -101,7 +88,7 @@ describe("sendReminder — weekly", () => {
       evt("2", "2026-05-30T15:00:00", ZOOM_LOCATION),
     ];
     const result = await sendReminder("weekly", env, NOW);
-    expect(result).toEqual({ posted: true, count: 2, source: "google" });
+    expect(result).toEqual({ posted: true, count: 2 });
 
     const posts = forms("/api/chat.postMessage");
     expect(posts).toHaveLength(1);
@@ -113,7 +100,7 @@ describe("sendReminder — weekly", () => {
 
   it("posts nothing when the week is empty", async () => {
     const result = await sendReminder("weekly", env, NOW);
-    expect(result).toEqual({ posted: false, count: 0, reason: "no-events", source: "google" });
+    expect(result).toEqual({ posted: false, count: 0, reason: "no-events" });
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
   });
 });

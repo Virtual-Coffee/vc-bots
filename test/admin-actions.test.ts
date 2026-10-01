@@ -87,13 +87,12 @@ describe("runAdminAction — reminder", () => {
       kind: "reminder",
       name: "weekly",
       nowMs: Date.now(),
-      source: "google",
     });
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
     expect(result).toMatchObject({
       kind: "reminder",
       name: "weekly",
-      result: { posted: true, count: 1, source: "google" },
+      result: { posted: true, count: 1 },
     });
   });
 });
@@ -211,32 +210,32 @@ describe("adminReplyText", () => {
       {
         kind: "reminder",
         name: "daily",
-        result: { posted: true, count: 2, scheduled: 1, source: "google" },
+        result: { posted: true, count: 2, scheduled: 1 },
       },
-      ":white_check_mark: Posted the *daily* reminder (2 events, source: *google*). Scheduled 1 starting-soon message.",
+      ":white_check_mark: Posted the *daily* reminder (2 events). Scheduled 1 starting-soon message.",
     ],
     [
       "reminder posted, no schedule",
-      { kind: "reminder", name: "weekly", result: { posted: true, count: 1, source: "google" } },
-      ":white_check_mark: Posted the *weekly* reminder (1 event, source: *google*).",
+      { kind: "reminder", name: "weekly", result: { posted: true, count: 1 } },
+      ":white_check_mark: Posted the *weekly* reminder (1 event).",
     ],
     [
       "reminder skipped on Monday",
       {
         kind: "reminder",
         name: "daily",
-        result: { posted: false, count: 0, scheduled: 0, reason: "monday", source: "google" },
+        result: { posted: false, count: 0, scheduled: 0, reason: "monday" },
       },
-      ":information_source: Skipped the *daily* summary — the weekly reminder covers Mondays (source: *google*). Scheduled 0 starting-soon messages.",
+      ":information_source: Skipped the *daily* summary — the weekly reminder covers Mondays. Scheduled 0 starting-soon messages.",
     ],
     [
       "reminder with no events",
       {
         kind: "reminder",
         name: "weekly",
-        result: { posted: false, count: 0, reason: "no-events", source: "google" },
+        result: { posted: false, count: 0, reason: "no-events" },
       },
-      ":information_source: No upcoming events for the *weekly* window — nothing posted (source: *google*).",
+      ":information_source: No upcoming events for the *weekly* window — nothing posted.",
     ],
     [
       "welcome",
