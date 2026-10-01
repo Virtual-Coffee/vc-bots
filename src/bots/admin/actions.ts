@@ -18,7 +18,7 @@ import { publishHomeTab, sendWelcomeDm } from "../welcome";
  */
 
 export type AdminAction =
-  | { kind: "reminder"; name: ReminderName; nowMs: number; source?: string }
+  | { kind: "reminder"; name: ReminderName; nowMs: number }
   | { kind: "welcome"; target: string }
   | { kind: "home"; userId: string }
   | { kind: "coworking"; op: "open" | "close" }
@@ -89,7 +89,7 @@ export async function runAdminAction(
 async function perform(env: Env, action: AdminAction): Promise<AdminResult> {
   switch (action.kind) {
     case "reminder": {
-      const result = await sendReminder(action.name, env, action.nowMs, action.source);
+      const result = await sendReminder(action.name, env, action.nowMs);
       return { kind: "reminder", name: action.name, result };
     }
 
@@ -173,12 +173,12 @@ function reminderReply(sub: string, result: SendResult): string {
       ? ""
       : ` Scheduled ${result.scheduled} starting-soon message${result.scheduled === 1 ? "" : "s"}.`;
   if (result.posted) {
-    return `:white_check_mark: Posted the *${sub}* reminder (${events}, source: *${result.source}*).${scheduled}`;
+    return `:white_check_mark: Posted the *${sub}* reminder (${events}).${scheduled}`;
   }
   if (result.reason === "monday") {
-    return `:information_source: Skipped the *daily* summary — the weekly reminder covers Mondays (source: *${result.source}*).${scheduled}`;
+    return `:information_source: Skipped the *daily* summary — the weekly reminder covers Mondays.${scheduled}`;
   }
-  return `:information_source: No upcoming events for the *${sub}* window — nothing posted (source: *${result.source}*).${scheduled}`;
+  return `:information_source: No upcoming events for the *${sub}* window — nothing posted.${scheduled}`;
 }
 
 /**

@@ -1,6 +1,6 @@
 # 0011 — All Google Calendar HTTP in one adapter behind `CalendarPort`; the sync DO takes it injected
 
-**Status:** Accepted (2026-09-17)
+**Status:** Accepted (2026-09-17); amended at the cutover (2026-10-01)
 
 ## Context
 
@@ -30,6 +30,9 @@ events (ADR 0002). Written twice, those rules diverged.
   default until the cutover ([0001](0001-event-model-join-link-and-host-key.md)). Cron
   always uses the configured source; `/vc-bot-admin daily|weekly [source]` may name a
   registered one. `reminderRange` computes the window in `America/New_York` (`EASTERN`).
+  Amended 2026-10-01 ([0001](0001-event-model-join-link-and-host-key.md), cutover note): the
+  registry, `EVENT_SOURCE` and `[source]` are gone; `sendReminder` calls
+  `CalendarPort.listEvents` directly.
 - **The `CalendarSync` Durable Object (`src/bots/calendar-sync/durable-object.ts`) takes the
   port as an injected field.** It is a singleton (`env.CALENDAR_SYNC.getByName("default")`)
   whose `SerialQueue` orders push notifications, the daily cron's `ensureWatch` and the alarm
@@ -38,17 +41,17 @@ events (ADR 0002). Written twice, those rules diverged.
   stop) and the snapshot; the diff is pure in `diff.ts` (`departedUpcoming` / `diffSnapshot`)
   and unit-tested without the DO. Tests swap in `test/helpers/calendar-fake.ts`.
 - **`POST /google/notify` (`src/router.ts`) is the push callback.** It authenticates the
-  per-channel token (`GOOGLE_WATCH_TOKEN`), drops the `sync` handshake and pushes from a
-  non-Google active source, ACKs `200`, and hands the channel id to the DO in
-  `ctx.waitUntil` — alerting `#bot-log` (`google.notify.failed`) if that dispatch rejects
+  per-channel token (`GOOGLE_WATCH_TOKEN`), drops the `sync` handshake (and, until the
+  2026-10-01 cutover, pushes from a non-Google active source), ACKs `200`, and hands the
+  channel id to the DO in `ctx.waitUntil` — alerting `#bot-log` (`google.notify.failed`) if that dispatch rejects
   (ADR 0006).
 
 ## Consequences
 
 - A Calendar rule (what counts as a Join Link, what makes an event invalid, how a range is
   queried) changes in one file and both readers follow.
-- A second source means a second `EventSource` entry, not a second adapter shape;
-  `CalendarSync` stays Google-only because the watch is a Google feature.
+- A second source would mean reintroducing a source seam in front of `listEvents`, not a second
+  adapter shape; `CalendarSync` stays Google-only because the watch is a Google feature.
 - The service-account JSON (`GOOGLE_SERVICE_ACCOUNT_KEY`), the signed JWT assertion, the access
   token, and the watch token / address are credentials: they never appear in log or alert
   fields. The watch channel id is a random uuid and is safe to log.

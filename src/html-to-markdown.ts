@@ -1,9 +1,8 @@
 /**
  * HTML → Markdown for event descriptions. The bots render Markdown (`docs/adr/0001`); this is
- * how HTML from elsewhere gets there: `scripts/fix-calendar.ts` (the one-off calendar migration
- * in ADR 0001 §Consequences) and the interim CMS event source (`src/bots/reminders/sources/cms.ts`,
- * whose descriptions are Craft-rendered HTML). It covers the tag set those actually hold plus a
- * little headroom, and refuses anything else rather than guess.
+ * how Craft-era HTML gets there, for `scripts/fix-calendar.ts` (the calendar migration in ADR
+ * 0001 §Consequences). It covers the tag set that corpus held plus a little headroom, and
+ * refuses anything else rather than guess.
  *
  * Markdown specials in the prose (`*`, `_`, `#`) are left as they are — none appear in the
  * corpus, and escaping them would change text that is already valid Markdown.

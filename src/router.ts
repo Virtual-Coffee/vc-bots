@@ -1,4 +1,3 @@
-import { activeSourceName } from "./bots/reminders";
 import type { Env } from "./env";
 import { log } from "./log";
 import { createSlackApp } from "./slack/app";
@@ -108,12 +107,6 @@ function handleGoogleNotify(req: Request, env: Env, ctx: ExecutionContext): Resp
 
   // Initial handshake when a watch channel is created — no change to process.
   if (state === "sync") {
-    return new Response(null, { status: 200 });
-  }
-
-  // A stale watch may still fire after a cutover back to CMS — ignore unless Google is active.
-  if (activeSourceName(env) !== "google") {
-    log.info("google.notify.ignored_source");
     return new Response(null, { status: 200 });
   }
 

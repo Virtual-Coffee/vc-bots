@@ -15,7 +15,7 @@ import { fetchGoogleAccessToken } from "./auth";
 
 /**
  * Google Calendar adapter — the one module that speaks the Calendar v3 wire protocol. Everything
- * else (the reminders `EventSource`, the `CalendarSync` DO) goes through the `CalendarPort` seam
+ * else (the reminders senders, the `CalendarSync` DO) goes through the `CalendarPort` seam
  * and sees only `ReminderEvent`s and small result unions; tests fake the port
  * (`test/helpers/calendar-fake.ts`).
  *

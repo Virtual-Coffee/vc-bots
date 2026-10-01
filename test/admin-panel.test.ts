@@ -173,7 +173,7 @@ describe("admin panel — reminder submit", () => {
     expect(callsTo("/api/chat.postMessage")).toHaveLength(1);
     const reply = panelReply()!;
     expect(reply.replace_original).toBe(true);
-    expect(reply.text).toContain("Posted the *weekly* reminder (1 event, source: *google*)");
+    expect(reply.text).toContain("Posted the *weekly* reminder (1 event)");
   });
 
   it("the picked date drives the window — a Monday daily run reports the weekly-covers-Monday skip", async () => {

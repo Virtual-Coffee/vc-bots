@@ -84,7 +84,7 @@ describe("sendReminder — daily", () => {
       evt("2", "2026-05-28T20:00:00"), // +8h
     ];
     const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: true, count: 2, scheduled: 2, source: "google" });
+    expect(result).toEqual({ posted: true, count: 2, scheduled: 2 });
 
     const scheduled = forms("/api/chat.scheduleMessage");
     expect(scheduled).toHaveLength(4);
@@ -120,7 +120,7 @@ describe("sendReminder — daily", () => {
   it("posts immediately when the event starts in under 10 minutes", async () => {
     googleEvents = [evt("1", "2026-05-28T12:05:00")]; // +5 min — the −10min slot already passed
     const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: true, count: 1, scheduled: 1, source: "google" });
+    expect(result).toEqual({ posted: true, count: 1, scheduled: 1 });
 
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
     const posts = forms("/api/chat.postMessage");
@@ -132,7 +132,7 @@ describe("sendReminder — daily", () => {
   it("skips already-started events but still posts the summary", async () => {
     googleEvents = [evt("1", "2026-05-28T11:00:00", ZOOM_LOCATION)]; // started 1h ago
     const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: true, count: 1, scheduled: 0, source: "google" });
+    expect(result).toEqual({ posted: true, count: 1, scheduled: 0 });
 
     expect(forms("/api/chat.scheduleMessage")).toHaveLength(0);
     expect(forms("/api/chat.postMessage")).toHaveLength(1); // summary only
@@ -154,7 +154,7 @@ describe("sendReminder — daily, host key in the event-admin mirror", () => {
   it("omits the host code line for a non-Zoom Join Link without failing", async () => {
     googleEvents = [evt("1", "2026-05-28T18:00:00", "https://meet.google.com/abc-defg-hij")];
     const result = await sendReminder("daily", env, NOW);
-    expect(result).toEqual({ posted: true, count: 1, scheduled: 1, source: "google" });
+    expect(result).toEqual({ posted: true, count: 1, scheduled: 1 });
 
     const scheduled = forms("/api/chat.scheduleMessage");
     expect(scheduled).toHaveLength(2);
@@ -169,7 +169,7 @@ describe("sendReminder — daily, host key in the event-admin mirror", () => {
     ];
     const result = await sendReminder("daily", env, NOW);
     // The adapter dropped event 2 before the run saw it (docs/adr/0002).
-    expect(result).toEqual({ posted: true, count: 1, scheduled: 1, source: "google" });
+    expect(result).toEqual({ posted: true, count: 1, scheduled: 1 });
 
     expect(forms("/api/chat.deleteScheduledMessage")).toHaveLength(1);
     const scheduled = forms("/api/chat.scheduleMessage");

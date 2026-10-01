@@ -1,6 +1,6 @@
 # 0001 — Event model: Join Link is `location`, host key is a private calendar property
 
-**Status:** Accepted (2026-09-13); CMS removal deferred (2026-09-18, see Consequences)
+**Status:** Accepted (2026-09-13); CMS removal deferred (2026-09-18), done at the cutover (2026-10-01, see Consequences)
 
 ## Context
 
@@ -46,7 +46,7 @@ answer is "keep your own datastore" — see
   tolerance. _(The interim CMS source converts Craft's HTML at the edge — 2026-09-18 note below.)_
 - **The CMS source is removed** with the cutover. The `EventSource` registry stays as the
   `EVENT_SOURCE` / admin `[source]` seam, with `google` as its only entry. _(Deferred — see the
-  2026-09-18 note below.)_
+  2026-09-18 note below; the registry went too — 2026-10-01 note.)_
 
 ## Consequences
 
@@ -54,7 +54,7 @@ answer is "keep your own datastore" — see
 - The Zoom S2S app needs only `meeting:write:invite_links:admin` (plus the webhook
   subscriptions); the `meeting:read:meeting:admin`, `user:read:user:admin`, and
   `user:read:list_users:admin` scopes added for the Zoom lookup can be removed.
-- `CMS_TOKEN`, `CMS_GRAPHQL_URL`, `graphql`, and `graphql-request` are gone. _(Deferred, below.)_
+- `CMS_TOKEN`, `CMS_GRAPHQL_URL`, `graphql`, and `graphql-request` are gone. _(Deferred, below; done 2026-10-01.)_
 - **2026-09-18 — CMS source restored as the interim default.** The Worker ships before the
   calendar is canonical, so `src/bots/reminders/sources/cms.ts` is back, registered as `cms`
   and set as `EVENT_SOURCE` in `wrangler.jsonc`. It maps onto the same model as the Google
@@ -76,3 +76,12 @@ answer is "keep your own datastore" — see
   from the old `joinLink` property wherever they differ (the Morning/Afternoon Crowd series),
   deletes `joinLink`, and converts existing descriptions to Markdown; `hostCode` stays on every
   Zoom series. Dry-run by default.
+- **2026-10-01 — cutover done.** virtualcoffee.io moved its events to the calendar (site PR
+  #1579), and its ADR 0014 makes that one Events Calendar the system of record for the site and
+  the bots alike. The `cms` source is deleted with `CMS_TOKEN`, `CMS_GRAPHQL_URL`, `graphql` and
+  `graphql-request`. The `EventSource` registry is removed rather than kept with one entry:
+  `EVENT_SOURCE`, the admin `[source]` argument and the router/cron "only when `google` is
+  active" gates are gone, and announcements call `CalendarPort.listEvents` directly
+  ([0011](0011-one-google-calendar-adapter-behind-calendarport.md)). A second source would
+  reintroduce a seam. `fix-calendar --apply` had nothing left to patch; `src/html-to-markdown.ts`
+  stays behind that script only.

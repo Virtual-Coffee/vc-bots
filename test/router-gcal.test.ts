@@ -113,7 +113,6 @@ async function send(req: Request, overrideEnv: Env): Promise<Response> {
 
 const googleEnv = (): Env => ({
   ...env,
-  EVENT_SOURCE: "google",
   GOOGLE_WATCH_TOKEN: "tok",
 });
 
@@ -155,17 +154,7 @@ describe("POST /google/notify", () => {
     expect(line).toContain("google.notify.bad_token");
   });
 
-  it("ignores a change when EVENT_SOURCE is not google (200, no sync)", async () => {
-    const res = await send(gcalRequest("exists"), {
-      ...googleEnv(),
-      EVENT_SOURCE: "cms",
-    });
-
-    expect(res.status).toBe(200);
-    expect(untouched()).toBe(true);
-  });
-
-  it("kicks the DO on a valid change with EVENT_SOURCE=google (200, calendar listed)", async () => {
+  it("kicks the DO on a valid change (200, calendar listed)", async () => {
     await seedChannelRow();
     const res = await send(gcalRequest("exists"), googleEnv());
 

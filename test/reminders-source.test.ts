@@ -1,61 +1,10 @@
 import { DateTime } from "luxon";
 import { describe, expect, it } from "vitest";
-import {
-  EVENT_SOURCE_NAMES,
-  getEventSource,
-  isEventSourceName,
-  reminderRange,
-} from "../src/bots/reminders/source";
-import { env } from "cloudflare:test";
-import type { Env } from "../src/env";
+import { reminderRange } from "../src/bots/reminders/source";
 
 // Thursday 2026-05-28, 12:00 UTC = 8:00 EDT (these run in real workerd, so this also
 // verifies Luxon's America/New_York zone works on the ICU build there).
 const NOW = Date.parse("2026-05-28T12:00:00Z");
-
-describe("getEventSource / isEventSourceName", () => {
-  it.each([undefined, ""])("throws when EVENT_SOURCE is %j (no default source)", (value) => {
-    const bad = { ...env, EVENT_SOURCE: value } as unknown as Env;
-    expect(() => getEventSource(bad)).toThrow("EVENT_SOURCE");
-    expect(() => getEventSource(bad)).toThrow("google");
-  });
-
-  it("returns the google source when EVENT_SOURCE is 'google'", () => {
-    const source = getEventSource({ ...env, EVENT_SOURCE: "google" });
-    expect(source.name).toBe("google");
-  });
-
-  it("explicit name beats env var", () => {
-    const source = getEventSource({ ...env, EVENT_SOURCE: "bogus" }, "google");
-    expect(source.name).toBe("google");
-  });
-
-  it("throws on unknown source name and lists valid names in the message", () => {
-    expect(() => getEventSource(env as Env, "bogus")).toThrow("bogus");
-    expect(() => getEventSource(env as Env, "bogus")).toThrow("google");
-  });
-
-  it("resolves the interim cms source by name and by EVENT_SOURCE", () => {
-    expect(getEventSource(env as Env, "cms").name).toBe("cms");
-    expect(getEventSource({ ...env, EVENT_SOURCE: "cms" }).name).toBe("cms");
-  });
-
-  it("EVENT_SOURCE_NAMES is exactly google and cms", () => {
-    expect(EVENT_SOURCE_NAMES).toEqual(["google", "cms"]);
-  });
-
-  it("isEventSourceName narrows correctly", () => {
-    expect(isEventSourceName("google")).toBe(true);
-    expect(isEventSourceName("cms")).toBe(true);
-    expect(isEventSourceName("bogus")).toBe(false);
-  });
-
-  it("rejects inherited object property names (own-property check, not `in`)", () => {
-    expect(isEventSourceName("toString")).toBe(false);
-    expect(isEventSourceName("constructor")).toBe(false);
-    expect(() => getEventSource(env as Env, "toString")).toThrow(/Unknown event source "toString"/);
-  });
-});
 
 describe("reminderRange", () => {
   it("daily is a rolling 24h window anchored at now, in Eastern time", () => {

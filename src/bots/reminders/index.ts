@@ -1,14 +1,15 @@
 import { DateTime } from "luxon";
 import type { Env } from "../../env";
+import { type CalendarPort, createGoogleCalendarPort } from "../../google/calendar";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { buildDailyMessage, buildWeeklyMessage } from "./blocks";
-import type { EventSource, ReminderName } from "./source";
-import { getEventSource, reminderRange } from "./source";
+import type { ReminderName } from "./source";
+import { reminderRange } from "./source";
 import { reconcileStartingSoon } from "./starting-soon";
 
 export type { ReminderName } from "./source";
-export { activeSourceName, EASTERN, EVENT_SOURCE_NAMES, isEventSourceName } from "./source";
+export { EASTERN } from "./source";
 
 /**
  * Event announcements. `sendReminder` does the actual work and is shared by the cron schedule
@@ -29,34 +30,27 @@ export interface SendResult {
   scheduled?: number;
   /** Why no summary was posted. */
   reason?: "monday" | "no-events";
-  /** Name of the event source used. */
-  source: string;
 }
 
-type Sender = (source: EventSource, env: Env, nowMs: number) => Promise<SendResult>;
+type Sender = (calendar: CalendarPort, env: Env, nowMs: number) => Promise<SendResult>;
 
 const SENDERS: Record<ReminderName, Sender> = {
   daily: sendDaily,
   weekly: sendWeekly,
 };
 
-/**
- * Run one reminder kind. `nowMs` is injectable for tests / the cron's scheduled time.
- * `sourceName` lets `/vc-bot-admin` run a named source; omit to use `env.EVENT_SOURCE`
- * (or "google" default). The cron jobs never pass a source name.
- */
+/** Run one reminder kind. `nowMs` is injectable for tests / the cron's scheduled time. */
 export async function sendReminder(
   name: ReminderName,
   env: Env,
   nowMs: number = Date.now(),
-  sourceName?: string,
 ): Promise<SendResult> {
-  return SENDERS[name](getEventSource(env, sourceName), env, nowMs);
+  return SENDERS[name](createGoogleCalendarPort(env), env, nowMs);
 }
 
-async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<SendResult> {
+async function sendDaily(calendar: CalendarPort, env: Env, nowMs: number): Promise<SendResult> {
   const range = reminderRange("daily", nowMs);
-  const events = await source.fetchEvents(range);
+  const events = await calendar.listEvents(range);
   const client = createSlackClient(env);
 
   const scheduled = await reconcileStartingSoon(client, env, events, nowMs, range);
@@ -64,17 +58,11 @@ async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<
   // Mondays get the weekly summary instead; the starting-soon scheduling above still ran.
   if (DateTime.fromMillis(nowMs, { zone: "America/New_York" }).weekday === 1) {
     log.info("reminder.daily_monday_skip", { count: events.length, scheduled });
-    return {
-      posted: false,
-      count: events.length,
-      scheduled,
-      reason: "monday",
-      source: source.name,
-    };
+    return { posted: false, count: events.length, scheduled, reason: "monday" };
   }
   if (events.length === 0) {
     log.info("reminder.skipped", { kind: "daily" });
-    return { posted: false, count: 0, scheduled, reason: "no-events", source: source.name };
+    return { posted: false, count: 0, scheduled, reason: "no-events" };
   }
 
   const { text, blocks } = buildDailyMessage(events, env.SLACK_EVENTS_CHANNEL_ID);
@@ -86,15 +74,15 @@ async function sendDaily(source: EventSource, env: Env, nowMs: number): Promise<
     unfurl_media: false,
   });
   log.info("reminder.sent", { kind: "daily", count: events.length, scheduled });
-  return { posted: true, count: events.length, scheduled, source: source.name };
+  return { posted: true, count: events.length, scheduled };
 }
 
-async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise<SendResult> {
+async function sendWeekly(calendar: CalendarPort, env: Env, nowMs: number): Promise<SendResult> {
   const range = reminderRange("weekly", nowMs);
-  const events = await source.fetchEvents(range);
+  const events = await calendar.listEvents(range);
   if (events.length === 0) {
     log.info("reminder.skipped", { kind: "weekly" });
-    return { posted: false, count: 0, reason: "no-events", source: source.name };
+    return { posted: false, count: 0, reason: "no-events" };
   }
 
   const { text, blocks } = buildWeeklyMessage(events, env.SLACK_EVENTS_CHANNEL_ID);
@@ -106,5 +94,5 @@ async function sendWeekly(source: EventSource, env: Env, nowMs: number): Promise
     unfurl_media: false,
   });
   log.info("reminder.sent", { kind: "weekly", count: events.length });
-  return { posted: true, count: events.length, source: source.name };
+  return { posted: true, count: events.length };
 }

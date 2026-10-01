@@ -14,7 +14,7 @@ co-working room, the new-member welcome, the App Home tab, and event announcemen
 | **Event announcements** | Cron triggers | Pulls upcoming events from the VirtualCoffee Google Calendar (service-account auth; the Join Link is the event's `location`, descriptions are Markdown), posts daily/weekly summaries to the announcements channel, and schedules a per-event "Starting Soon" message (start − 10 min) into the events channel, mirrored to the event-admin channel with the Zoom host key (read from the event's private `hostCode` calendar property). Crons are live (daily + weekly); `/vc-bot-admin` can also fire a run manually. |
 
 There's also a `/vc-bot-admin` slash command for manual previews and admin actions
-(`daily` / `weekly [source]` to fire an announcement run now, `welcome [@user]`, `home`,
+(`daily` / `weekly` to fire an announcement run now, `welcome [@user]`, `home`,
 `coworking open|close`, `watch status|start|stop` for the Calendar push channel,
 `availability` to post this week's check-in); run it with
 no arguments for a button panel of the same actions.
@@ -129,15 +129,13 @@ Config and secrets are split deliberately:
   (admin mirror with the Zoom host key) — `SLACK_AVAILABILITY_CHANNEL_ID` (the hosts channel
   for the Monday availability check-in; empty turns the feature off), `SLACK_BOTLOG_CHANNEL_ID` (private `#bot-log`
   channel for error alerts; empty disables alerting and the bot must be invited before it can
-  post), `EVENT_SOURCE` (active event source: `"cms"`, the interim default until the Google
-  cutover, or `"google"` — see `docs/adr/0001`), `CMS_GRAPHQL_URL`, `GOOGLE_CALENDAR_ID`, and
-  `LOG_LEVEL`. After changing bindings or vars, rerun `pnpm cf-types`
+  post), `GOOGLE_CALENDAR_ID` (the Events Calendar — see `docs/adr/0001`), and `LOG_LEVEL`. After changing bindings or vars, rerun `pnpm cf-types`
   and keep `src/env.ts` in sync by hand.
 - **Secrets** go via `wrangler secret put <NAME>` in production and `.dev.vars` locally (see
   `.dev.vars.example`): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`,
   `ZOOM_WEBHOOK_SECRET_TOKEN`, `ZOOM_S2S_CLIENT_ID`, `ZOOM_S2S_CLIENT_SECRET`,
   `ZOOM_S2S_ACCOUNT_ID` (the S2S app needs only `meeting:write:invite_links:admin`),
-  `CMS_TOKEN` (Craft GraphQL bearer token, interim), `GOOGLE_SERVICE_ACCOUNT_KEY` (Google Calendar service account), `GOOGLE_WATCH_TOKEN` (any
+  `GOOGLE_SERVICE_ACCOUNT_KEY` (Google Calendar service account), `GOOGLE_WATCH_TOKEN` (any
   random string ≤256 chars; Google echoes it back on every Calendar push notification and the
   `/google/notify` route drops notifications that don't carry it).
 
@@ -206,7 +204,6 @@ wrangler secret put ZOOM_WEBHOOK_SECRET_TOKEN
 wrangler secret put ZOOM_S2S_CLIENT_ID
 wrangler secret put ZOOM_S2S_CLIENT_SECRET
 wrangler secret put ZOOM_S2S_ACCOUNT_ID
-wrangler secret put CMS_TOKEN   # interim, until the Google cutover (#28)
 wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY
 wrangler secret put GOOGLE_WATCH_TOKEN
 

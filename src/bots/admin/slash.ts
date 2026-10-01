@@ -1,6 +1,5 @@
 import type { Env } from "../../env";
 import { respondEphemeral } from "../../slack/response";
-import { EVENT_SOURCE_NAMES, isEventSourceName } from "../reminders";
 import { type AdminAction, adminReplyText, guardAdmin, runAdminAction } from "./actions";
 import { adminPanelBlocks, PANEL_TEXT } from "./panel";
 
@@ -12,7 +11,7 @@ import { adminPanelBlocks, PANEL_TEXT } from "./panel";
  * happens after the ACK and reports back through the command's `response_url`.
  *
  * This is the text adapter over `actions.ts`: parse the command into an `AdminAction`, run it,
- * reply with `adminReplyText`. Only the parse replies (panel, usage, unknown source) are gated
+ * reply with `adminReplyText`. Only the parse replies (panel, usage) are gated
  * here; an action is gated by `runAdminAction`.
  */
 
@@ -20,7 +19,7 @@ export const ADMIN_COMMAND = "/vc-bot-admin";
 
 const USAGE = [
   "*`/vc-bot-admin`* — fire an auto message. Subcommands:",
-  "• `daily [source]` · `weekly [source]` — post that event announcement now (source: google; default from config; daily also (re)schedules the starting-soon messages)",
+  "• `daily` · `weekly` — post that event announcement now (daily also (re)schedules the starting-soon messages)",
   "• `welcome [@user]` — DM the welcome message to you (preview) or to the mentioned member",
   "• `home` — publish your App Home (preview)",
   "• `coworking open` · `coworking close` — announce the co-working room",
@@ -82,17 +81,10 @@ function parseAdminCommand(text: string, userId: string): ParsedCommand {
   switch (sub) {
     case "daily":
     case "weekly": {
-      if (arg !== undefined && !isEventSourceName(arg)) {
-        const list = EVENT_SOURCE_NAMES.map((n) => `\`${n}\``).join(", ");
-        return {
-          kind: "reply",
-          text: `:warning: Unknown event source \`${arg}\`. Valid sources: ${list}`,
-        };
+      if (arg !== undefined) {
+        return { kind: "reply", text: `Usage: \`${sub}\` (no arguments).\n\n${USAGE}` };
       }
-      return {
-        kind: "action",
-        action: { kind: "reminder", name: sub, nowMs: Date.now(), source: arg },
-      };
+      return { kind: "action", action: { kind: "reminder", name: sub, nowMs: Date.now() } };
     }
 
     case "welcome": {

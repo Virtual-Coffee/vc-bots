@@ -1,5 +1,5 @@
 import { postAvailabilityCheckIn } from "./bots/availability";
-import { activeSourceName, sendReminder } from "./bots/reminders";
+import { sendReminder } from "./bots/reminders";
 import type { Env } from "./env";
 import { log } from "./log";
 import { notifyBotLog } from "./slack/notify";
@@ -39,23 +39,21 @@ export async function runCron(
   }
 }
 
-/** The daily announcement run, then the Calendar watch bootstrap when Google is the source. */
+/** The daily announcement run, then the Calendar watch bootstrap. */
 async function runDaily(env: Env, nowMs: number): Promise<void> {
   try {
     await sendReminder("daily", env, nowMs);
   } finally {
-    // Bootstrap/heal the Calendar watch and its snapshot baseline on the daily run when Google is
-    // the active source. `ensureWatch` seeds only when the baseline is missing (first run) or the
-    // announced week rolled over (Monday) — it must NOT reseed daily: a snapshot overwrite would
-    // swallow a change whose push is still queued behind it, so the cancellation/reschedule would
-    // never be announced. Guarded separately so a watch hiccup never masks the reminder result.
-    if (activeSourceName(env) === "google") {
-      try {
-        await env.CALENDAR_SYNC.getByName("default").ensureWatch();
-      } catch (error) {
-        log.error("calendar_sync.bootstrap_failed", { error: String(error) });
-        await notifyBotLog(env, "calendar_sync.bootstrap_failed", { error: String(error) });
-      }
+    // Bootstrap/heal the Calendar watch and its snapshot baseline on the daily run. `ensureWatch`
+    // seeds only when the baseline is missing (first run) or the announced week rolled over
+    // (Monday) — it must NOT reseed daily: a snapshot overwrite would swallow a change whose push
+    // is still queued behind it, so the cancellation/reschedule would never be announced. Guarded
+    // separately so a watch hiccup never masks the reminder result.
+    try {
+      await env.CALENDAR_SYNC.getByName("default").ensureWatch();
+    } catch (error) {
+      log.error("calendar_sync.bootstrap_failed", { error: String(error) });
+      await notifyBotLog(env, "calendar_sync.bootstrap_failed", { error: String(error) });
     }
   }
 }

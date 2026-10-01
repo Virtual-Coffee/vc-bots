@@ -59,7 +59,7 @@ describe("runCron", () => {
   it("a failing job is swallowed and alerts #bot-log once", async () => {
     const fetched = installFetchRecorder();
     const job = vi.fn(async () => {
-      throw new Error("cms down");
+      throw new Error("boom");
     });
     vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -75,27 +75,13 @@ describe("runCron", () => {
     expect(form.get("text")).toContain("0 12 * * *");
   });
 
-  it("the daily cron reaches the Google source and bootstraps the Calendar watch", async () => {
+  it("the daily cron lists the calendar and bootstraps the Calendar watch", async () => {
     const fetched = installFetchRecorder();
 
     await runCron(controller("0 12 * * *"), env);
 
     expect(fetched.callsTo("/calendar/v3/calendars/").length).toBeGreaterThan(0);
     expect(fetched.callsTo("/events/watch")).toHaveLength(1);
-  });
-
-  it("with the interim cms source, the daily cron never touches Google (no watch bootstrap)", async () => {
-    const fetched = installFetchRecorder({
-      respond: (call) =>
-        call.url === env.CMS_GRAPHQL_URL
-          ? Response.json({ data: { solspace_calendar: { calendars: [], events: [] } } })
-          : undefined,
-    });
-
-    await runCron(controller("0 12 * * *"), { ...env, EVENT_SOURCE: "cms" });
-
-    expect(fetched.callsTo(env.CMS_GRAPHQL_URL).length).toBeGreaterThan(0);
-    expect(fetched.callsTo("googleapis.com")).toHaveLength(0);
   });
 
   it("a failing watch bootstrap alerts #bot-log without masking the reminder", async () => {
