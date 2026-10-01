@@ -454,15 +454,19 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   // --- Helpers ---
 
-  /** Record this instance's buffered joins now that its session row exists. */
+  /**
+   * Record this instance's buffered joins now that its session row exists, and only then drop
+   * them from the buffer — a throw mid-replay leaves them to expire with a warn, not vanish.
+   */
   private async replayPendingJoins(uuid: string): Promise<void> {
     const pending = await this.loadPendingJoins();
     const mine = pending.filter((p) => p.uuid === uuid);
-    await this.savePendingJoins(pending.filter((p) => p.uuid !== uuid)); // also persists the prune
-    if (mine.length === 0) return;
 
     let recorded = 0;
     for (const p of mine) if (this.recordJoin(p.event)) recorded++;
+    await this.savePendingJoins(pending.filter((p) => p.uuid !== uuid)); // also persists the prune
+    if (mine.length === 0) return;
+
     const session = this.getSession(uuid);
     if (recorded > 0 && session) await this.updatePresence(session);
     log.info("coworking.joined.replayed", { instance: uuid, count: recorded });

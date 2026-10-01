@@ -521,6 +521,16 @@ describe("CoworkingRoom — joins that beat meeting.started (#25)", () => {
     expect(port.updates).toHaveLength(updates);
   });
 
+  it("keeps a buffered join that fails to replay, instead of clearing it first", async () => {
+    const stub = room("e6");
+    // A non-string user_name makes the replay's identity parse throw mid-record.
+    const broken = { user_id: "p1", user_name: 42 } as unknown as ParticipantInput;
+    await send(stub, event("meeting.participant_joined", "uuid-1", broken));
+
+    await expect(send(stub, event("meeting.started", "uuid-1"))).rejects.toThrow();
+    expect(await pendingJoins(stub)).toEqual([expect.objectContaining({ uuid: "uuid-1" })]);
+  });
+
   it("a duplicate meeting.started doesn't replay the join twice", async () => {
     const stub = room("e5");
     await send(stub, event("meeting.participant_joined", "uuid-1", ada));
