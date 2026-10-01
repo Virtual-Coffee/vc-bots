@@ -34,12 +34,12 @@ answer is "keep your own datastore" — see
 - **Host key = `extendedProperties.private.hostCode`** on the (recurring) event. The Google
   source maps it to `ReminderEvent.hostKey` (trimmed; empty → null). It is edited through the
   Calendar API (the website admin page, once it lands), not the Google UI.
-- **A Zoom event without a host key fails the run.** `syncStartingSoon` throws when the
+- **A Zoom event without a host key fails the run.** `reconcileStartingSoon` throws when the
   Join Link parses as a Zoom meeting (`src/zoom/join-link.ts`) and `hostKey` is empty; the error
   names the event and reaches `#bot-log` via `reminder.run_failed`. There is no "post without the
   host key" mode. A non-Zoom Join Link simply has no host-code line.
   Amended by [0002](0002-join-info-union-and-invalid-events.md): the host-key rule is enforced
-  at derivation, not in `syncStartingSoon`.
+  at derivation, not in `reconcileStartingSoon`.
 - **The host key appears only in the event-admin mirror** and is never logged.
 - **Descriptions are Markdown**, rendered with `slackify-markdown` (pure ESM on unified/remark,
   runs on workerd). The local `html-to-mrkdwn` converter is gone; the Google source has no HTML

@@ -9,7 +9,7 @@ and ruled that a Zoom event without a host key fails the run. `ReminderEvent` ca
 loose fields, `joinLink?: string | null` (URL or free text) and `hostKey?: string | null`, so
 "Zoom link, no host key" was a legal value and every consumer had to re-derive what the link
 *was* (`startsWith("http")`, `parseZoomMeetingId`) before rendering. The rule itself lived in
-`syncStartingSoon` as a pre-check that threw — which also meant one bad calendar entry
+`reconcileStartingSoon` as a pre-check that threw — which also meant one bad calendar entry
 black-holed the whole daily run, the weekly summary, and every push-driven `CalendarSync` pass,
 and the event-admin mirror could still be built from a `ReminderEvent` that had slipped past it.
 
@@ -33,7 +33,7 @@ and the event-admin mirror could still be built from a `ReminderEvent` that had 
 - **`getEvent` reports `{ kind: "invalid", reason }`** as a fourth `CalendarEventLookup` kind.
   `CalendarSync` treats it like `all-day`: no cancellation or reschedule notice, the id simply
   leaves the snapshot. (The adapter already alerted.)
-- `syncStartingSoon` no longer validates. Senders and Block Kit builders switch on
+- `reconcileStartingSoon` no longer validates. Senders and Block Kit builders switch on
   `join.kind`; the button is for `zoom` / `url`, the location line for `place` (public) or any
   non-`none` kind (admin mirror), the host-code line for `zoom` only.
 
