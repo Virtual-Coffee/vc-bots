@@ -5,6 +5,8 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { joinPath } from "../src/bots/coworking/invite-link";
+import { publicBaseUrl } from "../src/env";
 import { route } from "../src/router";
 import { signSlack } from "./helpers/signing";
 
@@ -266,7 +268,7 @@ describe("interactivity", () => {
     expect(sent.response_type).toBe("ephemeral");
     expect(sent.replace_original).toBe(false);
     // The button url is the opaque /join/<token> redirect — never the raw Zoom link.
-    expect(JSON.stringify(sent.attachments)).toMatch(/\/join\/[0-9a-f]{32}/);
+    expect(JSON.stringify(sent.attachments)).toContain(`${publicBaseUrl(env)}${joinPath("")}`);
     expect(replies[0]!.body).not.toContain("personal-3");
   });
 

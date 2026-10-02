@@ -36,14 +36,14 @@ describe("createZoomInviteLinkPort", () => {
   it("mints against the configured meeting and resolves to the personal join url", async () => {
     const port = createZoomInviteLinkPort(env, memStorage());
 
-    expect(await port.mint("Xavier")).toEqual({ joinUrl: "https://zoom.us/w/personal-1" });
+    expect(await port.mint("Xavier", 3600)).toEqual({ joinUrl: "https://zoom.us/w/personal-1" });
 
     const req = fetched.callsTo("api.zoom.us/v2/meetings/").at(-1)!;
     expect(req.url).toContain(`/meetings/${env.ZOOM_MEETING_ID}/invite_links`);
   });
 
   it("sends only the attendee name to Zoom — no email or registration fields", async () => {
-    await createZoomInviteLinkPort(env, memStorage()).mint("Ada Lovelace");
+    await createZoomInviteLinkPort(env, memStorage()).mint("Ada Lovelace", 3600);
 
     const req = fetched.callsTo("api.zoom.us/v2/meetings/").at(-1)!;
     expect(req.url).toContain("/invite_links");
@@ -51,13 +51,13 @@ describe("createZoomInviteLinkPort", () => {
     expect(sent.attendees).toEqual([{ name: "Ada Lovelace" }]);
     expect(sent.email).toBeUndefined();
     expect(sent.first_name).toBeUndefined();
-    expect(typeof sent.ttl).toBe("number");
+    expect(sent.ttl).toBe(3600); // the caller's TTL goes on the wire
   });
 
   it("reuses the cached S2S token across mints", async () => {
     const port = createZoomInviteLinkPort(env, memStorage());
-    await port.mint("Ada");
-    await port.mint("Bob");
+    await port.mint("Ada", 3600);
+    await port.mint("Bob", 3600);
 
     expect(fetched.callsTo("zoom.us/oauth/token")).toHaveLength(1);
     expect(fetched.callsTo("api.zoom.us/v2/meetings/")).toHaveLength(2);
@@ -83,7 +83,7 @@ describe("createInviteLink step logs", () => {
   }
 
   it("logs create then created at debug, with name only — never the token-bearing join_url", async () => {
-    const { joinUrl } = await createInviteLink("zoom-access-token", "4669259563", "Ada");
+    const { joinUrl } = await createInviteLink("zoom-access-token", "4669259563", "Ada", 3600);
     expect(joinUrl).toBe("https://zoom.us/w/SECRET-TOKEN-123");
 
     const lines = debugLines();
@@ -98,7 +98,7 @@ describe("createInviteLink step logs", () => {
   it("emits nothing below the threshold when level is info", async () => {
     setLogLevel("info");
     log.debug("should.not.appear");
-    await createInviteLink("t", "1", "X");
+    await createInviteLink("t", "1", "X", 3600);
     expect(debugLines()).toHaveLength(0);
   });
 });

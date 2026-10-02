@@ -67,7 +67,8 @@ the reaction → sheet projection are pure functions in `src/bots/availability/m
 surface dismisses itself. The button's url is the Worker's own `GET /join/<token>` redirect,
 which 302s to the personal link — the token-bearing Zoom url never appears in the Slack UI.
 The redirect is surfaced under `PUBLIC_BASE_URL` (the `virtualcoffee.io/bots` Netlify rewrite
-in front of the Worker); when unset it falls back to the request origin.
+in front of the Worker); there is no request-origin fallback, so it must be set (local dev puts
+the tunnel URL in `.dev.vars`).
 Correlating Zoom participants back to Slack members is best-effort by display name via the DO's
 `member_link` table; people who join another way show as external guests. Personal `join_url`s
 (and the redirect tokens that resolve to them) carry a join credential — they are never logged.
@@ -112,7 +113,7 @@ needs wrangler, which is a dev dependency).
 
 ```bash
 pnpm install
-cp .dev.vars.example .dev.vars   # then fill in real secrets
+cp .dev.vars.example .dev.vars   # then fill in real secrets and your tunnel's PUBLIC_BASE_URL
 pnpm dev                          # wrangler dev — local server on workerd
 ```
 

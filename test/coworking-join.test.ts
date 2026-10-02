@@ -13,6 +13,8 @@ import {
   handleJoinDismiss,
   type JoinActionPayload,
 } from "../src/bots/coworking/join";
+import { isJoinToken, joinPath } from "../src/bots/coworking/invite-link";
+import { publicBaseUrl } from "../src/env";
 import { setLogLevel } from "../src/log";
 import { route } from "../src/router";
 import {
@@ -33,7 +35,7 @@ afterEach(() => {
 });
 
 const RESPONSE_URL = "https://hooks.slack.com/actions/resp-123";
-const ORIGIN = "https://bots.example";
+const BASE = publicBaseUrl(env);
 
 function payload(actionId = "coworking_join"): JoinActionPayload {
   return {
@@ -49,7 +51,7 @@ function responseUrlCalls(): RecordedCall[] {
 
 describe("handleJoinClick", () => {
   it("registers via the DO and answers with a two-button ephemeral linking the /join redirect", async () => {
-    await handleJoinClick(payload(), env, ORIGIN);
+    await handleJoinClick(payload(), env);
 
     const replies = responseUrlCalls();
     expect(replies).toHaveLength(1);
@@ -66,7 +68,7 @@ describe("handleJoinClick", () => {
     expect(attachments).toContain("coworking_cancel"); // Cancel
     // The button url is the Worker's opaque redirect — the raw Zoom link (and its token) never
     // reaches the Slack UI, so the hover tooltip shows a clean url.
-    expect(attachments).toMatch(new RegExp(`${ORIGIN}/join/[0-9a-f]{32}`));
+    expect(attachments).toMatch(new RegExp(`${BASE}/join/[0-9a-f]{32}`));
     expect(attachments).not.toContain("personal-9");
   });
 
@@ -78,7 +80,7 @@ describe("handleJoinClick", () => {
     );
 
     const before = Date.now();
-    await handleJoinClick(payload(), env, ORIGIN);
+    await handleJoinClick(payload(), env);
 
     // The DO saw no name: Zoom got its generic pre-fill, and this click stored nothing to
     // correlate on (the DO is shared across this file, so only rows from this call count).
@@ -97,7 +99,7 @@ describe("handleJoinClick", () => {
     expect(replies).toHaveLength(1);
     const sent = JSON.parse(replies[0]!.body);
     expect(sent.response_type).toBe("ephemeral");
-    expect(JSON.stringify(sent.attachments)).toMatch(new RegExp(`${ORIGIN}/join/[0-9a-f]{32}`));
+    expect(JSON.stringify(sent.attachments)).toMatch(new RegExp(`${BASE}/join/[0-9a-f]{32}`));
   });
 
   it("answers with an error ephemeral when registration fails", async () => {
@@ -108,7 +110,7 @@ describe("handleJoinClick", () => {
         : undefined,
     );
 
-    await handleJoinClick(payload(), env, ORIGIN);
+    await handleJoinClick(payload(), env);
 
     const replies = responseUrlCalls();
     expect(replies).toHaveLength(1);
@@ -128,16 +130,17 @@ describe("the join flow's logs", () => {
     );
 
     // The click mints the token…
-    await handleJoinClick(payload(), env, ORIGIN);
+    await handleJoinClick(payload(), env);
     const token = JSON.parse(responseUrlCalls()[0]!.body)
       .attachments[0].blocks.flatMap((b: { elements?: { url?: string }[] }) => b.elements ?? [])
-      .map((e: { url?: string }) => e.url?.match(/\/join\/([0-9a-f]{32})$/)?.[1])
+      .map((e: { url?: string }) => e.url?.split("/").at(-1))
+      .filter((t: string | undefined) => t && isJoinToken(t))
       .find(Boolean) as string;
     expect(token).toBeTruthy();
 
     // …and the redirect spends it.
     const ctx = createExecutionContext();
-    const res = await route(new Request(`${ORIGIN}/join/${token}`), env, ctx);
+    const res = await route(new Request(`https://bots.example${joinPath(token)}`), env, ctx);
     await waitOnExecutionContext(ctx);
     expect(res.headers.get("Location")).toBe("https://zoom.us/w/personal-9");
 

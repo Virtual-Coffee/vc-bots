@@ -56,11 +56,11 @@ A person in the room who could not be matched to a Slack account.
 _Avoid_: external, unknown participant
 
 **Invite link**:
-A personal Zoom join link minted for one member, with their name pre-filled.
+A personal Zoom join link minted for one member, with their name pre-filled. Its lifecycle lives in `src/bots/coworking/invite-link.ts` (ADR 0009).
 _Avoid_: registration link, join url
 
 **Join token**:
-The opaque token a member's Join button carries. It resolves to that member's invite link and expires with it.
+The opaque token a member's Join button carries, as `/join/<token>`: 32 lowercase hex, minted and parsed in `src/bots/coworking/invite-link.ts`. It resolves to that member's invite link and expires with it.
 
 ## Event announcements
 

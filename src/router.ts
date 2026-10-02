@@ -1,3 +1,4 @@
+import { isJoinToken, parseJoinPath } from "./bots/coworking/invite-link";
 import type { Env } from "./env";
 import { log } from "./log";
 import { createSlackApp } from "./slack/app";
@@ -23,9 +24,8 @@ export async function route(req: Request, env: Env, ctx: ExecutionContext): Prom
 
   // Per-user join redirect: the token (minted by the DO on a Join click) IS the credential, so
   // there's no signature to verify. Resolves to the personal Zoom url and 302s the browser there.
-  if (method === "GET" && path.startsWith("/join/")) {
-    return handleJoinRedirect(path.slice("/join/".length), env);
-  }
+  const joinToken = method === "GET" ? parseJoinPath(path) : null;
+  if (joinToken !== null) return handleJoinRedirect(joinToken, env);
 
   log.info("request", { method, path });
 
@@ -44,9 +44,7 @@ export async function route(req: Request, env: Env, ctx: ExecutionContext): Prom
     case "POST /slack/interactivity":
     case "POST /slack/commands": {
       log.info("slack.request", { path });
-      // Surface the join link under the public base URL (the Netlify rewrite), not workers.dev.
-      const base = (env.PUBLIC_BASE_URL || url.origin).replace(/\/+$/, "");
-      return createSlackApp(env, base).run(req, ctx);
+      return createSlackApp(env).run(req, ctx);
     }
 
     default:
@@ -56,15 +54,12 @@ export async function route(req: Request, env: Env, ctx: ExecutionContext): Prom
 
 // --- Join-link redirect → co-working room ---
 
-/** Tokens are 32 hex chars today; accept a little slack so the format can evolve. */
-const JOIN_TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
-
 async function handleJoinRedirect(token: string, env: Env): Promise<Response> {
   const expired = new Response(
     "This join link has expired — head back to Slack and click Join again.",
     { status: 404, headers: { "Cache-Control": "no-store" } },
   );
-  if (!JOIN_TOKEN_RE.test(token)) {
+  if (!isJoinToken(token)) {
     log.info("join.redirect", { found: false }); // never log the token
     return expired;
   }

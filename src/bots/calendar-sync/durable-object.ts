@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Env } from "../../env";
+import { type Env, publicBaseUrl } from "../../env";
 import type { ReminderEvent } from "../../events";
 import type { CalendarEventLookup, CalendarPort } from "../../google/calendar";
 import { createGoogleCalendarPort } from "../../google/calendar";
@@ -362,11 +362,10 @@ export class CalendarSync extends DurableObject<Env> {
    * The public URL Google posts change notifications to — the Worker's `/google/notify` route under
    * `PUBLIC_BASE_URL` (the Netlify rewrite host; Google needs a trusted HTTPS certificate there —
    * see the `PUBLIC_BASE_URL` note in `src/env.ts`). There's no inbound request here (cron/alarm),
-   * so unlike the join redirect there's no origin fallback: an empty `PUBLIC_BASE_URL` means no
-   * watch can be registered.
+   * so an empty `PUBLIC_BASE_URL` means no watch can be registered.
    */
   private notifyAddress(): string {
-    const base = (this.env.PUBLIC_BASE_URL ?? "").replace(/\/+$/, "");
+    const base = publicBaseUrl(this.env);
     if (!base) {
       throw new Error("PUBLIC_BASE_URL must be set to register a Google Calendar watch");
     }

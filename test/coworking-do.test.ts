@@ -1,6 +1,8 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoworkingRoom } from "../src/bots/coworking/durable-object";
+import { INVITE_LINK_TTL_SECONDS, isJoinToken, joinPath } from "../src/bots/coworking/invite-link";
+import { publicBaseUrl } from "../src/env";
 import type { ZoomMeetingEvent, ZoomMeetingEventType } from "../src/zoom/types";
 import {
   createInviteLinkFake,
@@ -309,8 +311,7 @@ describe("CoworkingRoom — participant correlation & presence", () => {
   it("maps a member to their slack_id by name and @-mentions them", async () => {
     const stub = room("c2");
     // Member clicks Join first → slack_user_id ↔ display_name recorded.
-    const { token } = await join(stub, { slackUserId: "U777", displayName: "Ada" });
-    expect(token).toMatch(/^[0-9a-f]{32}$/);
+    await join(stub, { slackUserId: "U777", displayName: "Ada" });
 
     await send(stub, event("meeting.started", "uuid-1"));
     // No registrant_id on an invite-link join — correlation matches the baked-in name.
@@ -345,8 +346,7 @@ describe("CoworkingRoom — participant correlation & presence", () => {
   it("a join request with no display name stores no member_link; a Zoom joiner named like the fallback is a guest", async () => {
     const stub = room("c2c");
     // Profile lookup failed upstream → the DO pre-fills a generic name but records nothing.
-    const { token } = await join(stub, { slackUserId: "U777", displayName: null });
-    expect(token).toMatch(/^[0-9a-f]{32}$/);
+    await join(stub, { slackUserId: "U777", displayName: null });
     const links = await runInDurableObject(stub, (_i, state) =>
       state.storage.sql.exec("SELECT COUNT(*) AS n FROM member_link").toArray(),
     );
@@ -376,7 +376,7 @@ describe("CoworkingRoom — participant correlation & presence", () => {
     await runInDurableObject(stub, (_i, state) =>
       state.storage.sql.exec(
         "UPDATE member_link SET created_at = ?",
-        Date.now() - 7200 * 1000 - 1000,
+        Date.now() - INVITE_LINK_TTL_SECONDS * 1000 - 1000,
       ),
     );
 
@@ -542,61 +542,19 @@ describe("CoworkingRoom — joins that beat meeting.started (#25)", () => {
   });
 });
 
-describe("CoworkingRoom — handleJoinRequest", () => {
-  it("mints an invite link, stores the slack_user_id ↔ name mapping, and returns an opaque token", async () => {
+describe("CoworkingRoom — join RPCs", () => {
+  it("handleJoinRequest answers with a join url that resolveJoinToken spends", async () => {
     const stub = room("j1");
-    const { token } = await join(stub, { slackUserId: "U1", displayName: "Xavier" });
-
-    // The raw join_url never leaves the DO — callers only get the join token.
-    expect(token).toMatch(/^[0-9a-f]{32}$/);
-    expect(inviteFake.mints).toEqual(["Xavier"]); // the name Zoom pre-fills, nothing else
-    const links = await runInDurableObject(stub, (_i, state) =>
-      state.storage.sql.exec("SELECT * FROM member_link").toArray(),
-    );
-    expect(links[0]?.slack_user_id).toBe("U1");
-    expect(links[0]?.display_name).toBe("Xavier");
-  });
-
-  it("resolveJoinToken round-trips the token to the personal join url", async () => {
-    const stub = room("j3");
     inviteFake.joinUrl = "https://zoom.us/w/personal-X";
-    const { token } = await join(stub, { slackUserId: "U1", displayName: "Xavier" });
+    const { joinUrl } = await join(stub, { slackUserId: "U1", displayName: "Xavier" });
 
+    // The raw Zoom url never leaves the DO — callers get the bot-hosted /join/<token> url.
+    const token = joinUrl.split("/").at(-1)!;
+    expect(isJoinToken(token)).toBe(true);
+    expect(joinUrl).toBe(`${publicBaseUrl(env)}${joinPath(token)}`);
     expect(await withRoom(stub, (live) => live.resolveJoinToken(token))).toEqual({
       joinUrl: "https://zoom.us/w/personal-X",
     });
-    expect(await withRoom(stub, (live) => live.resolveJoinToken("0".repeat(32)))).toBeNull(); // unknown token
-  });
-
-  it("expires tokens and sweeps expired rows on the next mint", async () => {
-    const stub = room("j4");
-    const { token } = await join(stub, { slackUserId: "U1", displayName: "Xavier" });
-
-    // Age the row past its TTL.
-    await runInDurableObject(stub, (_i, state) =>
-      state.storage.sql.exec("UPDATE invite_link SET expires_at = ?", Date.now() - 1),
-    );
-    expect(await withRoom(stub, (live) => live.resolveJoinToken(token))).toBeNull();
-
-    // A new mint sweeps the expired row.
-    await join(stub, { slackUserId: "U2", displayName: "Yan" });
-    const rows = await runInDurableObject(stub, (_i, state) =>
-      state.storage.sql.exec("SELECT token FROM invite_link").toArray(),
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.token).not.toBe(token);
-  });
-
-  it("propagates a failed mint and records nothing", async () => {
-    const stub = room("j5");
-    inviteFake.failNext();
-    await expect(join(stub, { slackUserId: "U1", displayName: "Xavier" })).rejects.toThrow(
-      "Zoom invite-links failed",
-    );
-    const rows = await runInDurableObject(stub, (_i, state) =>
-      state.storage.sql.exec("SELECT * FROM invite_link").toArray(),
-    );
-    expect(rows).toHaveLength(0);
   });
 });
 

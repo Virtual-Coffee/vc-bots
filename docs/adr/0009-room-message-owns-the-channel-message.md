@@ -60,9 +60,13 @@ differently: a Slack edit that fails should never wedge a session.
   (`buildJoinEphemeralAttachments`, `src/bots/coworking/join.ts`). Either button deletes the
   ephemeral (`delete_original`) — a modal cannot dismiss itself from a button click. The
   ☕ Join url is the Worker's own `GET /join/<token>` redirect, built on `PUBLIC_BASE_URL`
-  (the virtualcoffee.io/bots Netlify rewrite; empty falls back to the request origin).
-  Tokens live in the DO's `invite_link` table and expire with the Zoom link, keeping the
-  token-bearing Zoom url out of the Slack UI. The join-token RPCs touch only `member_link` /
+  (the virtualcoffee.io/bots Netlify rewrite; no request-origin fallback, so it must be set).
+  `src/bots/coworking/invite-link.ts` owns the whole lifecycle: the TTL (one constant, also
+  sent to Zoom as the link's `ttl`), the 32-hex join token, the `/join/<token>` url (built
+  and parsed there), and the store over `invite_link` / `member_link` (it calls the Zoom
+  port itself and sweeps expired rows of both tables). `handleJoinRequest` returns
+  the bot-hosted `/join/<token>` url; what stays inside the DO is the token-bearing Zoom
+  url, which keeps it out of the Slack UI. The join-token RPCs touch only `member_link` /
   `invite_link` and stay outside the DO queue so the button is never slowed (ADR 0003).
 - **Correlation is best-effort by display name** through `member_link` (the webhook carries
   no registrant id for invite-link joiners), only within the invite TTL. A member whose Slack

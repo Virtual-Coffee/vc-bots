@@ -17,19 +17,17 @@ import { apiError, createApiClient } from "../http/client";
 import { log } from "../log";
 import { ZOOM_API_BASE, type TokenCacheStorage, getCachedZoomToken } from "./oauth";
 
-/** Link lifetime (seconds). Only needs to cover click→join; Zoom enforces `ttl` loosely. */
-const DEFAULT_TTL = 7200;
-
 const meetings = createApiClient<paths>({ baseUrl: ZOOM_API_BASE });
 
 /**
- * Mint a personalized invite link for `name`. Returns the attendee's unique `join_url`.
+ * Mint a personalized invite link for `name`, valid for `ttl` seconds (Zoom enforces it loosely).
+ * Returns the attendee's unique `join_url`.
  */
 export async function createInviteLink(
   accessToken: string,
   meetingId: string,
   name: string,
-  ttl: number = DEFAULT_TTL,
+  ttl: number,
 ): Promise<{ joinUrl: string }> {
   log.debug("zoom.invite_link.create", { meeting: meetingId, name });
   const { data, error, response } = await meetings.POST("/meetings/{meetingId}/invite_links", {
@@ -58,15 +56,15 @@ export async function createInviteLink(
  * takes this as a swappable field so tests can hand it a fake instead of stubbing `fetch`.
  */
 export interface InviteLinkPort {
-  mint(displayName: string): Promise<{ joinUrl: string }>;
+  mint(displayName: string, ttlSeconds: number): Promise<{ joinUrl: string }>;
 }
 
 /** The real port: S2S token (cached in `storage`) + `createInviteLink` for `ZOOM_MEETING_ID`. */
 export function createZoomInviteLinkPort(env: Env, storage: TokenCacheStorage): InviteLinkPort {
   return {
-    async mint(displayName) {
+    async mint(displayName, ttlSeconds) {
       const accessToken = await getCachedZoomToken(env, storage);
-      return createInviteLink(accessToken, env.ZOOM_MEETING_ID, displayName);
+      return createInviteLink(accessToken, env.ZOOM_MEETING_ID, displayName, ttlSeconds);
     },
   };
 }

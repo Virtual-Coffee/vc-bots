@@ -26,6 +26,8 @@ GOOGLE_WATCH_TOKEN=
 # Optional: override the wrangler.jsonc LOG_LEVEL ("info") for local dev.
 # LOG_LEVEL=debug
 
-# Optional: override the public base URL for join links so they point at the local server
-# instead of the virtualcoffee.io Netlify rewrite. Empty also works (falls back to request origin).
-# PUBLIC_BASE_URL=http://localhost:8787
+# Required locally: your tunnel's public URL, overriding the wrangler.jsonc value
+# (virtualcoffee.io/bots). Join links and the Calendar watch address are built from it; left
+# unset, local join links open the production Worker, which 404s tokens minted by your local DO.
+# There is no request-origin fallback, so use the tunnel's URL, not http://localhost.
+PUBLIC_BASE_URL=https://<your-tunnel>.example

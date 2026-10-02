@@ -2,9 +2,9 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
 import { SerialQueue } from "../../serial-queue";
-import type { InviteLinkPort } from "../../zoom/invite-links";
 import { createZoomInviteLinkPort } from "../../zoom/invite-links";
 import type { ZoomMeetingEvent, ZoomParticipant } from "../../zoom/types";
+import { type InviteLinks, createInviteLinks } from "./invite-link";
 import {
   type PresenceUser,
   RoomMessage,
@@ -16,20 +16,17 @@ import {
  * Co-working room — one Durable Object instance per Zoom meeting ID. The instance alone does not
  * serialize its handlers; `enqueue` does (ADR 0003).
  *
- * The DO owns the session state machine (the `session` / `participant` / `member_link` /
- * `invite_link` tables, the stale-session alarm, and the join tokens) and mints per-user Zoom
- * invite links through `InviteLinkPort`. Everything about the room message — the cards, the copy,
- * the standing-invite hand-off between sessions and announcements, which card is open — is
- * delegated to `RoomMessage`; the DO never sees a message ts, it only tells RoomMessage what
- * happened. Both are swappable fields so the DO suite runs against in-memory fakes.
+ * The DO owns the session state machine (the `session` / `participant` tables and the stale-session
+ * alarm) and creates the `member_link` / `invite_link` tables; the invite links themselves —
+ * Zoom mint, join tokens, TTL, urls — belong to `InviteLinks` (`invite-link.ts`). Everything
+ * about the room message — the cards, the copy, the standing-invite hand-off between sessions and
+ * announcements, which card is open — is delegated to `RoomMessage`; the DO never sees a message
+ * ts, it only tells RoomMessage what happened. Both are swappable fields so the DO suite runs
+ * against in-memory fakes.
  */
 
 /** Force-end a session this long after it started if `meeting.ended` was never received. */
 const STALE_SESSION_MS = 18 * 60 * 60 * 1000;
-
-/** Lifetime of a `/join/<token>` redirect — matches the Zoom invite link's own TTL
- *  (`DEFAULT_TTL` in zoom/invite-links.ts), past which the link is dead anyway. */
-const INVITE_LINK_TTL_MS = 7200 * 1000;
 
 /**
  * Storage key of the joins that reached the DO before their instance's `meeting.started` — Zoom
@@ -39,16 +36,6 @@ const PENDING_JOINS_KEY = "pending_joins";
 
 /** How long a buffered join waits for its `meeting.started` before it's dropped. */
 const PENDING_JOIN_TTL_MS = 30 * 1000;
-
-/** Zoom pre-fill name when the member's Slack profile couldn't be read. Only ever sent to Zoom —
- *  it is never stored in `member_link`, so it can't correlate anyone. */
-const FALLBACK_DISPLAY_NAME = "VirtualCoffee member";
-
-/** 128-bit random, url-safe token for the `/join/<token>` redirect (Web Crypto only). */
-function randomToken(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
 
 // Type aliases (not interfaces) so they satisfy `exec<T>`'s `Record<string, SqlStorageValue>`.
 type SessionRow = {
@@ -60,12 +47,6 @@ type SessionRow = {
 };
 
 type PendingJoin = { uuid: string; event: ZoomMeetingEvent; at: number };
-
-type MemberLinkRow = {
-  slack_user_id: string;
-  display_name: string | null;
-  created_at: number | null;
-};
 
 type ParticipantRow = {
   zoom_user_id: string;
@@ -80,7 +61,7 @@ type ParticipantRow = {
 export class CoworkingRoom extends DurableObject<Env> {
   private readonly sql: SqlStorage;
   // Not readonly: tests swap in fakes (`installInviteLinkFake` / `installRoomChannelFake`).
-  private inviteLinks: InviteLinkPort;
+  private inviteLinks: InviteLinks;
   private roomMessage: RoomMessage;
   /** Serializes the state-mutating handlers — see `enqueue`. */
   private readonly queue = new SerialQueue("coworking.queue");
@@ -89,7 +70,7 @@ export class CoworkingRoom extends DurableObject<Env> {
     super(ctx, env);
     setLogLevel(env.LOG_LEVEL); // the DO runs in its own isolate
     this.sql = ctx.storage.sql;
-    this.inviteLinks = createZoomInviteLinkPort(env, ctx.storage);
+    this.inviteLinks = createInviteLinks(this.sql, createZoomInviteLinkPort(env, ctx.storage), env);
     this.roomMessage = new RoomMessage(createSlackRoomChannelPort(env), ctx.storage, env);
     // The runtime holds deliveries until this settles; nothing to await in a constructor.
     void ctx.blockConcurrencyWhile(async () => this.migrate());
@@ -183,69 +164,24 @@ export class CoworkingRoom extends DurableObject<Env> {
   // --- RPC surface ---
 
   /**
-   * Slack Join click → mint a per-user Zoom invite link (name pre-filled) and return an opaque
-   * token for it. The raw `join_url` never leaves the DO: the join button points at the Worker's
-   * `/join/<token>` redirect, which calls `resolveJoinToken` — so the token-bearing Zoom url
-   * appears nowhere in the Slack UI (and, as ever, nowhere in logs).
+   * Slack Join click → mint a per-user Zoom invite link (name pre-filled) and return the Worker's
+   * `/join/<token>` url for it. The raw Zoom `join_url` stays inside the DO's invite-link store:
+   * the join button points at the redirect, which calls `resolveJoinToken` — so the
+   * token-bearing Zoom url appears nowhere in the Slack UI (and, as ever, nowhere in logs).
    *
-   * We store `slack_user_id ↔ display_name` so we can correlate the member later. Correlation is
-   * best-effort: an invite-link joiner's `participant_joined` carries no registrant id, only the
-   * `user_name` we baked in here — so we match on that name (and fall back to a plain guest when a
-   * signed-in member's own Zoom name overrides the pre-fill). No member PII is sent to Zoom.
-   *
-   * `displayName` is null when the caller couldn't read the member's Slack profile: Zoom gets a
-   * generic pre-fill and no `member_link` row is written.
+   * Correlation is best-effort by display name — see `InviteLinks`. `displayName` is null when
+   * the caller couldn't read the member's Slack profile.
    */
   async handleJoinRequest(input: {
     slackUserId: string;
     displayName: string | null;
-  }): Promise<{ token: string }> {
-    log.debug("coworking.join.invite_link", { user: input.slackUserId });
-    const { joinUrl } = await this.inviteLinks.mint(input.displayName ?? FALLBACK_DISPLAY_NAME);
-
-    // No display name → nothing to correlate on. Storing the generic pre-fill instead would match
-    // every Zoom joiner who shows up under it to whichever member clicked Join last.
-    if (input.displayName !== null) {
-      log.debug("coworking.join.store", { user: input.slackUserId });
-      this.sql.exec(
-        `INSERT INTO member_link (slack_user_id, display_name, created_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(slack_user_id) DO UPDATE SET
-           display_name = excluded.display_name, created_at = excluded.created_at`,
-        input.slackUserId,
-        input.displayName,
-        Date.now(),
-      );
-    }
-
-    // Opaque redirect token, expiring with the Zoom link itself (see DEFAULT_TTL in
-    // invite-links.ts). Sweep expired rows while we're here so the table stays small.
-    const token = randomToken();
-    const now = Date.now();
-    this.sql.exec("DELETE FROM invite_link WHERE expires_at < ?", now);
-    this.sql.exec(
-      "INSERT INTO invite_link (token, join_url, slack_user_id, expires_at) VALUES (?, ?, ?, ?)",
-      token,
-      joinUrl,
-      input.slackUserId,
-      now + INVITE_LINK_TTL_MS,
-    );
-
-    log.info("coworking.member_link", { user: input.slackUserId });
-    return { token };
+  }): Promise<{ joinUrl: string }> {
+    return this.inviteLinks.request(input);
   }
 
   /** Resolve a `/join/<token>` redirect to its personal Zoom url, or null if unknown/expired. */
   resolveJoinToken(token: string): { joinUrl: string } | null {
-    const row = this.sql
-      .exec<{ join_url: string }>(
-        "SELECT join_url FROM invite_link WHERE token = ? AND expires_at >= ?",
-        token,
-        Date.now(),
-      )
-      .toArray()[0];
-    log.info("coworking.join.resolve", { found: Boolean(row) }); // never log the token or url
-    return row ? { joinUrl: row.join_url } : null;
+    return this.inviteLinks.resolve(token);
   }
 
   /**
@@ -366,8 +302,7 @@ export class CoworkingRoom extends DurableObject<Env> {
 
     log.debug("coworking.join.correlate", { instance: uuid });
     // Best-effort: match the Zoom display name to a member who minted an invite link.
-    const member = this.findMember(id.displayName);
-    const slackUserId = member?.slack_user_id ?? null;
+    const slackUserId = this.inviteLinks.findMember(id.displayName);
     const externalId = slackUserId ? null : id.zoomUserId;
     log.debug("coworking.join.correlated", {
       instance: uuid,
@@ -571,24 +506,6 @@ export class CoworkingRoom extends DurableObject<Env> {
         )
         .toArray()[0]?.n ?? 0
     );
-  }
-
-  /**
-   * Best-effort correlation: find the member who minted a *recent* invite link with this name.
-   * Invite-link joiners carry no registrant id, so the baked-in name is all we have to match on.
-   * The invite is the contract, so the match is bounded by its TTL: a member who joins Zoom
-   * directly more than a TTL after their last Join click shows as a guest, and a same-named
-   * joiner months later can't inherit their mention.
-   */
-  private findMember(name: string): MemberLinkRow | undefined {
-    return this.sql
-      .exec<MemberLinkRow>(
-        `SELECT * FROM member_link WHERE display_name = ? AND created_at >= ?
-         ORDER BY created_at DESC LIMIT 1`,
-        name,
-        Date.now() - INVITE_LINK_TTL_MS,
-      )
-      .toArray()[0];
   }
 
   private getSession(uuid: string): SessionRow | undefined {
