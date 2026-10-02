@@ -363,6 +363,21 @@ describe("interactivity — view submission", () => {
   });
 });
 
+describe("interactivity — panel buttons", () => {
+  it("a watch-status click acks, then replaces the panel with the status line", async () => {
+    const res = await post(
+      "/slack/interactivity",
+      blockActionBody("admin_panel_watch_status"),
+      "application/x-www-form-urlencoded",
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("");
+    const reply = JSON.parse(callsTo(RESPONSE_URL)[0]!.body);
+    expect(reply.replace_original).toBe(true);
+    expect(reply.text).toContain("Calendar watch is");
+  });
+});
+
 describe("slash command", () => {
   it("/vc-bot-admin checks the invoker is an admin and replies via response_url", async () => {
     const body = new URLSearchParams({

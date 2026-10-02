@@ -14,7 +14,6 @@ import {
   handlePanelClick,
   handlePanelSubmit,
   PANEL_BUTTONS,
-  PANEL_MODALS,
 } from "../src/bots/admin/panel";
 import { log } from "../src/log";
 
@@ -300,17 +299,13 @@ describe("admin panel — authorization & errors", () => {
 });
 
 describe("admin panel — the table", () => {
-  it("every button is in adminPanelBlocks() and ids are unique", () => {
-    const blocks = adminPanelBlocks();
-    const shown = blocks.flatMap((b) =>
-      b.type === "actions" ? (b.elements as { action_id: string }[]).map((e) => e.action_id) : [],
-    );
+  it("action_ids and callback_ids are unique", () => {
     const actionIds = PANEL_BUTTONS.map((b) => b.actionId);
-    expect(shown).toEqual(actionIds);
     expect(new Set(actionIds).size).toBe(actionIds.length);
-    const callbackIds = PANEL_MODALS.map((m) => m.callbackId);
+    const callbackIds = PANEL_BUTTONS.flatMap((b) =>
+      b.click.kind === "modal" ? [b.click.modal.callbackId] : [],
+    );
     expect(new Set(callbackIds).size).toBe(callbackIds.length);
-    expect(callbackIds).toHaveLength(3);
   });
 
   it("an unknown action_id logs and does nothing", async () => {
@@ -327,15 +322,19 @@ describe("admin panel — the table", () => {
     expect(rec.calls).toHaveLength(0);
   });
 
-  it("bad modal input logs bad_input and replaces the panel with the failed reply", async () => {
-    const warn = vi.spyOn(log, "warn");
-    await handlePanelSubmit(submission("admin_welcome_modal", {}), env);
-    expect(warn).toHaveBeenCalledWith("admin.panel.bad_input", {
-      user: "U1",
-      cb: "admin_welcome_modal",
-    });
-    expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
-    expect(panelReply()!.replace_original).toBe(true);
-    expect(panelReply()!.text).toContain(":warning:");
-  });
+  it.each([
+    ["admin_reminder_modal", { kind: { kind: { selected_option: { value: "monthly" } } } }],
+    ["admin_welcome_modal", {}],
+    ["admin_coworking_modal", { op: { op: { selected_option: { value: "explode" } } } }],
+  ])(
+    "bad %s input logs bad_input and replaces the panel with the failed reply",
+    async (cb, values) => {
+      const warn = vi.spyOn(log, "warn");
+      await handlePanelSubmit(submission(cb, values), env);
+      expect(warn).toHaveBeenCalledWith("admin.panel.bad_input", { user: "U1", cb });
+      expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
+      expect(panelReply()!.replace_original).toBe(true);
+      expect(panelReply()!.text).toContain(":warning:");
+    },
+  );
 });

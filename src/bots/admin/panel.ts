@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import type { AnyMessageBlock, AnyModalBlock, ModalView } from "slack-cloudflare-workers";
+import type { AnyMessageBlock, AnyModalBlock, Button, ModalView } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
@@ -202,16 +202,12 @@ export interface AdminViewSubmissionPayload {
 
 type ModalValues = AdminViewSubmissionPayload["view"]["state"]["values"];
 
-/** A modal a panel button opens, and how its submit becomes an action and a delivery. */
+/** A modal a panel button opens, and how its submit becomes an action. */
 interface PanelModal {
   callbackId: string;
-  /** Names the `guardAdmin` gate and the `admin.modal.<logName>` lazy listener. */
-  logName: string;
   view: (responseUrl: string, userId: string) => ModalView;
   /** `undefined` = the submitted values are unusable. */
   parse: (values: ModalValues, userId: string) => AdminAction | undefined;
-  /** DISMISS the panel (true) or REPLACE it with the reply (false); denied/failed always replace. */
-  dismiss: (result: AdminResult, action: AdminAction, userId: string) => boolean;
 }
 
 interface PanelButton {
@@ -219,15 +215,12 @@ interface PanelButton {
   label: string;
   /** Which row of `adminPanelBlocks()` the button sits in. */
   row: "main" | "watch";
-  /** Names the `admin.panel.<logName>` lazy listener. */
+  /** Names the `guardAdmin` gate and the `admin.panel.<x>` / `admin.modal.<x>` lazy listeners. */
   logName: string;
+  /** DISMISS the panel (true) or REPLACE it with the reply (false); denied/failed always replace. */
+  dismiss: (result: AdminResult, userId: string) => boolean;
   click:
-    | { kind: "modal"; modal: PanelModal }
-    | {
-        kind: "run";
-        action: (userId: string) => AdminAction;
-        dismiss: (result: AdminResult) => boolean;
-      };
+    { kind: "modal"; modal: PanelModal } | { kind: "run"; action: (userId: string) => AdminAction };
 }
 
 // ── The table ───────────────────────────────────────────────────────────────
@@ -242,7 +235,6 @@ export const PANEL_BUTTONS: readonly PanelButton[] = [
       kind: "modal",
       modal: {
         callbackId: REMINDER_MODAL_CALLBACK_ID,
-        logName: "reminder",
         view: reminderModal,
         parse(values) {
           const kind = values.kind?.kind?.selected_option?.value;
@@ -256,9 +248,9 @@ export const PANEL_BUTTONS: readonly PanelButton[] = [
             : Date.now();
           return { kind: "reminder", name: kind, nowMs };
         },
-        dismiss: () => false, // the counts are output the admin can't otherwise see
       },
     },
+    dismiss: () => false, // the counts are output the admin can't otherwise see
   },
   {
     actionId: "admin_panel_welcome",
@@ -269,16 +261,15 @@ export const PANEL_BUTTONS: readonly PanelButton[] = [
       kind: "modal",
       modal: {
         callbackId: WELCOME_MODAL_CALLBACK_ID,
-        logName: "welcome",
         view: welcomeModal,
         parse(values) {
           const target = values.target?.target?.selected_user;
           return target ? { kind: "welcome", target } : undefined;
         },
-        // Sending to yourself is self-verifiable (the DM appears) → just dismiss the panel.
-        dismiss: (_result, action, userId) => action.kind === "welcome" && action.target === userId,
       },
     },
+    // Sending to yourself is self-verifiable (the DM appears) → just dismiss the panel.
+    dismiss: (result, userId) => result.kind === "welcome" && result.target === userId,
   },
   {
     actionId: "admin_panel_coworking",
@@ -289,16 +280,15 @@ export const PANEL_BUTTONS: readonly PanelButton[] = [
       kind: "modal",
       modal: {
         callbackId: COWORKING_MODAL_CALLBACK_ID,
-        logName: "coworking",
         view: coworkingModal,
         parse(values) {
           const op = values.op?.op?.selected_option?.value;
           return op === "open" || op === "close" ? { kind: "coworking", op } : undefined;
         },
-        // The announcement is visible in-channel → dismiss; a close with nothing open is not.
-        dismiss: (result) => result.kind === "coworking" && (result.op === "open" || result.closed),
       },
     },
+    // The announcement is visible in-channel → dismiss; a close with nothing open is not.
+    dismiss: (result) => result.kind === "coworking" && (result.op === "open" || result.closed),
   },
   {
     actionId: "admin_panel_home",
@@ -306,53 +296,49 @@ export const PANEL_BUTTONS: readonly PanelButton[] = [
     row: "main",
     logName: "home",
     // The App Home tab is self-verifiable → dismiss.
-    click: { kind: "run", action: (userId) => ({ kind: "home", userId }), dismiss: () => true },
+    dismiss: () => true,
+    click: { kind: "run", action: (userId) => ({ kind: "home", userId }) },
   },
   {
     actionId: "admin_panel_availability",
     label: "Post availability check-in",
     row: "main",
     logName: "availability",
-    click: {
-      kind: "run",
-      action: () => ({ kind: "availability" }),
-      // The trio is visible in-channel → dismiss; only the off state needs telling.
-      dismiss: (result) => result.kind === "availability" && result.posted,
-    },
+    // The trio is visible in-channel → dismiss; only the off state needs telling.
+    dismiss: (result) => result.kind === "availability" && result.posted,
+    click: { kind: "run", action: () => ({ kind: "availability" }) },
   },
   {
     actionId: "admin_panel_watch_status",
     label: "Watch status",
     row: "watch",
     logName: "watch_status",
-    click: { kind: "run", action: () => ({ kind: "watch", op: "status" }), dismiss: () => false },
+    dismiss: () => false,
+    click: { kind: "run", action: () => ({ kind: "watch", op: "status" }) },
   },
   {
     actionId: "admin_panel_watch_start",
     label: "Start watch",
     row: "watch",
     logName: "watch_start",
-    click: { kind: "run", action: () => ({ kind: "watch", op: "start" }), dismiss: () => false },
+    dismiss: () => false,
+    click: { kind: "run", action: () => ({ kind: "watch", op: "start" }) },
   },
   {
     actionId: "admin_panel_watch_stop",
     label: "Stop watch",
     row: "watch",
     logName: "watch_stop",
-    click: { kind: "run", action: () => ({ kind: "watch", op: "stop" }), dismiss: () => false },
+    dismiss: () => false,
+    click: { kind: "run", action: () => ({ kind: "watch", op: "stop" }) },
   },
 ];
 
-/** The modals of the modal-opening buttons, for `app.ts` to register their submits. */
-export const PANEL_MODALS: readonly PanelModal[] = PANEL_BUTTONS.flatMap((b) =>
-  b.click.kind === "modal" ? [b.click.modal] : [],
-);
-
-function buttonBlock(b: PanelButton) {
+function buttonBlock(b: PanelButton): Button {
   return {
-    type: "button" as const,
+    type: "button",
     action_id: b.actionId,
-    text: { type: "plain_text" as const, text: b.label, emoji: true },
+    text: { type: "plain_text", text: b.label, emoji: true },
   };
 }
 
@@ -393,21 +379,17 @@ async function deliver(responseUrl: string, result: AdminResult, dismiss: boolea
 }
 
 /**
- * Panel buttons that open a modal do no action work, so they gate themselves; the click is
- * dropped without a `response_url` (nowhere to reply) and the panel is replaced with the denial
- * for non-admins.
+ * Panel buttons that open a modal do no action work, so they gate themselves; the panel is
+ * replaced with the denial for non-admins.
  */
 async function openModal(
   payload: AdminPanelActionPayload,
   env: Env,
+  responseUrl: string,
+  button: PanelButton,
   modal: PanelModal,
 ): Promise<void> {
-  const responseUrl = payload.response_url;
-  if (!responseUrl) {
-    log.warn("admin.panel.no_response_url", { user: payload.user.id });
-    return;
-  }
-  if (!(await guardAdmin(env, payload.user.id, { modal: modal.logName }))) {
+  if (!(await guardAdmin(env, payload.user.id, { modal: button.logName }))) {
     await replaceEphemeral(responseUrl, adminReplyText({ kind: "denied" }));
     return;
   }
@@ -417,23 +399,10 @@ async function openModal(
   });
 }
 
-/** Run an action for a button click and deliver the result into the panel. */
-async function runClick(
-  payload: AdminPanelActionPayload,
-  env: Env,
-  action: AdminAction,
-  dismiss: (result: AdminResult) => boolean,
-): Promise<void> {
-  const responseUrl = payload.response_url;
-  if (!responseUrl) {
-    log.warn("admin.panel.no_response_url", { user: payload.user.id });
-    return;
-  }
-  const result = await runAdminAction(env, payload.user.id, action);
-  await deliver(responseUrl, result, dismiss(result));
-}
-
-/** A panel button click: look the button up by `action_id` and open its modal or run its action. */
+/**
+ * A panel button click: look the button up by `action_id` and open its modal or run its action.
+ * The click is dropped without a `response_url` (nowhere to reply).
+ */
 export async function handlePanelClick(payload: AdminPanelActionPayload, env: Env): Promise<void> {
   const actionId = payload.actions[0]?.action_id;
   const button = PANEL_BUTTONS.find((b) => b.actionId === actionId);
@@ -441,12 +410,19 @@ export async function handlePanelClick(payload: AdminPanelActionPayload, env: En
     log.warn("admin.panel.unknown_action", { user: payload.user.id, action: actionId });
     return;
   }
+  const responseUrl = payload.response_url;
+  if (!responseUrl) {
+    log.warn("admin.panel.no_response_url", { user: payload.user.id });
+    return;
+  }
   const { click } = button;
   if (click.kind === "modal") {
-    await openModal(payload, env, click.modal);
-  } else {
-    await runClick(payload, env, click.action(payload.user.id), click.dismiss);
+    await openModal(payload, env, responseUrl, button, click.modal);
+    return;
   }
+  const userId = payload.user.id;
+  const result = await runAdminAction(env, userId, click.action(userId));
+  await deliver(responseUrl, result, button.dismiss(result, userId));
 }
 
 /**
@@ -462,26 +438,28 @@ function submitResponseUrl(payload: AdminViewSubmissionPayload): string | undefi
   return meta.response_url;
 }
 
-/** A modal submit: look the modal up by `callback_id`, parse its values, run, deliver. */
+/** A modal submit: look the modal's button up by `callback_id`, parse its values, run, deliver. */
 export async function handlePanelSubmit(
   payload: AdminViewSubmissionPayload,
   env: Env,
 ): Promise<void> {
   const callbackId = payload.view.callback_id;
-  const modal = PANEL_MODALS.find((m) => m.callbackId === callbackId);
-  if (!modal) {
+  const button = PANEL_BUTTONS.find(
+    (b) => b.click.kind === "modal" && b.click.modal.callbackId === callbackId,
+  );
+  if (!button || button.click.kind !== "modal") {
     log.warn("admin.panel.unknown_callback", { user: payload.user.id, cb: callbackId });
     return;
   }
   const responseUrl = submitResponseUrl(payload);
   if (!responseUrl) return;
   const userId = payload.user.id;
-  const action = modal.parse(payload.view.state.values, userId);
+  const action = button.click.modal.parse(payload.view.state.values, userId);
   if (!action) {
     log.warn("admin.panel.bad_input", { user: userId, cb: callbackId });
     await replaceEphemeral(responseUrl, adminReplyText({ kind: "failed" }));
     return;
   }
   const result = await runAdminAction(env, userId, action);
-  await deliver(responseUrl, result, modal.dismiss(result, action, userId));
+  await deliver(responseUrl, result, button.dismiss(result, userId));
 }

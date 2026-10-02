@@ -4,12 +4,7 @@ import {
   type SourceSpecifiedBlockActionLazyHandler,
 } from "slack-cloudflare-workers";
 import { ADMIN_COMMAND, handleAdminCommand } from "../bots/admin/slash";
-import {
-  handlePanelClick,
-  handlePanelSubmit,
-  PANEL_BUTTONS,
-  PANEL_MODALS,
-} from "../bots/admin/panel";
+import { handlePanelClick, handlePanelSubmit, PANEL_BUTTONS } from "../bots/admin/panel";
 import { handleReactionChange } from "../bots/availability";
 import {
   CANCEL_ACTION_ID,
@@ -128,7 +123,7 @@ export function createSlackApp(env: Env): SlackApp<Env> {
       lazy("admin.command", async ({ payload }) => handleAdminCommand(payload, env)),
     );
 
-  // `/vc-bot-admin` (no args) panel, registered from its table. Each button is a per-user
+  // `/vc-bot-admin` (no args) panel, registered from its table. The panel is a per-user
   // ephemeral, so the handlers may safely replace/delete via the click's response_url; modal
   // buttons open a modal, threading that response_url through `private_metadata` (a
   // view_submission has none). The empty ack closes a modal; the real work runs in the lazy
@@ -141,13 +136,15 @@ export function createSlackApp(env: Env): SlackApp<Env> {
         handlePanelClick(payload, env),
       ),
     );
-  }
-  for (const modal of PANEL_MODALS) {
-    app.viewSubmission(
-      modal.callbackId,
-      async () => {},
-      lazy(`admin.modal.${modal.logName}`, async ({ payload }) => handlePanelSubmit(payload, env)),
-    );
+    if (button.click.kind === "modal") {
+      app.viewSubmission(
+        button.click.modal.callbackId,
+        async () => {},
+        lazy(`admin.modal.${button.logName}`, async ({ payload }) =>
+          handlePanelSubmit(payload, env),
+        ),
+      );
+    }
   }
   return app;
 }
