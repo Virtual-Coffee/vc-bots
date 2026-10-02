@@ -330,7 +330,7 @@ describe("admin panel — the table", () => {
     async (cb, values) => {
       const warn = vi.spyOn(log, "warn");
       await handlePanelSubmit(submission(cb, values), env);
-      expect(warn).toHaveBeenCalledWith("admin.panel.bad_input", { user: "U1", cb });
+      expect(warn).toHaveBeenCalledWith("admin.panel.bad_input", { user: "U1", cb, values });
       expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
       expect(panelReply()!.replace_original).toBe(true);
       expect(panelReply()!.text).toContain(":warning:");

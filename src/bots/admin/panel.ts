@@ -456,7 +456,11 @@ export async function handlePanelSubmit(
   const userId = payload.user.id;
   const action = button.click.modal.parse(payload.view.state.values, userId);
   if (!action) {
-    log.warn("admin.panel.bad_input", { user: userId, cb: callbackId });
+    log.warn("admin.panel.bad_input", {
+      user: userId,
+      cb: callbackId,
+      values: payload.view.state.values,
+    });
     await replaceEphemeral(responseUrl, adminReplyText({ kind: "failed" }));
     return;
   }
