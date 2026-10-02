@@ -2,7 +2,7 @@ import { postAvailabilityCheckIn } from "./bots/availability";
 import { sendReminder } from "./bots/reminders";
 import type { Env } from "./env";
 import { log } from "./log";
-import { notifyBotLog } from "./slack/notify";
+import { reportFailure } from "./slack/notify";
 
 /**
  * The cron schedule. Cloudflare fires `scheduled()` with the literal cron string, so this map
@@ -32,10 +32,9 @@ export async function runCron(
   try {
     await job(env, controller.scheduledTime);
   } catch (error) {
-    // No user surface on the cron path — log, alert #bot-log (ADR 0006), and swallow so a
-    // Calendar/Zoom/Slack hiccup doesn't surface as an unhandled rejection in `scheduled()`.
-    log.error("cron.run_failed", { cron: controller.cron, error: String(error) });
-    await notifyBotLog(env, "cron.run_failed", { cron: controller.cron, error: String(error) });
+    // No user surface on the cron path — swallow so a Calendar/Zoom/Slack hiccup doesn't
+    // surface as an unhandled rejection in `scheduled()`.
+    await reportFailure(env, "cron.run_failed", error, { cron: controller.cron });
   }
 }
 
@@ -52,8 +51,7 @@ async function runDaily(env: Env, nowMs: number): Promise<void> {
     try {
       await env.CALENDAR_SYNC.getByName("default").ensureWatch();
     } catch (error) {
-      log.error("calendar_sync.bootstrap_failed", { error: String(error) });
-      await notifyBotLog(env, "calendar_sync.bootstrap_failed", { error: String(error) });
+      await reportFailure(env, "calendar_sync.bootstrap_failed", error);
     }
   }
 }

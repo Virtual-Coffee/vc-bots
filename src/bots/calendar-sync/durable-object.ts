@@ -6,7 +6,7 @@ import { createGoogleCalendarPort } from "../../google/calendar";
 import { log, setLogLevel } from "../../log";
 import { SerialQueue } from "../../serial-queue";
 import { createSlackClient } from "../../slack/client";
-import { notifyBotLog } from "../../slack/notify";
+import { reportFailure } from "../../slack/notify";
 import { buildChangeNotice } from "../reminders/blocks";
 import { syncStartingSoon } from "../reminders/starting-soon";
 import { reminderRange } from "../../events";
@@ -347,8 +347,7 @@ export class CalendarSync extends DurableObject<Env> {
     try {
       await this.queue.run("alarm", () => this.ensureWatchNow(Date.now()));
     } catch (error) {
-      log.error("calendar_sync.alarm_failed", { error: String(error) });
-      await notifyBotLog(this.env, "calendar_sync.alarm_failed", { error: String(error) });
+      await reportFailure(this.env, "calendar_sync.alarm_failed", error);
       await this.ctx.storage.setAlarm(Date.now() + RENEW_RETRY_MS);
     }
   }

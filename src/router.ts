@@ -2,7 +2,7 @@ import { isJoinToken, parseJoinPath } from "./bots/coworking/invite-link";
 import type { Env } from "./env";
 import { log } from "./log";
 import { createSlackApp } from "./slack/app";
-import { notifyBotLog } from "./slack/notify";
+import { reportFailure } from "./slack/notify";
 import { handleZoomWebhook } from "./zoom/webhook";
 
 /**
@@ -112,8 +112,7 @@ function handleGoogleNotify(req: Request, env: Env, ctx: ExecutionContext): Resp
         // The DO drops pushes whose channel id isn't its stored one (stale/replaced channels).
         await stub.notify(channelId ?? "");
       } catch (error) {
-        log.error("google.notify.failed", { channelId, error: String(error) });
-        await notifyBotLog(env, "google.notify.failed", { channelId, error: String(error) });
+        await reportFailure(env, "google.notify.failed", error, { channelId });
       }
     })(),
   );

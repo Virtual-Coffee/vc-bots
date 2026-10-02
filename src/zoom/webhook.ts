@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { log } from "../log";
-import { notifyBotLog } from "../slack/notify";
+import { reportFailure } from "../slack/notify";
 import type { ZoomInboundEvent, ZoomMeetingEvent } from "./types";
 import { isZoomMeetingEvent } from "./types";
 import { buildZoomUrlValidationResponse, verifyZoomRequest } from "./verify";
@@ -59,12 +59,7 @@ async function dispatchZoomEvent(env: Env, meeting: string, body: ZoomMeetingEve
     // Alert #bot-log (we've already 200'd, so a persistent DO/Slack failure can't trigger a Zoom
     // retry-storm or risk the account-wide endpoint being deactivated). Room presence
     // self-corrects on the next participant event.
-    log.error("zoom.webhook.failed", { event: body.event, meeting, error: String(error) });
-    await notifyBotLog(env, "zoom.webhook.failed", {
-      event: body.event,
-      meeting,
-      error: String(error),
-    });
+    await reportFailure(env, "zoom.webhook.failed", error, { event: body.event, meeting });
   }
 }
 

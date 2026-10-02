@@ -55,7 +55,8 @@ Two invariants, in order, on every provider route:
 Slack ack is a no-op, the lazy handler does the work, and replies go through
 `src/slack/response.ts` only — `docs/adr/0004-slack-replies-ack-noop-lazy-handler-response-url.md`.
 Failure paths with no user in front of them alert `#bot-log` through an explicit
-`notifyBotLog` call — `docs/adr/0006-bot-log-alerting-policy.md`.
+`reportFailure` call (`notifyBotLog` for non-exception alerts) —
+`docs/adr/0006-bot-log-alerting-policy.md`.
 
 ## Areas
 
@@ -114,8 +115,8 @@ re-exports `slack-edge` and `slack-web-api-client` —
 
 ## Credentials
 
-Log event names and ids. These carry a credential and never go into `log` or `notifyBotLog`
-fields: personal `join_url`s and the join tokens that resolve to them, the Zoom host key
+Log event names and ids. These carry a credential and never go into `log`, `reportFailure` or
+`notifyBotLog` fields: personal `join_url`s and the join tokens that resolve to them, the Zoom host key
 (event-admin mirror only), `GOOGLE_SERVICE_ACCOUNT_KEY`, signed JWT assertions, access tokens,
 and the calendar watch token.
 

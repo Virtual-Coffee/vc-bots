@@ -2,7 +2,7 @@ import type { AnyMessageBlock, MessageAttachment } from "slack-cloudflare-worker
 import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
-import { notifyBotLog } from "../../slack/notify";
+import { reportFailure } from "../../slack/notify";
 import { deleteOriginal, respondEphemeral } from "../../slack/response";
 
 /**
@@ -81,10 +81,15 @@ export async function handleJoinClick(payload: JoinActionPayload, env: Env): Pro
     const attachments = buildJoinEphemeralAttachments(env, joinUrl);
     await respondEphemeral(responseUrl, joinEphemeralText(env), undefined, attachments);
   } catch (err) {
-    log.error("join.failed", { user: slackUserId, err: String(err) });
-    await respondEphemeral(responseUrl, joinErrorText(env));
     // Tell maintainers the room join is broken (Zoom invite-link mint / DO call failed).
-    await notifyBotLog(env, "join.failed", { user: slackUserId, err: String(err) });
+    // Logged synchronously; the alert runs alongside the reply so a slow #bot-log post never
+    // holds up the member's error message.
+    const reported = reportFailure(env, "join.failed", err, { user: slackUserId });
+    try {
+      await respondEphemeral(responseUrl, joinErrorText(env));
+    } finally {
+      await reported;
+    }
   }
 }
 

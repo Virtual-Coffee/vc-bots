@@ -82,7 +82,7 @@ export async function runAdminAction(
   } catch (err) {
     // Adapters run past the app's ACK (ctx.waitUntil) — an escaped rejection would be an
     // uncaught error and the admin would just see silence. Hand back a result instead.
-    log.error("admin.failed", { kind: action.kind, err: String(err) });
+    log.error("admin.failed", { kind: action.kind, error: String(err) });
     return { kind: "failed" };
   }
 }
