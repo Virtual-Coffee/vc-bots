@@ -58,11 +58,11 @@ answer is "keep your own datastore" — see
 - **2026-09-18 — CMS source restored as the interim default.** The Worker ships before the
   calendar is canonical, so `src/bots/reminders/sources/cms.ts` is back, registered as `cms`
   and set as `EVENT_SOURCE` in `wrangler.jsonc`. It maps onto the same model as the Google
-  adapter: the Join Link rule is the shared `deriveJoinInfo` (`src/events.ts`, [0002](0002-join-info-union-and-invalid-events.md)), so a
-  Zoom link without `eventZoomHostCode` is an invalid event, dropped and alerted; Craft's HTML
-  descriptions go through `src/html-to-markdown.ts` (the migration converter, moved into
-  `src/`), degrading to stripped text on an unsupported tag. `CMS_TOKEN`, `CMS_GRAPHQL_URL`,
-  `graphql` and `graphql-request` are back with it. The Google side stays operable while
+  adapter: the Join Link rule is the shared `deriveJoinInfo` (`src/events.ts`,
+  [0002](0002-join-info-union-and-invalid-events.md)), so a Zoom link without
+  `eventZoomHostCode` is an invalid event, dropped and alerted; Craft's HTML descriptions went
+  through an HTML-to-Markdown converter (since removed with the migration script).
+  `CMS_TOKEN`, `CMS_GRAPHQL_URL`, `graphql` and `graphql-request` are back with it. The Google side stays operable while
   `cms` is active (`/vc-bot-admin daily google`, `watch start`); the router drops Calendar
   pushes and the cron skips the watch bootstrap unless `google` is active. The cutover is
   `EVENT_SOURCE` → `"google"`; the removal above then happens for real —
@@ -72,10 +72,10 @@ answer is "keep your own datastore" — see
   is workspace-readable, not public; the site's `/admin/events` is the only writer of `hostCode`
   (Google's UI cannot set extended properties) and requires one whenever the Join Link is a Zoom
   URL. The `joinLink` and `slackChannelId` private properties are retired on that side too.
-- Calendar migration: `pnpm fix-calendar --apply` (`scripts/fix-calendar.ts`) sets `location`
-  from the old `joinLink` property wherever they differ (the Morning/Afternoon Crowd series),
-  deletes `joinLink`, and converts existing descriptions to Markdown; `hostCode` stays on every
-  Zoom series. Dry-run by default.
+- Calendar migration (ran; the `fix-calendar` script and the HTML converter are since
+  removed): it set `location` from the old `joinLink` property wherever they differed (the
+  Morning/Afternoon Crowd series), deleted `joinLink`, and converted existing descriptions to
+  Markdown; `hostCode` stayed on every Zoom series.
 - **2026-10-01 — cutover done.** virtualcoffee.io moved its events to the calendar (site PR
   #1579), and its ADR 0014 makes that one Events Calendar the system of record for the site and
   the bots alike. The `cms` source is deleted with `CMS_TOKEN`, `CMS_GRAPHQL_URL`, `graphql` and
@@ -83,5 +83,4 @@ answer is "keep your own datastore" — see
   `EVENT_SOURCE`, the admin `[source]` argument and the router/cron "only when `google` is
   active" gates are gone, and announcements call `CalendarPort.listEvents` directly
   ([0011](0011-one-google-calendar-adapter-behind-calendarport.md)). A second source would
-  reintroduce a seam. `fix-calendar --apply` had nothing left to patch; `src/html-to-markdown.ts`
-  stays behind that script only.
+  reintroduce a seam. The calendar migration script and the HTML converter are removed.

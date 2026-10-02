@@ -73,10 +73,10 @@ export class CoworkingRoom extends DurableObject<Env> {
     this.inviteLinks = createInviteLinks(this.sql, createZoomInviteLinkPort(env, ctx.storage), env);
     this.roomMessage = new RoomMessage(createSlackRoomChannelPort(env), ctx.storage, env);
     // The runtime holds deliveries until this settles; nothing to await in a constructor.
-    void ctx.blockConcurrencyWhile(async () => this.migrate());
+    void ctx.blockConcurrencyWhile(() => Promise.resolve(this.migrate()));
   }
 
-  private async migrate(): Promise<void> {
+  private migrate(): void {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS session (
         instance_uuid     TEXT PRIMARY KEY,
@@ -111,25 +111,6 @@ export class CoworkingRoom extends DurableObject<Env> {
     // column, so guard with table_info to keep migrate() idempotent under blockConcurrencyWhile.
     this.addColumnIfMissing("session", "peak_participants", "INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("participant", "left_at", "INTEGER");
-
-    // One-shot: the open card's ts used to live on the session row; RoomMessage keeps it now
-    // (`room_message:open`). Hand a live session's card over before dropping the column, so a
-    // deploy mid-session keeps editing the right message. Can go once every DO has booted past it.
-    if (this.hasColumn("session", "slack_message_ts")) {
-      const open = this.sql
-        .exec<{ slack_message_ts: string; started_at: number | null }>(
-          `SELECT slack_message_ts, started_at FROM session
-           WHERE status = 'active' AND slack_message_ts IS NOT NULL
-           ORDER BY started_at DESC
-           LIMIT 1`,
-        )
-        .toArray()[0];
-      if (open) {
-        await this.roomMessage.adoptOpenCard(open.slack_message_ts, open.started_at ?? Date.now());
-      }
-      this.sql.exec("ALTER TABLE session DROP COLUMN slack_message_ts");
-      log.info("coworking.migrate.drop_message_ts", { adopted: Boolean(open) });
-    }
   }
 
   /** Add a column only if it's not already present (idempotent schema migration). */

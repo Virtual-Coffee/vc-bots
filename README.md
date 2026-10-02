@@ -27,13 +27,14 @@ only (`fetch`, `crypto.subtle`, etc.).
 **Request flow.** `src/index.ts` is the Worker entrypoint (`fetch` + `scheduled`). `fetch`
 delegates to `src/router.ts`, a plain `method + path` switch over seven routes: `POST
 /zoom/webhook`, `POST /slack/events`, `POST /slack/interactivity`, `POST /slack/commands`,
-`POST /google/notify` (Google Calendar push notifications), `GET /join/<token>` (the co-working
-join redirect — the token itself is the credential, so there's no signature to check), and
+`POST /google/notify` (Google Calendar push notifications, `src/google/notify.ts`),
+`GET /join/<token>` (the co-working join redirect — the token itself is the credential, so there's no signature to check), and
 `GET /health`. Every provider route:
 
 1. **Verifies the provider signature against the raw body first**, before parsing JSON
    (timing-safe HMAC via `crypto.subtle` in `src/crypto.ts`) — except `/google/notify`, which
-   instead authenticates by the per-channel `X-Goog-Channel-Token` header (the body is empty).
+   instead authenticates by the per-channel `X-Goog-Channel-Token` header (constant-time
+   compare; the body is empty).
 2. **ACKs fast, works later.** Slack and Zoom impose a ~3s response window, so routes return
    `200` immediately and run the real work via `ctx.waitUntil(...)`, replying through Slack's
    `response_url` when needed.
@@ -100,7 +101,7 @@ src/
     client.ts         Slack client factory (createSlackClient / createSlackApp)
     notify.ts         #bot-log error alerts (notifyBotLog)
     response.ts       ephemeral reply helpers over response_url
-  google/             service-account auth + the Google Calendar adapter (CalendarPort)
+  google/             service-account auth, Calendar adapter (CalendarPort), /google/notify handler
   zoom/               Zoom S2S OAuth, webhook verification, invite links, payload types
     webhook.ts        POST /zoom/webhook: verify → url_validation → meeting filter → the DO
 test/                 vitest suites that run inside real workerd (Miniflare)
@@ -182,9 +183,6 @@ pnpm cf-types     # regenerate worker-configuration.d.ts after wrangler.jsonc ch
 
 pnpm vitest run test/coworking-do.test.ts   # a single test file
 pnpm vitest -t "name of test"               # tests matching a name
-
-pnpm fix-calendar [--apply]   # one-off Join Link / Markdown calendar migration (ADR 0001);
-                              # dry-run by default, needs GOOGLE_SERVICE_ACCOUNT_KEY in the env
 ```
 
 Tests run inside `workerd` via `@cloudflare/vitest-pool-workers`, so Web Crypto, the Durable

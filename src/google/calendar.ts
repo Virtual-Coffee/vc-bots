@@ -47,11 +47,11 @@ export interface CalendarPort {
    */
   listEvents(range: EventRange): Promise<ReminderEvent[]>;
   /**
-   * Look up a single event by id. 404/410 (gone) counts as cancelled; an invalid mapping is
-   * reported as `invalid`; other non-OK responses throw so a transient API failure surfaces
-   * rather than masquerading as a deletion.
+   * Look up a single event by id, mapped like a listed one. 404/410 (gone) counts as
+   * `{ kind: "skipped", reason: "cancelled" }`; other non-OK responses throw so a transient API
+   * failure surfaces rather than masquerading as a deletion.
    */
-  getEvent(id: string): Promise<CalendarEventLookup>;
+  getEvent(id: string): Promise<MappedEvent>;
   /** Register a push channel posting to `address`; throws on failure. */
   watch(address: string): Promise<CalendarWatch>;
   /**
@@ -61,17 +61,6 @@ export interface CalendarPort {
    */
   stopChannel(channelId: string, resourceId: string | null): Promise<StopChannelResult>;
 }
-
-export type CalendarEventLookup =
-  | { kind: "live"; event: ReminderEvent }
-  /** Cancelled or gone — either way no longer happening. */
-  | { kind: "cancelled" }
-  /** Live but `start.date` only — no timed slot to announce. */
-  | { kind: "all-day" }
-  /** Live and timed but `start.dateTime` is unparseable — nothing to correct to. */
-  | { kind: "bad-start" }
-  /** Live and timed, but unannounceable (docs/adr/0002). */
-  | { kind: "invalid"; reason: InvalidEventReason };
 
 /** Total result of mapping a wire event: an event, a benign skip, or an invalid entry. */
 export type MappedEvent =
@@ -184,22 +173,16 @@ export function createGoogleCalendarPort(env: Env): CalendarPort {
       const { data, error, response } = await api.GET("/calendars/{calendarId}/events/{eventId}", {
         params: { path: { calendarId, eventId: id } },
       });
-      if (response.status === 404 || response.status === 410) return { kind: "cancelled" };
+      if (response.status === 404 || response.status === 410) {
+        return { kind: "skipped", reason: "cancelled" };
+      }
       if (!response.ok) {
         throw apiError("google", "Google Calendar get event failed", { response, error });
       }
       if (data === undefined || !hasId(data)) {
         throw new Error("Google Calendar get event returned an unexpected body shape");
       }
-      const e = data;
-      if (e.status === "cancelled") return { kind: "cancelled" };
-      if (e.start?.dateTime === undefined) return { kind: "all-day" };
-      const mapped = toReminderEvent(e);
-      if (mapped.kind === "event") return { kind: "live", event: mapped.event };
-      if (mapped.kind === "invalid") return { kind: "invalid", reason: mapped.reason };
-      // Cancelled and all-day were returned above, so `bad-start` is the only skip left. Never a
-      // `live` event with the raw string: the diff would read it as a reschedule to garbage.
-      return { kind: "bad-start" };
+      return toReminderEvent(data);
     },
 
     async watch(address) {

@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { type Env, publicBaseUrl } from "../../env";
 import type { ReminderEvent } from "../../events";
-import type { CalendarEventLookup, CalendarPort } from "../../google/calendar";
+import type { CalendarPort, MappedEvent } from "../../google/calendar";
 import { createGoogleCalendarPort } from "../../google/calendar";
 import { log, setLogLevel } from "../../log";
 import { SerialQueue } from "../../serial-queue";
@@ -274,7 +274,7 @@ export class CalendarSync extends DurableObject<Env> {
     for (const e of current) currentById.set(e.id, e);
 
     // Departed-and-upcoming ids need a single-event lookup to tell cancelled from moved.
-    const lookups = new Map<string, CalendarEventLookup>();
+    const lookups = new Map<string, MappedEvent>();
     for (const id of departedUpcoming(prior, currentById, nowMs)) {
       lookups.set(id, await this.calendar.getEvent(id));
     }

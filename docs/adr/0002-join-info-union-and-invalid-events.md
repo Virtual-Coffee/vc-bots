@@ -30,9 +30,9 @@ and the event-admin mirror could still be built from a `ReminderEvent` that had 
   `calendar.event_rejected` (id, title, reason — no url, no key) and posts one `#bot-log` alert
   per listing. Every other event proceeds. The alert repeats on every listing until the calendar
   is fixed; no dedupe.
-- **`getEvent` reports `{ kind: "invalid", reason }`** as a fourth `CalendarEventLookup` kind.
-  `CalendarSync` treats it like `all-day`: no cancellation or reschedule notice, the id simply
-  leaves the snapshot. (The adapter already alerted.)
+- **`getEvent` returns `{ kind: "invalid", reason }`**: the same `MappedEvent` union
+  `toReminderEvent` produces. `CalendarSync` treats it like an all-day skip: no cancellation or
+  reschedule notice, the id simply leaves the snapshot. (Alerted when listed.)
 - `reconcileStartingSoon` no longer validates. Senders and Block Kit builders switch on
   `join.kind`; the button is for `zoom` / `url`, the location line for `place` (public) or any
   non-`none` kind (admin mirror), the host-code line for `zoom` only.
@@ -42,8 +42,8 @@ and the event-admin mirror could still be built from a `ReminderEvent` that had 
 - Amends 0001's "A Zoom event without a host key fails the run": it is now rejected at the
   source, and the run continues without it.
 - The reminders and sync paths cannot observe a host-key-less Zoom event at all; the only
-  surface is the `#bot-log` alert and the `invalid` lookup kind.
-- `CalendarEventLookup` gains `invalid`; the calendar fake (`test/helpers/calendar-fake.ts`)
+  surface is the `#bot-log` alert and the `invalid` mapped kind.
+- `MappedEvent` carries `invalid`; the calendar fake (`test/helpers/calendar-fake.ts`)
   can return it per id.
 - A Zoom event that loses its host code mid-week disappears from the announced window
   silently for members (no cancellation notice) — by design, since it is still on the calendar;

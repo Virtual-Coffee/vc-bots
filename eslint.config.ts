@@ -68,7 +68,7 @@ export default defineConfig(
     extends: [tseslint.configs.disableTypeChecked],
   },
   {
-    // Local CLIs (`pnpm fix-calendar`, `pnpm gen:api-types`) run under plain `node`, sit outside
+    // Local CLIs (`pnpm gen:api-types`) run under plain `node`, sit outside
     // tsconfig `include` like the root config files, print to stdout by design, and may use
     // `node:*` — the workerd restriction is for the Worker.
     files: ["scripts/**/*.ts"],

@@ -133,6 +133,17 @@ describe("POST /google/notify", () => {
     expect(untouched()).toBe(true);
     const line = warn.mock.calls.map((c) => String(c[0])).join("\n");
     expect(line).toContain("google.notify.bad_token");
+    expect(line).not.toContain("wrong"); // the provided token is never logged
+  });
+
+  it("drops a change with no channel token header at all (200, no sync)", async () => {
+    const req = gcalRequest("exists");
+    req.headers.delete("X-Goog-Channel-Token");
+
+    const res = await send(req, googleEnv());
+
+    expect(res.status).toBe(200);
+    expect(untouched()).toBe(true);
   });
 
   it("404s a non-POST method (route is POST-only)", async () => {
@@ -152,6 +163,7 @@ describe("POST /google/notify", () => {
     expect(untouched()).toBe(true);
     const line = warn.mock.calls.map((c) => String(c[0])).join("\n");
     expect(line).toContain("google.notify.bad_token");
+    expect(line).not.toContain("wrong"); // the provided token is never logged
   });
 
   it("kicks the DO on a valid change (200, calendar listed)", async () => {

@@ -54,7 +54,7 @@ OAuth token endpoint.
   errors. `GoogleCalendarEvent` is `components["schemas"]["Event"] & { id: string }`: the spec
   makes `id` optional, Google always sends it, and a body without one is malformed.
 - **What stays raw.** `src/slack/response.ts` posts to a `response_url` and never reads the
-  body; `scripts/fix-calendar.ts` is a one-off Node CLI outside the Worker.
+  body.
 
 ## Consequences
 

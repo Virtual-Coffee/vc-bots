@@ -3,7 +3,7 @@
  *
  * Uses `crypto.subtle` only — no `node:crypto`. Signature *verification* goes through
  * `crypto.subtle.verify`, which compares in constant time internally, so we never hand-roll
- * a timing-safe string compare.
+ * a byte compare; `timingSafeEqualStrings` is the one place a plain secret string is compared.
  */
 
 const encoder = new TextEncoder();
@@ -38,6 +38,19 @@ export async function verifyHmacSha256(
   if (signature === null) return false;
   const key = await importHmacKey(secret, "verify");
   return crypto.subtle.verify("HMAC", key, signature, encoder.encode(message));
+}
+
+/**
+ * Constant-time string equality for secrets (workerd's `crypto.subtle.timingSafeEqual`, which
+ * needs equal-length buffers — so both sides are SHA-256 digested first, which also hides the
+ * expected value's length).
+ */
+export async function timingSafeEqualStrings(a: string, b: string): Promise<boolean> {
+  const [da, db] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(a)),
+    crypto.subtle.digest("SHA-256", encoder.encode(b)),
+  ]);
+  return crypto.subtle.timingSafeEqual(da, db);
 }
 
 export function bytesToHex(bytes: Uint8Array): string {

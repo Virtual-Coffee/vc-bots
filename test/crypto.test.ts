@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { bytesToHex, hexToBytes, hmacSha256Hex, verifyHmacSha256 } from "../src/crypto";
+import {
+  bytesToHex,
+  hexToBytes,
+  hmacSha256Hex,
+  timingSafeEqualStrings,
+  verifyHmacSha256,
+} from "../src/crypto";
 
 const SECRET = "shared-secret";
 const MESSAGE = "v0:1700000000:{}";
@@ -38,5 +44,14 @@ describe("verifyHmacSha256", () => {
     expect(await verifyHmacSha256(SECRET, "tampered", hex)).toBe(false);
     expect(await verifyHmacSha256("other-secret", MESSAGE, hex)).toBe(false);
     expect(await verifyHmacSha256(SECRET, MESSAGE, "0".repeat(64))).toBe(false);
+  });
+});
+
+describe("timingSafeEqualStrings", () => {
+  it("is true only for identical strings, whatever their lengths", async () => {
+    expect(await timingSafeEqualStrings("tok", "tok")).toBe(true);
+    expect(await timingSafeEqualStrings("tok", "tom")).toBe(false);
+    expect(await timingSafeEqualStrings("tok", "tok-longer")).toBe(false);
+    expect(await timingSafeEqualStrings("", "tok")).toBe(false);
   });
 });
