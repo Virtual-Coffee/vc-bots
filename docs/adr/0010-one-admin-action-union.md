@@ -28,6 +28,10 @@ differed from the slash's for the same failure.
   the slash usage / panel replies, and the panel buttons that open a modal.
 - **The slash grammar**: `daily|weekly [source]`, `welcome [@user]`, `home`,
   `coworking open|close`, `watch status|start|stop`; no arguments opens the panel.
+- **A panel entry is one table row** in `PANEL_BUTTONS` (`panel.ts`): the button, its modal
+  if it opens one, the modal's `parse` into an `AdminAction`, and the dismiss rule.
+  `adminPanelBlocks()`, the two dispatchers `handlePanelClick` / `handlePanelSubmit`, and the
+  registrations in `src/slack/app.ts` all read the table.
 - **Modals.** Panel buttons open modals via `client.views.open({ trigger_id, view })`;
   submits arrive through `.viewSubmission(callbackId, ack, lazy)` in `src/slack/app.ts`,
   acked with the empty view ack (ADR 0004). The panel's `response_url` travels into the modal
@@ -38,8 +42,8 @@ differed from the slash's for the same failure.
 ## Consequences
 
 - A new admin operation is: a variant on `AdminAction` and `AdminResult`, a case in
-  `runAdminAction`, a line in `adminReplyText`, then the slash parse and the panel button /
-  modal. The gate and the error path come for free.
+  `runAdminAction`, a line in `adminReplyText`, then the slash parse and one `PANEL_BUTTONS`
+  row (`app.ts` registers it from the table). The gate and the error path come for free.
 - An adapter that catches or gates on its own is a regression: a result the other surface
   cannot produce.
 - Everything the panel shows a user is an ephemeral reply, so it is safe to replace or delete
