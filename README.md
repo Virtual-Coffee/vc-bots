@@ -113,7 +113,7 @@ needs wrangler, which is a dev dependency).
 
 ```bash
 pnpm install
-cp .dev.vars.example .dev.vars   # then fill in real secrets
+cp .dev.vars.example .dev.vars   # then fill in real secrets and your tunnel's PUBLIC_BASE_URL
 pnpm dev                          # wrangler dev — local server on workerd
 ```
 
