@@ -165,8 +165,8 @@ export class CoworkingRoom extends DurableObject<Env> {
 
   /**
    * Slack Join click → mint a per-user Zoom invite link (name pre-filled) and return the Worker's
-   * `/join/<token>` url for it. The raw `join_url` and the token stay inside the DO's invite-link
-   * store: the join button points at the redirect, which calls `resolveJoinToken` — so the
+   * `/join/<token>` url for it. The raw Zoom `join_url` stays inside the DO's invite-link store:
+   * the join button points at the redirect, which calls `resolveJoinToken` — so the
    * token-bearing Zoom url appears nowhere in the Slack UI (and, as ever, nowhere in logs).
    *
    * Correlation is best-effort by display name — see `InviteLinks`. `displayName` is null when

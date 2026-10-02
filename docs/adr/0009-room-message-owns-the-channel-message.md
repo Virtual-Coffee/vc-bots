@@ -64,9 +64,9 @@ differently: a Slack edit that fails should never wedge a session.
   `src/bots/coworking/invite-link.ts` owns the whole lifecycle: the TTL (one constant, also
   sent to Zoom as the link's `ttl`), the 32-hex join token, the `/join/<token>` url (built
   and parsed there), and the store over `invite_link` / `member_link` (it calls the Zoom
-  port itself and sweeps expired rows of both tables). The token never crosses the RPC
-  boundary: `handleJoinRequest` returns the full join url, which keeps the token-bearing
-  Zoom url out of the Slack UI. The join-token RPCs touch only `member_link` /
+  port itself and sweeps expired rows of both tables). `handleJoinRequest` returns
+  the bot-hosted `/join/<token>` url; what stays inside the DO is the token-bearing Zoom
+  url, which keeps it out of the Slack UI. The join-token RPCs touch only `member_link` /
   `invite_link` and stay outside the DO queue so the button is never slowed (ADR 0003).
 - **Correlation is best-effort by display name** through `member_link` (the webhook carries
   no registrant id for invite-link joiners), only within the invite TTL. A member whose Slack

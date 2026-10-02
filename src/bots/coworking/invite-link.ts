@@ -9,8 +9,9 @@ import type { InviteLinkPort } from "../../zoom/invite-links";
  *
  * A Join click `request`s an invite link: Zoom mints the member's personal link (name
  * pre-filled), the member is remembered by display name for correlation, and the click gets back
- * the bot-hosted `/join/<token>` url — the token-bearing Zoom url never reaches the Slack UI,
- * and the token never leaves this module. The table DDL stays in the DO's `migrate()`.
+ * the bot-hosted `/join/<token>` url — the token-bearing Zoom url never reaches the Slack UI;
+ * only this module mints, validates and resolves tokens. The table DDL stays in the DO's
+ * `migrate()`.
  */
 
 /** Invite link lifetime. Only needs to cover click→join; it bounds the `/join/<token>`
