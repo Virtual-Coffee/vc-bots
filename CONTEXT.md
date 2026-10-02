@@ -72,6 +72,10 @@ _Avoid_: Google API, gcal, events feed
 The bots' subscription to Calendar changes, so a cancellation or reschedule is noticed between daily runs.
 _Avoid_: webhook, notification channel, sync channel
 
+**Change notice**:
+The standout cancellation or reschedule post the Calendar watch sends to the three event channels.
+_Avoid_: alert, notification
+
 **Event**:
 One timed entry on the Calendar. The bots read it; they never write it.
 _Avoid_: CMS event, reminder event

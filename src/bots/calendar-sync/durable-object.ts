@@ -7,6 +7,7 @@ import { log, setLogLevel } from "../../log";
 import { SerialQueue } from "../../serial-queue";
 import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
+import { buildChangeNotice } from "../reminders/blocks";
 import { syncStartingSoon } from "../reminders/starting-soon";
 import { reminderRange } from "../../events";
 import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
@@ -17,7 +18,7 @@ import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
  * (ADR 0003): every state-mutating entry point — `notify`, `ensureWatch`, `stopWatch`, `seed`,
  * the alarm — runs through `this.queue`, so a notification's snapshot diff never races a baseline
  * seed or a second push (two concurrent pushes would each diff the same prior snapshot and post
- * the same notice everywhere). `watchStatus` is a synchronous read and stays outside the queue.
+ * the same change notice everywhere). `watchStatus` is a synchronous read and stays outside the queue.
  * The queue is in-memory; Google re-delivers a push its receiver died on, so an evicted isolate
  * costs a retry, not a change.
  *
@@ -29,9 +30,9 @@ import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
  *   change whose push notification is still queued behind it, so the diff would find nothing.
  * - **Notification handling** (`notify` → `processNotification`): on each push, diff the live
  *   weekly window against the last-known snapshot to detect cancellations / reschedules, persist
- *   the new snapshot, then post standout notices to the three event channels and sync the
+ *   the new snapshot, then post change notices to the three event channels and sync the
  *   scheduled "Starting Soon" queue. The snapshot is committed *before* delivery so a failed Slack
- *   call loses (and alerts on) a notice rather than re-posting it to every channel on the next
+ *   call loses (and alerts on) a change notice rather than re-posting it to every channel on the next
  *   push. `notify` drops pushes whose channel id isn't the stored one (stale/replaced channels).
  *
  * All Google Calendar traffic goes through the injected `CalendarPort` (`this.calendar`, the
@@ -212,7 +213,7 @@ export class CalendarSync extends DurableObject<Env> {
   }
 
   /**
-   * Overwrite the snapshot to match the current weekly window — no notices, no starting-soon
+   * Overwrite the snapshot to match the current weekly window — no change notices, no starting-soon
    * sync. The
    * baseline mid-week notifications diff against; `ensureWatch` calls it only when the snapshot is
    * missing or belongs to a previous week (it is never a routine refresh — see the class doc).
@@ -248,7 +249,7 @@ export class CalendarSync extends DurableObject<Env> {
 
   /**
    * Core push-notification handler. Diffs the live weekly window against the last snapshot
-   * (the rules live in `./diff.ts`), persists the new snapshot, then posts standout notices to
+   * (the rules live in `./diff.ts`), persists the new snapshot, then posts change notices to
    * the three event channels and syncs the scheduled "Starting Soon" queue for the daily
    * window.
    *
@@ -278,32 +279,28 @@ export class CalendarSync extends DurableObject<Env> {
       lookups.set(id, await this.calendar.getEvent(id));
     }
 
-    const { notices, cancellations, reschedules, invalid } = diffSnapshot(
-      prior,
-      currentById,
-      lookups,
-      nowMs,
-    );
+    const { changes, invalid } = diffSnapshot(prior, currentById, lookups, nowMs);
     for (const { id, reason } of invalid) {
       // Still live, but unannounceable (e.g. a Zoom link lost its host key): the adapter has
-      // already alerted #bot-log; it just leaves the snapshot without a notice.
+      // already alerted #bot-log; it just leaves the snapshot without a change notice.
       log.info("calendar_sync.event_invalid", { id, reason });
     }
 
     // Commit the new baseline before delivering anything: a delivery failure below then loses a
-    // notice (alerted via the thrown error) instead of re-posting it everywhere on the next push.
+    // change notice (alerted via the thrown error) instead of re-posting it everywhere on the next push.
     await this.writeSnapshot(current, weekly.rangeStart);
 
     const client = createSlackClient(this.env);
     const failures: string[] = [];
 
-    // Announce each notice to all three event channels.
+    // Announce each change notice to all three event channels.
     const channels = [
       this.env.SLACK_ANNOUNCEMENTS_CHANNEL_ID,
       this.env.SLACK_EVENTS_CHANNEL_ID,
       this.env.SLACK_EVENTADMIN_CHANNEL_ID,
     ];
-    for (const notice of notices) {
+    for (const change of changes) {
+      const notice = buildChangeNotice(change);
       for (const channel of channels) {
         try {
           await client.chat.postMessage({
@@ -328,8 +325,8 @@ export class CalendarSync extends DurableObject<Env> {
     }
 
     log.info("calendar_sync.processed", {
-      cancellations,
-      reschedules,
+      cancellations: changes.filter((c) => c.kind === "cancelled").length,
+      reschedules: changes.filter((c) => c.kind === "rescheduled").length,
       currentCount: current.length,
       failures: failures.length,
     });

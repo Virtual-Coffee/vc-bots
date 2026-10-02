@@ -36,6 +36,14 @@ export interface ReminderEvent {
   join: JoinInfo;
 }
 
+/**
+ * One change notice's worth of calendar change: an announced event that was cancelled, or moved
+ * from `from` (the previously announced ISO start) to `event.startsAt`.
+ */
+export type CalendarChange =
+  | { kind: "cancelled"; event: ReminderEvent }
+  | { kind: "rescheduled"; event: ReminderEvent; from: string };
+
 /** ISO range passed to the provider (computed in America/New_York). */
 export interface EventRange {
   rangeStart: string;

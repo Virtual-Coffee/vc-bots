@@ -1,8 +1,6 @@
 import { DateTime } from "luxon";
-import type { InvalidEventReason, ReminderEvent } from "../../events";
+import type { CalendarChange, InvalidEventReason, ReminderEvent } from "../../events";
 import type { CalendarEventLookup } from "../../google/calendar";
-import type { ReminderMessage } from "../reminders/blocks";
-import { buildCancellationMessage, buildRescheduleMessage } from "../reminders/blocks";
 
 /**
  * The snapshot diff behind `CalendarSync.processNotification`, kept pure (no I/O, no DO) so the
@@ -24,11 +22,9 @@ export interface SnapshotEntry {
 }
 
 export interface SnapshotDiff {
-  /** Notices in delivery order: departed events (snapshot order), then in-window reschedules. */
-  notices: ReminderMessage[];
-  cancellations: number;
-  reschedules: number;
-  /** Departed events still live but unannounceable — the caller logs them; no notice. */
+  /** Changes in delivery order: departed events (snapshot order), then in-window reschedules. */
+  changes: CalendarChange[];
+  /** Departed events still live but unannounceable — the caller logs them; no change. */
   invalid: Array<{ id: string; reason: InvalidEventReason }>;
 }
 
@@ -56,19 +52,19 @@ export function departedUpcoming(
 }
 
 /**
- * Diff the live window against the snapshot into notices.
+ * Diff the live window against the snapshot into changes.
  *
  * - Departed (in `prior`, not in `current`, announced start still upcoming), by its lookup:
- *   `cancelled` → cancellation notice; `live` → reschedule notice to the new start (an
+ *   `cancelled` → `cancelled` change; `live` → `rescheduled` change to the new start (an
  *   out-of-window move); `all-day` / `bad-start` → nothing (no timed slot to correct to; the
  *   adapter already warned about the unparseable start); `invalid` → nothing, reported in
  *   `invalid` (the adapter already alerted #bot-log). A departed id with no lookup shouldn't
- *   happen (`departedUpcoming` names exactly the ids to fetch) — treated as no notice.
- * - In both, announced start still upcoming, start changed → reschedule notice.
+ *   happen (`departedUpcoming` names exactly the ids to fetch) — treated as no change.
+ * - In both, announced start still upcoming, start changed → `rescheduled` change.
  * - New ids → nothing: the starting-soon sync handles them.
  *
- * Departed notices come first (in `prior` order), then in-window reschedules (in `current`
- * order). Both notice kinds for a departed event carry no Join Link — the snapshot doesn't
+ * Departed changes come first (in `prior` order), then in-window reschedules (in `current`
+ * order). Both change kinds for a departed event carry no Join Link — the snapshot doesn't
  * keep one.
  */
 export function diffSnapshot(
@@ -77,10 +73,8 @@ export function diffSnapshot(
   lookups: ReadonlyMap<string, CalendarEventLookup>,
   nowMs: number,
 ): SnapshotDiff {
-  const notices: ReminderMessage[] = [];
+  const changes: CalendarChange[] = [];
   const invalid: SnapshotDiff["invalid"] = [];
-  let cancellations = 0;
-  let reschedules = 0;
 
   for (const id of departedUpcoming(prior, current, nowMs)) {
     const snap = prior.get(id)!;
@@ -93,8 +87,7 @@ export function diffSnapshot(
           startsAt: snap.startsAt,
           join: { kind: "none" },
         };
-        notices.push(buildCancellationMessage(reconstructed));
-        cancellations += 1;
+        changes.push({ kind: "cancelled", event: reconstructed });
         break;
       }
       case "live": {
@@ -104,8 +97,7 @@ export function diffSnapshot(
           startsAt: lookup.event.startsAt,
           join: { kind: "none" },
         };
-        notices.push(buildRescheduleMessage(moved, snap.startsAt));
-        reschedules += 1;
+        changes.push({ kind: "rescheduled", event: moved, from: snap.startsAt });
         break;
       }
       case "invalid":
@@ -123,10 +115,9 @@ export function diffSnapshot(
     if (!snap) continue;
     if (!isFuture(snap.startsAt, nowMs)) continue;
     if (event.startsAt !== snap.startsAt) {
-      notices.push(buildRescheduleMessage(event, snap.startsAt));
-      reschedules += 1;
+      changes.push({ kind: "rescheduled", event, from: snap.startsAt });
     }
   }
 
-  return { notices, cancellations, reschedules, invalid };
+  return { changes, invalid };
 }

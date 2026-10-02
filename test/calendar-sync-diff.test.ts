@@ -52,50 +52,67 @@ describe("departedUpcoming", () => {
 });
 
 describe("diffSnapshot", () => {
-  it("a departed event the lookup reports cancelled → one cancellation notice", () => {
+  it("a departed event the lookup reports cancelled → one cancelled change", () => {
     const prior = snapshot(timedEvent("evt-1", at(48), "Coffee"));
     const diff = diffSnapshot(prior, live(), lookups({ "evt-1": { kind: "cancelled" } }), NOW);
 
-    expect(diff.cancellations).toBe(1);
-    expect(diff.reschedules).toBe(0);
-    expect(diff.notices).toHaveLength(1);
-    expect(diff.notices[0]!.text).toContain("Cancelled: Coffee");
+    expect(diff.changes).toEqual([
+      { kind: "cancelled", event: timedEvent("evt-1", at(48), "Coffee") },
+    ]);
+    expect(diff.invalid).toEqual([]);
   });
 
-  it("a departed event that is live elsewhere (moved out of the week) → one reschedule notice", () => {
-    const prior = snapshot(timedEvent("evt-1", at(48)));
-    const moved = timedEvent("evt-1", at(24 * 6));
+  it("rebuilds the departed event from the snapshot: `(event)` for a missing title, no Join Link", () => {
+    const prior = new Map<string, SnapshotEntry>([
+      ["evt-1", { id: "evt-1", startsAt: at(48), title: null }],
+    ]);
+    const diff = diffSnapshot(prior, live(), lookups({ "evt-1": { kind: "cancelled" } }), NOW);
+
+    expect(diff.changes).toEqual([
+      {
+        kind: "cancelled",
+        event: { id: "evt-1", title: "(event)", startsAt: at(48), join: { kind: "none" } },
+      },
+    ]);
+  });
+
+  it("a departed event that is live elsewhere (moved out of the week) → one rescheduled change", () => {
+    const prior = snapshot(timedEvent("evt-1", at(48), "Coffee"));
+    const moved = timedEvent("evt-1", at(24 * 6), "Renamed");
     const found = lookups({ "evt-1": { kind: "live", event: moved } });
     const diff = diffSnapshot(prior, live(), found, NOW);
 
-    expect(diff.reschedules).toBe(1);
-    expect(diff.cancellations).toBe(0);
-    expect(diff.notices).toHaveLength(1);
-    expect(diff.notices[0]!.text).toContain("Rescheduled");
+    // Rebuilt from the snapshot title with the looked-up start, not the live event itself.
+    expect(diff.changes).toEqual([
+      {
+        kind: "rescheduled",
+        event: { id: "evt-1", title: "Coffee", startsAt: at(24 * 6), join: { kind: "none" } },
+        from: at(48),
+      },
+    ]);
   });
 
-  it("an in-window start change → one reschedule notice", () => {
+  it("an in-window start change → one rescheduled change", () => {
     const prior = snapshot(timedEvent("evt-1", at(48)));
-    const diff = diffSnapshot(prior, live(timedEvent("evt-1", at(72))), NONE, NOW);
+    const event = timedEvent("evt-1", at(72));
+    const diff = diffSnapshot(prior, live(event), NONE, NOW);
 
-    expect(diff.reschedules).toBe(1);
-    expect(diff.notices).toHaveLength(1);
-    expect(diff.notices[0]!.text).toContain("Rescheduled");
+    expect(diff.changes).toEqual([{ kind: "rescheduled", event, from: at(48) }]);
   });
 
   it("a departed event that turned all-day → nothing (no timed slot to correct to)", () => {
     const prior = snapshot(timedEvent("evt-1", at(48)));
     const diff = diffSnapshot(prior, live(), lookups({ "evt-1": { kind: "all-day" } }), NOW);
-    expect(diff).toEqual({ notices: [], cancellations: 0, reschedules: 0, invalid: [] });
+    expect(diff).toEqual({ changes: [], invalid: [] });
   });
 
   it("a departed event whose start became unparseable → nothing (bad-start, not a reschedule)", () => {
     const prior = snapshot(timedEvent("evt-1", at(48)));
     const diff = diffSnapshot(prior, live(), lookups({ "evt-1": { kind: "bad-start" } }), NOW);
-    expect(diff).toEqual({ notices: [], cancellations: 0, reschedules: 0, invalid: [] });
+    expect(diff).toEqual({ changes: [], invalid: [] });
   });
 
-  it("a departed event that turned invalid → no notice, reported in `invalid`", () => {
+  it("a departed event that turned invalid → no change, reported in `invalid`", () => {
     const prior = snapshot(timedEvent("evt-1", at(48)));
     const diff = diffSnapshot(
       prior,
@@ -103,14 +120,14 @@ describe("diffSnapshot", () => {
       lookups({ "evt-1": { kind: "invalid", reason: "zoom-no-host-key" } }),
       NOW,
     );
-    expect(diff.notices).toEqual([]);
+    expect(diff.changes).toEqual([]);
     expect(diff.invalid).toEqual([{ id: "evt-1", reason: "zoom-no-host-key" }]);
   });
 
   it("a departed id with no lookup → nothing (departedUpcoming names what to fetch)", () => {
     const prior = snapshot(timedEvent("evt-1", at(48)));
     const diff = diffSnapshot(prior, live(), NONE, NOW);
-    expect(diff).toEqual({ notices: [], cancellations: 0, reschedules: 0, invalid: [] });
+    expect(diff).toEqual({ changes: [], invalid: [] });
   });
 
   it("a change to an event whose announced start already passed → nothing", () => {
@@ -121,21 +138,21 @@ describe("diffSnapshot", () => {
       lookups({ "evt-1": { kind: "cancelled" } }),
       NOW,
     );
-    expect(diff).toEqual({ notices: [], cancellations: 0, reschedules: 0, invalid: [] });
+    expect(diff).toEqual({ changes: [], invalid: [] });
   });
 
   it("an unchanged window → nothing", () => {
     const evt = timedEvent("evt-1", at(48));
     const diff = diffSnapshot(snapshot(evt), live(evt), NONE, NOW);
-    expect(diff).toEqual({ notices: [], cancellations: 0, reschedules: 0, invalid: [] });
+    expect(diff).toEqual({ changes: [], invalid: [] });
   });
 
   it("a new id → nothing (the starting-soon sync handles it)", () => {
     const diff = diffSnapshot(snapshot(), live(timedEvent("new", at(48))), NONE, NOW);
-    expect(diff).toEqual({ notices: [], cancellations: 0, reschedules: 0, invalid: [] });
+    expect(diff).toEqual({ changes: [], invalid: [] });
   });
 
-  it("orders notices: departed events in snapshot order, then in-window reschedules in live order", () => {
+  it("orders changes: departed events in snapshot order, then in-window reschedules in live order", () => {
     const prior = snapshot(
       timedEvent("moved-b", at(30), "Moved B"),
       timedEvent("gone-a", at(48), "Gone A"),
@@ -153,13 +170,11 @@ describe("diffSnapshot", () => {
       NOW,
     );
 
-    expect(diff.notices.map((n) => n.text.replace(/ — .*$/, ""))).toEqual([
-      "Cancelled: Gone A",
-      "Cancelled: Gone B",
-      "Rescheduled: Moved A",
-      "Rescheduled: Moved B",
+    expect(diff.changes.map((c) => [c.kind, c.event.id])).toEqual([
+      ["cancelled", "gone-a"],
+      ["cancelled", "gone-b"],
+      ["rescheduled", "moved-a"],
+      ["rescheduled", "moved-b"],
     ]);
-    expect(diff.cancellations).toBe(2);
-    expect(diff.reschedules).toBe(2);
   });
 });
