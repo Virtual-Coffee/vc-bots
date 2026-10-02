@@ -673,58 +673,6 @@ describe("CoworkingRoom — vanished room message self-healing", () => {
   });
 });
 
-describe("CoworkingRoom — schema migration", () => {
-  it("migrate adopts a pre-existing open card and drops the slack_message_ts column", async () => {
-    const stub = room("mig1");
-    const columns = (state: DurableObjectState) =>
-      state.storage.sql
-        .exec<{ name: string }>("PRAGMA table_info(session)")
-        .toArray()
-        .map((c) => c.name);
-
-    // The instance has already booted (and migrated) by the time the callback runs, so rebuild
-    // the pre-A2 schema by hand: the open card's ts on the session row, no open pointer. A second,
-    // older row still marked active (its meeting.ended never arrived) must not win the adoption.
-    await runInDurableObject(stub, async (instance, state) => {
-      state.storage.sql.exec(`
-        DROP TABLE session;
-        CREATE TABLE session (
-          instance_uuid     TEXT PRIMARY KEY,
-          slack_message_ts  TEXT,
-          started_at        INTEGER,
-          ended_at          INTEGER,
-          status            TEXT NOT NULL,
-          peak_participants INTEGER NOT NULL DEFAULT 0
-        );
-        INSERT INTO session (instance_uuid, slack_message_ts, started_at, status)
-          VALUES ('uuid-older', 'older-ts', 1600000000000, 'active'),
-                 ('uuid-old', 'old-ts', 1700000000000, 'active');
-      `);
-      await state.storage.delete("room_message:open");
-      expect(columns(state)).toContain("slack_message_ts");
-
-      await (instance as CoworkingRoom)["migrate"]();
-
-      expect(columns(state)).not.toContain("slack_message_ts");
-      expect(await state.storage.get("room_message:open")).toEqual({
-        ts: "old-ts",
-        startedAtMs: 1700000000000,
-      });
-      await (instance as CoworkingRoom)["migrate"](); // idempotent once the column is gone
-    });
-
-    // The live session keeps editing the card it opened before the deploy — no fresh post.
-    await send(
-      stub,
-      event("meeting.participant_joined", "uuid-old", { user_id: "p1", user_name: "Ada" }),
-    );
-    expect(port.posts).toHaveLength(0);
-    expect(lastUpdatedTs()).toBe("old-ts");
-    expect(port.lastUpdateJson()).toContain("Ada");
-    expect(port.lastUpdateJson()).toContain("Session started at <!date^1700000000^{time}|");
-  });
-});
-
 describe("CoworkingRoom — stale-session alarm", () => {
   it("force-ends a still-active session when the alarm fires", async () => {
     const stub = room("a1");

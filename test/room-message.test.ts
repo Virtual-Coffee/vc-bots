@@ -144,25 +144,6 @@ describe("the open card pointer", () => {
       expect.stringContaining("coworking.room_msg.no_open_card op=close"),
     );
   });
-
-  it("adoptOpenCard carries a card opened before the pointer existed, so presence and close edit it", async () => {
-    await room.adoptOpenCard("old-ts", STARTED_AT);
-    expect(storage.map.get(OPEN_KEY)).toEqual({ ts: "old-ts", startedAtMs: STARTED_AT });
-
-    await room.showPresence([{ displayName: "Ada" }]);
-    expect(port.updates.at(-1)!.ts).toBe("old-ts");
-    expect(port.lastUpdateJson()).toContain(`<!date^${Math.floor(STARTED_AT / 1000)}^{time}|`);
-
-    await room.close(stats());
-    expect(port.updates.at(-1)!.ts).toBe("old-ts");
-    expect(storage.map.get(LAST_CLOSED_KEY)).toMatchObject({ ts: "old-ts" });
-  });
-
-  it("adoptOpenCard is a no-op when a card is already open", async () => {
-    const ts = await openCard();
-    await room.adoptOpenCard("old-ts", ENDED_AT);
-    expect(storage.map.get(OPEN_KEY)).toEqual({ ts, startedAtMs: STARTED_AT });
-  });
 });
 
 describe("the ended card", () => {

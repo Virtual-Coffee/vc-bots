@@ -164,17 +164,6 @@ export class RoomMessage {
   }
 
   /**
-   * One-shot carry-over for a card opened before the open pointer existed: the ts used to live on
-   * the DO's session row (`slack_message_ts`), and the DO hands it over when it drops that column.
-   * A no-op when a card is already open. Can go once every deployed DO has booted past that
-   * migration.
-   */
-  async adoptOpenCard(ts: string, startedAtMs: number): Promise<void> {
-    if (await this.storage.get<OpenCard>(OPEN_KEY)) return;
-    await this.storage.put<OpenCard>(OPEN_KEY, { ts, startedAtMs });
-  }
-
-  /**
    * Post a new open card and retire whatever carried the standing invite until now. The post
    * comes first so a failed post never leaves the channel with no way in; the retire is
    * best-effort and runs even when Slack returned no ts (the room is open either way, so the old
