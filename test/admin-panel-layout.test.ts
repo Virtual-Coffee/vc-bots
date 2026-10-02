@@ -1,11 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  adminPanelBlocks,
-  handlePanelCoworkingClick,
-  handlePanelReminderClick,
-  handlePanelWelcomeClick,
-} from "../src/bots/admin/panel";
+import { adminPanelBlocks, handlePanelClick } from "../src/bots/admin/panel";
 import { type FetchRecorder, installFetchRecorder } from "./helpers/fetch-recorder";
 
 /**
@@ -35,14 +30,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const handlers = {
-  admin_panel_reminder: handlePanelReminderClick,
-  admin_panel_welcome: handlePanelWelcomeClick,
-  admin_panel_coworking: handlePanelCoworkingClick,
-};
-
-async function click(actionId: keyof typeof handlers): Promise<void> {
-  await handlers[actionId](
+async function click(actionId: string): Promise<void> {
+  await handlePanelClick(
     {
       user: { id: "U1" },
       trigger_id: "TRIG-1",
@@ -53,7 +42,7 @@ async function click(actionId: keyof typeof handlers): Promise<void> {
   );
 }
 
-async function openedView(actionId: keyof typeof handlers): Promise<unknown> {
+async function openedView(actionId: string): Promise<unknown> {
   await click(actionId);
   const call = rec.callsTo("/api/views.open")[0];
   return JSON.parse(new URLSearchParams(call!.body).get("view")!);

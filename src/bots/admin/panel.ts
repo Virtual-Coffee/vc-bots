@@ -20,95 +20,25 @@ import {
  * can't otherwise see (e.g. reminder counts) or DISMISSED when the result is self-verifiable
  * (a message visibly posted to a channel, the App Home tab, a DM).
  *
- * Registered as `.action()` / `.viewSubmission()` lazy listeners in `src/slack/app.ts`. The
- * panel is a per-user ephemeral, so REPLACE/DISMISS via its `response_url` are both safe
- * (unlike the shared room message — see `src/slack/response.ts`). A `block_actions` payload
- * carries that `response_url`, but a `view_submission` does NOT, so it travels into the modal
- * as `private_metadata` and back out on submit.
+ * One `PANEL_BUTTONS` row per button drives everything: the Block Kit button, the click
+ * dispatch, and (for modal buttons) the modal view, its submit parsing and the replace-vs-
+ * dismiss rule. `src/slack/app.ts` registers each row's exact `action_id` / `callback_id` as a
+ * lazy listener that calls `handlePanelClick` / `handlePanelSubmit`. The panel is a per-user
+ * ephemeral, so REPLACE/DISMISS via its `response_url` are both safe (unlike the shared room
+ * message — see `src/slack/response.ts`). A `block_actions` payload carries that
+ * `response_url`, but a `view_submission` does NOT, so it travels into the modal as
+ * `private_metadata` and back out on submit.
  *
- * This is the Block Kit adapter over `actions.ts`: each handler parses its payload into an
- * `AdminAction`, runs it (the admin gate and error handling live there), and delivers the
- * `AdminResult` into the panel. Only the modal-opening buttons gate themselves (`guardAdmin`).
+ * This is the Block Kit adapter over `actions.ts`: each click or submit is parsed into an
+ * `AdminAction`, run (the admin gate and error handling live there), and its `AdminResult`
+ * delivered into the panel. Only the modal-opening buttons gate themselves (`guardAdmin`).
  */
-
-export const PANEL_REMINDER_ACTION_ID = "admin_panel_reminder";
-export const PANEL_WELCOME_ACTION_ID = "admin_panel_welcome";
-export const PANEL_COWORKING_ACTION_ID = "admin_panel_coworking";
-export const PANEL_HOME_ACTION_ID = "admin_panel_home";
-export const PANEL_AVAILABILITY_ACTION_ID = "admin_panel_availability";
-export const PANEL_WATCH_STATUS_ACTION_ID = "admin_panel_watch_status";
-export const PANEL_WATCH_START_ACTION_ID = "admin_panel_watch_start";
-export const PANEL_WATCH_STOP_ACTION_ID = "admin_panel_watch_stop";
-
-export const REMINDER_MODAL_CALLBACK_ID = "admin_reminder_modal";
-export const WELCOME_MODAL_CALLBACK_ID = "admin_welcome_modal";
-export const COWORKING_MODAL_CALLBACK_ID = "admin_coworking_modal";
 
 export const PANEL_TEXT = "Bot admin panel";
 
-/** Panel ephemeral blocks: a heading plus one button per admin function. */
-export function adminPanelBlocks(): AnyMessageBlock[] {
-  return [
-    {
-      type: "section",
-      text: { type: "mrkdwn", text: "*Bot admin panel* — pick an action:" },
-    },
-    {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          action_id: PANEL_REMINDER_ACTION_ID,
-          text: { type: "plain_text", text: "Run reminder…", emoji: true },
-        },
-        {
-          type: "button",
-          action_id: PANEL_WELCOME_ACTION_ID,
-          text: { type: "plain_text", text: "Send welcome…", emoji: true },
-        },
-        {
-          type: "button",
-          action_id: PANEL_COWORKING_ACTION_ID,
-          text: { type: "plain_text", text: "Coworking…", emoji: true },
-        },
-        {
-          type: "button",
-          action_id: PANEL_HOME_ACTION_ID,
-          text: { type: "plain_text", text: "Publish App Home", emoji: true },
-        },
-        {
-          type: "button",
-          action_id: PANEL_AVAILABILITY_ACTION_ID,
-          text: { type: "plain_text", text: "Post availability check-in", emoji: true },
-        },
-      ],
-    },
-    {
-      type: "section",
-      text: { type: "mrkdwn", text: "*Calendar Watch* — Google Calendar push channel:" },
-    },
-    {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          action_id: PANEL_WATCH_STATUS_ACTION_ID,
-          text: { type: "plain_text", text: "Watch status", emoji: true },
-        },
-        {
-          type: "button",
-          action_id: PANEL_WATCH_START_ACTION_ID,
-          text: { type: "plain_text", text: "Start watch", emoji: true },
-        },
-        {
-          type: "button",
-          action_id: PANEL_WATCH_STOP_ACTION_ID,
-          text: { type: "plain_text", text: "Stop watch", emoji: true },
-        },
-      ],
-    },
-  ];
-}
+const REMINDER_MODAL_CALLBACK_ID = "admin_reminder_modal";
+const WELCOME_MODAL_CALLBACK_ID = "admin_welcome_modal";
+const COWORKING_MODAL_CALLBACK_ID = "admin_coworking_modal";
 
 /** Carried through a modal so the submit handler can reach back to the panel ephemeral. */
 interface PanelMetadata {
@@ -270,7 +200,185 @@ export interface AdminViewSubmissionPayload {
   };
 }
 
-// ── Action handlers (panel buttons) ─────────────────────────────────────────
+type ModalValues = AdminViewSubmissionPayload["view"]["state"]["values"];
+
+/** A modal a panel button opens, and how its submit becomes an action and a delivery. */
+interface PanelModal {
+  callbackId: string;
+  /** Names the `guardAdmin` gate and the `admin.modal.<logName>` lazy listener. */
+  logName: string;
+  view: (responseUrl: string, userId: string) => ModalView;
+  /** `undefined` = the submitted values are unusable. */
+  parse: (values: ModalValues, userId: string) => AdminAction | undefined;
+  /** DISMISS the panel (true) or REPLACE it with the reply (false); denied/failed always replace. */
+  dismiss: (result: AdminResult, action: AdminAction, userId: string) => boolean;
+}
+
+interface PanelButton {
+  actionId: string;
+  label: string;
+  /** Which row of `adminPanelBlocks()` the button sits in. */
+  row: "main" | "watch";
+  /** Names the `admin.panel.<logName>` lazy listener. */
+  logName: string;
+  click:
+    | { kind: "modal"; modal: PanelModal }
+    | {
+        kind: "run";
+        action: (userId: string) => AdminAction;
+        dismiss: (result: AdminResult) => boolean;
+      };
+}
+
+// ── The table ───────────────────────────────────────────────────────────────
+
+export const PANEL_BUTTONS: readonly PanelButton[] = [
+  {
+    actionId: "admin_panel_reminder",
+    label: "Run reminder…",
+    row: "main",
+    logName: "reminder",
+    click: {
+      kind: "modal",
+      modal: {
+        callbackId: REMINDER_MODAL_CALLBACK_ID,
+        logName: "reminder",
+        view: reminderModal,
+        parse(values) {
+          const kind = values.kind?.kind?.selected_option?.value;
+          const date = values.date?.date?.selected_date;
+          if (kind !== "daily" && kind !== "weekly") return undefined;
+          // Anchor at noon Eastern: DST-safe, and lands the daily/weekly window squarely on the
+          // picked date. (The real cron anchors at 12:00 UTC ≈ 8am ET; this override is for testing
+          // event windows, so the slight divergence is intentional.)
+          const nowMs = date
+            ? DateTime.fromISO(date, { zone: EASTERN }).set({ hour: 12 }).toMillis()
+            : Date.now();
+          return { kind: "reminder", name: kind, nowMs };
+        },
+        dismiss: () => false, // the counts are output the admin can't otherwise see
+      },
+    },
+  },
+  {
+    actionId: "admin_panel_welcome",
+    label: "Send welcome…",
+    row: "main",
+    logName: "welcome",
+    click: {
+      kind: "modal",
+      modal: {
+        callbackId: WELCOME_MODAL_CALLBACK_ID,
+        logName: "welcome",
+        view: welcomeModal,
+        parse(values) {
+          const target = values.target?.target?.selected_user;
+          return target ? { kind: "welcome", target } : undefined;
+        },
+        // Sending to yourself is self-verifiable (the DM appears) → just dismiss the panel.
+        dismiss: (_result, action, userId) => action.kind === "welcome" && action.target === userId,
+      },
+    },
+  },
+  {
+    actionId: "admin_panel_coworking",
+    label: "Coworking…",
+    row: "main",
+    logName: "coworking",
+    click: {
+      kind: "modal",
+      modal: {
+        callbackId: COWORKING_MODAL_CALLBACK_ID,
+        logName: "coworking",
+        view: coworkingModal,
+        parse(values) {
+          const op = values.op?.op?.selected_option?.value;
+          return op === "open" || op === "close" ? { kind: "coworking", op } : undefined;
+        },
+        // The announcement is visible in-channel → dismiss; a close with nothing open is not.
+        dismiss: (result) => result.kind === "coworking" && (result.op === "open" || result.closed),
+      },
+    },
+  },
+  {
+    actionId: "admin_panel_home",
+    label: "Publish App Home",
+    row: "main",
+    logName: "home",
+    // The App Home tab is self-verifiable → dismiss.
+    click: { kind: "run", action: (userId) => ({ kind: "home", userId }), dismiss: () => true },
+  },
+  {
+    actionId: "admin_panel_availability",
+    label: "Post availability check-in",
+    row: "main",
+    logName: "availability",
+    click: {
+      kind: "run",
+      action: () => ({ kind: "availability" }),
+      // The trio is visible in-channel → dismiss; only the off state needs telling.
+      dismiss: (result) => result.kind === "availability" && result.posted,
+    },
+  },
+  {
+    actionId: "admin_panel_watch_status",
+    label: "Watch status",
+    row: "watch",
+    logName: "watch_status",
+    click: { kind: "run", action: () => ({ kind: "watch", op: "status" }), dismiss: () => false },
+  },
+  {
+    actionId: "admin_panel_watch_start",
+    label: "Start watch",
+    row: "watch",
+    logName: "watch_start",
+    click: { kind: "run", action: () => ({ kind: "watch", op: "start" }), dismiss: () => false },
+  },
+  {
+    actionId: "admin_panel_watch_stop",
+    label: "Stop watch",
+    row: "watch",
+    logName: "watch_stop",
+    click: { kind: "run", action: () => ({ kind: "watch", op: "stop" }), dismiss: () => false },
+  },
+];
+
+/** The modals of the modal-opening buttons, for `app.ts` to register their submits. */
+export const PANEL_MODALS: readonly PanelModal[] = PANEL_BUTTONS.flatMap((b) =>
+  b.click.kind === "modal" ? [b.click.modal] : [],
+);
+
+function buttonBlock(b: PanelButton) {
+  return {
+    type: "button" as const,
+    action_id: b.actionId,
+    text: { type: "plain_text" as const, text: b.label, emoji: true },
+  };
+}
+
+/** Panel ephemeral blocks: a heading plus one button per admin function. */
+export function adminPanelBlocks(): AnyMessageBlock[] {
+  return [
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: "*Bot admin panel* — pick an action:" },
+    },
+    {
+      type: "actions",
+      elements: PANEL_BUTTONS.filter((b) => b.row === "main").map(buttonBlock),
+    },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: "*Calendar Watch* — Google Calendar push channel:" },
+    },
+    {
+      type: "actions",
+      elements: PANEL_BUTTONS.filter((b) => b.row === "watch").map(buttonBlock),
+    },
+  ];
+}
+
+// ── Dispatch ────────────────────────────────────────────────────────────────
 
 /**
  * Deliver a result into the panel ephemeral: DISMISS it when the work is self-verifiable
@@ -292,21 +400,20 @@ async function deliver(responseUrl: string, result: AdminResult, dismiss: boolea
 async function openModal(
   payload: AdminPanelActionPayload,
   env: Env,
-  modal: string,
-  view: (responseUrl: string) => ModalView,
+  modal: PanelModal,
 ): Promise<void> {
   const responseUrl = payload.response_url;
   if (!responseUrl) {
     log.warn("admin.panel.no_response_url", { user: payload.user.id });
     return;
   }
-  if (!(await guardAdmin(env, payload.user.id, { modal }))) {
+  if (!(await guardAdmin(env, payload.user.id, { modal: modal.logName }))) {
     await replaceEphemeral(responseUrl, adminReplyText({ kind: "denied" }));
     return;
   }
   await createSlackClient(env).views.open({
     trigger_id: payload.trigger_id,
-    view: view(responseUrl),
+    view: modal.view(responseUrl, payload.user.id),
   });
 }
 
@@ -315,7 +422,7 @@ async function runClick(
   payload: AdminPanelActionPayload,
   env: Env,
   action: AdminAction,
-  dismiss: boolean,
+  dismiss: (result: AdminResult) => boolean,
 ): Promise<void> {
   const responseUrl = payload.response_url;
   if (!responseUrl) {
@@ -323,77 +430,24 @@ async function runClick(
     return;
   }
   const result = await runAdminAction(env, payload.user.id, action);
-  await deliver(responseUrl, result, dismiss);
+  await deliver(responseUrl, result, dismiss(result));
 }
 
-export async function handlePanelReminderClick(
-  payload: AdminPanelActionPayload,
-  env: Env,
-): Promise<void> {
-  await openModal(payload, env, "reminder", reminderModal);
-}
-
-export async function handlePanelWelcomeClick(
-  payload: AdminPanelActionPayload,
-  env: Env,
-): Promise<void> {
-  await openModal(payload, env, "welcome", (url) => welcomeModal(url, payload.user.id));
-}
-
-export async function handlePanelCoworkingClick(
-  payload: AdminPanelActionPayload,
-  env: Env,
-): Promise<void> {
-  await openModal(payload, env, "coworking", coworkingModal);
-}
-
-export async function handlePanelHomeClick(
-  payload: AdminPanelActionPayload,
-  env: Env,
-): Promise<void> {
-  // The App Home tab is self-verifiable → dismiss.
-  await runClick(payload, env, { kind: "home", userId: payload.user.id }, true);
-}
-
-export async function handlePanelAvailabilityClick(
-  payload: AdminPanelActionPayload,
-  env: Env,
-): Promise<void> {
-  const responseUrl = payload.response_url;
-  if (!responseUrl) {
-    log.warn("admin.panel.no_response_url", { user: payload.user.id });
+/** A panel button click: look the button up by `action_id` and open its modal or run its action. */
+export async function handlePanelClick(payload: AdminPanelActionPayload, env: Env): Promise<void> {
+  const actionId = payload.actions[0]?.action_id;
+  const button = PANEL_BUTTONS.find((b) => b.actionId === actionId);
+  if (!button) {
+    log.warn("admin.panel.unknown_action", { user: payload.user.id, action: actionId });
     return;
   }
-  const result = await runAdminAction(env, payload.user.id, { kind: "availability" });
-  // The trio is visible in-channel → dismiss; only the off state needs telling.
-  const dismiss = result.kind === "availability" && result.posted;
-  await deliver(responseUrl, result, dismiss);
+  const { click } = button;
+  if (click.kind === "modal") {
+    await openModal(payload, env, click.modal);
+  } else {
+    await runClick(payload, env, click.action(payload.user.id), click.dismiss);
+  }
 }
-
-// ── Calendar Watch handlers (panel buttons) ─────────────────────────────────
-
-export async function handlePanelWatchStatusClick(
-  payload: AdminPanelActionPayload,
-  env: Env,
-): Promise<void> {
-  await runClick(payload, env, { kind: "watch", op: "status" }, false);
-}
-
-export async function handlePanelWatchStartClick(
-  payload: AdminPanelActionPayload,
-  env: Env,
-): Promise<void> {
-  await runClick(payload, env, { kind: "watch", op: "start" }, false);
-}
-
-export async function handlePanelWatchStopClick(
-  payload: AdminPanelActionPayload,
-  env: Env,
-): Promise<void> {
-  await runClick(payload, env, { kind: "watch", op: "stop" }, false);
-}
-
-// ── View-submission handlers (modal submit) ─────────────────────────────────
 
 /**
  * Parse the panel response_url out of a submit's private_metadata (missing/bad metadata is
@@ -408,65 +462,26 @@ function submitResponseUrl(payload: AdminViewSubmissionPayload): string | undefi
   return meta.response_url;
 }
 
-export async function handleReminderSubmit(
+/** A modal submit: look the modal up by `callback_id`, parse its values, run, deliver. */
+export async function handlePanelSubmit(
   payload: AdminViewSubmissionPayload,
   env: Env,
 ): Promise<void> {
+  const callbackId = payload.view.callback_id;
+  const modal = PANEL_MODALS.find((m) => m.callbackId === callbackId);
+  if (!modal) {
+    log.warn("admin.panel.unknown_callback", { user: payload.user.id, cb: callbackId });
+    return;
+  }
   const responseUrl = submitResponseUrl(payload);
   if (!responseUrl) return;
-  const values = payload.view.state.values;
-  const kind = values.kind?.kind?.selected_option?.value;
-  const date = values.date?.date?.selected_date;
-  if (kind !== "daily" && kind !== "weekly") {
-    log.warn("admin.panel.bad_reminder_kind", { kind });
+  const userId = payload.user.id;
+  const action = modal.parse(payload.view.state.values, userId);
+  if (!action) {
+    log.warn("admin.panel.bad_input", { user: userId, cb: callbackId });
     await replaceEphemeral(responseUrl, adminReplyText({ kind: "failed" }));
     return;
   }
-  // Anchor at noon Eastern: DST-safe, and lands the daily/weekly window squarely on the
-  // picked date. (The real cron anchors at 12:00 UTC ≈ 8am ET; this override is for testing
-  // event windows, so the slight divergence is intentional.)
-  const nowMs = date
-    ? DateTime.fromISO(date, { zone: EASTERN }).set({ hour: 12 }).toMillis()
-    : Date.now();
-  const result = await runAdminAction(env, payload.user.id, {
-    kind: "reminder",
-    name: kind,
-    nowMs,
-  });
-  await deliver(responseUrl, result, false); // the counts are output the admin can't otherwise see
-}
-
-export async function handleWelcomeSubmit(
-  payload: AdminViewSubmissionPayload,
-  env: Env,
-): Promise<void> {
-  const responseUrl = submitResponseUrl(payload);
-  if (!responseUrl) return;
-  const target = payload.view.state.values.target?.target?.selected_user;
-  if (!target) {
-    log.warn("admin.panel.bad_welcome_target", { user: payload.user.id });
-    await replaceEphemeral(responseUrl, adminReplyText({ kind: "failed" }));
-    return;
-  }
-  const result = await runAdminAction(env, payload.user.id, { kind: "welcome", target });
-  // Sending to yourself is self-verifiable (the DM appears) → just dismiss the panel.
-  await deliver(responseUrl, result, target === payload.user.id);
-}
-
-export async function handleCoworkingSubmit(
-  payload: AdminViewSubmissionPayload,
-  env: Env,
-): Promise<void> {
-  const responseUrl = submitResponseUrl(payload);
-  if (!responseUrl) return;
-  const op = payload.view.state.values.op?.op?.selected_option?.value;
-  if (op !== "open" && op !== "close") {
-    log.warn("admin.panel.bad_coworking_op", { op });
-    await replaceEphemeral(responseUrl, adminReplyText({ kind: "failed" }));
-    return;
-  }
-  const result = await runAdminAction(env, payload.user.id, { kind: "coworking", op });
-  // The announcement is visible in-channel → dismiss; a close with nothing open is not.
-  const dismiss = result.kind === "coworking" && (result.op === "open" || result.closed);
-  await deliver(responseUrl, result, dismiss);
+  const result = await runAdminAction(env, userId, action);
+  await deliver(responseUrl, result, modal.dismiss(result, action, userId));
 }
