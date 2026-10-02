@@ -15,7 +15,6 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
-    "fix-calendar": "node scripts/fix-calendar.ts",
     "gen:api-types": "node scripts/gen-api-types.ts",
     "specs:update": "node scripts/update-specs.ts && pnpm gen:api-types",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm knip"
