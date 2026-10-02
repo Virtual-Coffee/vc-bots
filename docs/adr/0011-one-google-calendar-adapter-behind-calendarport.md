@@ -15,8 +15,8 @@ events (ADR 0002). Written twice, those rules diverged.
 
 - **`createGoogleCalendarPort(env)` (`src/google/calendar.ts`) is the only module that talks
   to the Google Calendar API**, behind the `CalendarPort` seam: `listEvents(range)` (timed,
-  non-cancelled, valid events — invalid ones dropped and alerted), `getEvent(id)` (`live` /
-  `cancelled` / `invalid`; transient failures throw rather than masquerade as a deletion),
+  non-cancelled, valid events — invalid ones dropped and alerted), `getEvent(id)` (a `MappedEvent`: `event` /
+  `skipped` / `invalid`; transient failures throw rather than masquerade as a deletion),
   `watch(address)` and `stopChannel(channelId, resourceId)` (`stopped` / `gone` / `failed`,
   never thrown). `toReminderEvent` is the one mapping from the wire shape to `ReminderEvent`
   (`src/events.ts`).

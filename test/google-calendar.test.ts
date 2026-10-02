@@ -385,7 +385,7 @@ describe("getEvent", () => {
     singleEvents.set("ev-1", { id: "ev-1", summary: "Moved", status: "confirmed", ...timed });
     const lookup = await port().getEvent("ev-1");
     expect(lookup).toEqual({
-      kind: "live",
+      kind: "event",
       event: expect.objectContaining({
         id: "ev-1",
         title: "Moved",
@@ -396,17 +396,17 @@ describe("getEvent", () => {
 
   it("reports a cancelled event as cancelled", async () => {
     singleEvents.set("ev-1", { id: "ev-1", status: "cancelled", ...timed });
-    expect(await port().getEvent("ev-1")).toEqual({ kind: "cancelled" });
+    expect(await port().getEvent("ev-1")).toEqual({ kind: "skipped", reason: "cancelled" });
   });
 
   it.each([404, 410])("reports a %i (gone) as cancelled", async (status) => {
     singleEvents.set("ev-1", new Response("gone", { status }));
-    expect(await port().getEvent("ev-1")).toEqual({ kind: "cancelled" });
+    expect(await port().getEvent("ev-1")).toEqual({ kind: "skipped", reason: "cancelled" });
   });
 
   it("reports a live all-day event (start.date only) as all-day", async () => {
     singleEvents.set("ev-1", { id: "ev-1", status: "confirmed", start: { date: "2026-06-12" } });
-    expect(await port().getEvent("ev-1")).toEqual({ kind: "all-day" });
+    expect(await port().getEvent("ev-1")).toEqual({ kind: "skipped", reason: "all-day" });
   });
 
   it("reports an unparseable start.dateTime as bad-start, not a live event with the raw string", async () => {
@@ -415,7 +415,7 @@ describe("getEvent", () => {
       status: "confirmed",
       start: { dateTime: "not-a-date" },
     });
-    expect(await port().getEvent("ev-1")).toEqual({ kind: "bad-start" });
+    expect(await port().getEvent("ev-1")).toEqual({ kind: "skipped", reason: "bad-start" });
   });
 
   it("throws on any other non-OK response (a transient failure isn't a deletion)", async () => {

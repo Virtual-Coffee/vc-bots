@@ -2,7 +2,7 @@ import { DateTime } from "luxon";
 import { describe, expect, it } from "vitest";
 import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "../src/bots/calendar-sync/diff";
 import type { ReminderEvent } from "../src/events";
-import type { CalendarEventLookup } from "../src/google/calendar";
+import type { MappedEvent } from "../src/google/calendar";
 
 /**
  * The snapshot diff rules (`src/bots/calendar-sync/diff.ts`) against plain maps — no DO, no
@@ -30,11 +30,11 @@ function snapshot(...events: ReminderEvent[]): Map<string, SnapshotEntry> {
 function live(...events: ReminderEvent[]): Map<string, ReminderEvent> {
   return new Map(events.map((e) => [e.id, e]));
 }
-function lookups(entries: Record<string, CalendarEventLookup>): Map<string, CalendarEventLookup> {
+function lookups(entries: Record<string, MappedEvent>): Map<string, MappedEvent> {
   return new Map(Object.entries(entries));
 }
 
-const NONE = new Map<string, CalendarEventLookup>();
+const NONE = new Map<string, MappedEvent>();
 
 describe("departedUpcoming", () => {
   it("names the snapshot ids that left the window with an upcoming announced start", () => {
@@ -54,7 +54,12 @@ describe("departedUpcoming", () => {
 describe("diffSnapshot", () => {
   it("a departed event the lookup reports cancelled → one cancelled change", () => {
     const prior = snapshot(timedEvent("evt-1", at(48), "Coffee"));
-    const diff = diffSnapshot(prior, live(), lookups({ "evt-1": { kind: "cancelled" } }), NOW);
+    const diff = diffSnapshot(
+      prior,
+      live(),
+      lookups({ "evt-1": { kind: "skipped", reason: "cancelled" } }),
+      NOW,
+    );
 
     expect(diff.changes).toEqual([
       { kind: "cancelled", event: timedEvent("evt-1", at(48), "Coffee") },
@@ -66,7 +71,12 @@ describe("diffSnapshot", () => {
     const prior = new Map<string, SnapshotEntry>([
       ["evt-1", { id: "evt-1", startsAt: at(48), title: null }],
     ]);
-    const diff = diffSnapshot(prior, live(), lookups({ "evt-1": { kind: "cancelled" } }), NOW);
+    const diff = diffSnapshot(
+      prior,
+      live(),
+      lookups({ "evt-1": { kind: "skipped", reason: "cancelled" } }),
+      NOW,
+    );
 
     expect(diff.changes).toEqual([
       {
@@ -79,7 +89,7 @@ describe("diffSnapshot", () => {
   it("a departed event that is live elsewhere (moved out of the week) → one rescheduled change", () => {
     const prior = snapshot(timedEvent("evt-1", at(48), "Coffee"));
     const moved = timedEvent("evt-1", at(24 * 6), "Renamed");
-    const found = lookups({ "evt-1": { kind: "live", event: moved } });
+    const found = lookups({ "evt-1": { kind: "event", event: moved } });
     const diff = diffSnapshot(prior, live(), found, NOW);
 
     // Rebuilt from the snapshot title with the looked-up start, not the live event itself.
@@ -102,13 +112,23 @@ describe("diffSnapshot", () => {
 
   it("a departed event that turned all-day → nothing (no timed slot to correct to)", () => {
     const prior = snapshot(timedEvent("evt-1", at(48)));
-    const diff = diffSnapshot(prior, live(), lookups({ "evt-1": { kind: "all-day" } }), NOW);
+    const diff = diffSnapshot(
+      prior,
+      live(),
+      lookups({ "evt-1": { kind: "skipped", reason: "all-day" } }),
+      NOW,
+    );
     expect(diff).toEqual({ changes: [], invalid: [] });
   });
 
   it("a departed event whose start became unparseable → nothing (bad-start, not a reschedule)", () => {
     const prior = snapshot(timedEvent("evt-1", at(48)));
-    const diff = diffSnapshot(prior, live(), lookups({ "evt-1": { kind: "bad-start" } }), NOW);
+    const diff = diffSnapshot(
+      prior,
+      live(),
+      lookups({ "evt-1": { kind: "skipped", reason: "bad-start" } }),
+      NOW,
+    );
     expect(diff).toEqual({ changes: [], invalid: [] });
   });
 
@@ -135,7 +155,7 @@ describe("diffSnapshot", () => {
     const diff = diffSnapshot(
       prior,
       live(timedEvent("evt-2", at(48))), // evt-1 gone, evt-2 moved — both already announced past
-      lookups({ "evt-1": { kind: "cancelled" } }),
+      lookups({ "evt-1": { kind: "skipped", reason: "cancelled" } }),
       NOW,
     );
     expect(diff).toEqual({ changes: [], invalid: [] });
@@ -166,7 +186,10 @@ describe("diffSnapshot", () => {
     const diff = diffSnapshot(
       prior,
       current,
-      lookups({ "gone-a": { kind: "cancelled" }, "gone-b": { kind: "cancelled" } }),
+      lookups({
+        "gone-a": { kind: "skipped", reason: "cancelled" },
+        "gone-b": { kind: "skipped", reason: "cancelled" },
+      }),
       NOW,
     );
 

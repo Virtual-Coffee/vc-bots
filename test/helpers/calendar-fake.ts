@@ -2,15 +2,15 @@ import { DateTime } from "luxon";
 import type { CalendarSync } from "../../src/bots/calendar-sync/durable-object";
 import type { EventRange, ReminderEvent } from "../../src/events";
 import type {
-  CalendarEventLookup,
   CalendarPort,
   CalendarWatch,
+  MappedEvent,
   StopChannelResult,
 } from "../../src/google/calendar";
 
 /**
  * An in-memory `CalendarPort`: holds the calendar as a map of `ReminderEvent`s, answers
- * `listEvents` with the ones inside the range, `getEvent` from the same map (missing → cancelled,
+ * `listEvents` with the ones inside the range, `getEvent` from the same map (missing → skipped/cancelled,
  * or a per-id override), and records every call so a test can assert the watch / stop / list
  * traffic without a fetch spy. `failNext` makes one call of a method throw.
  */
@@ -27,9 +27,9 @@ export interface FakeCalendar extends CalendarPort {
   callsTo(method: CalendarMethod): CalendarCall[];
   /** Replace the whole calendar. */
   setEvents(events: ReminderEvent[]): void;
-  /** Per-id `getEvent` answers that win over the map (e.g. `{ kind: "all-day" }` or
+  /** Per-id `getEvent` answers that win over the map (e.g. `{ kind: "skipped", reason: "all-day" }` or
    *  `{ kind: "invalid", reason: "zoom-no-host-key" }`). */
-  readonly lookups: Map<string, CalendarEventLookup>;
+  readonly lookups: Map<string, MappedEvent>;
   /** What the next `watch` returns; missing fields get defaults (fresh uuid, `res-1`, now + 7d). */
   watchResponse: Partial<CalendarWatch>;
   /** What `stopChannel` returns (after the `null` resourceId → `"gone"` rule). */
@@ -50,7 +50,7 @@ const WEEK_MS = 7 * 86_400_000;
 export function createCalendarFake(initial: ReminderEvent[] = []): FakeCalendar {
   const events = new Map<string, ReminderEvent>();
   const calls: CalendarCall[] = [];
-  const lookups = new Map<string, CalendarEventLookup>();
+  const lookups = new Map<string, MappedEvent>();
   const failures = new Map<CalendarMethod, Error>();
 
   const record = (method: CalendarMethod, ...args: unknown[]): void => {
@@ -96,7 +96,7 @@ export function createCalendarFake(initial: ReminderEvent[] = []): FakeCalendar 
       const override = lookups.get(id);
       if (override) return override;
       const event = events.get(id);
-      return event ? { kind: "live", event } : { kind: "cancelled" };
+      return event ? { kind: "event", event } : { kind: "skipped", reason: "cancelled" };
     },
 
     async watch(address) {

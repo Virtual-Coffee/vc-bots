@@ -1,6 +1,6 @@
 import { DateTime } from "luxon";
 import type { CalendarChange, InvalidEventReason, ReminderEvent } from "../../events";
-import type { CalendarEventLookup } from "../../google/calendar";
+import type { MappedEvent } from "../../google/calendar";
 
 /**
  * The snapshot diff behind `CalendarSync.processNotification`, kept pure (no I/O, no DO) so the
@@ -55,9 +55,9 @@ export function departedUpcoming(
  * Diff the live window against the snapshot into changes.
  *
  * - Departed (in `prior`, not in `current`, announced start still upcoming), by its lookup:
- *   `cancelled` → `cancelled` change; `live` → `rescheduled` change to the new start (an
- *   out-of-window move); `all-day` / `bad-start` → nothing (no timed slot to correct to; the
- *   adapter already warned about the unparseable start); `invalid` → nothing, reported in
+ *   `skipped` / `cancelled` → `cancelled` change; `event` → `rescheduled` change to the new
+ *   start (an out-of-window move); `skipped` for `all-day` / `bad-start` → nothing (no timed slot
+ *   to correct to; the adapter already warned about the unparseable start); `invalid` → nothing, reported in
  *   `invalid` (the adapter already alerted #bot-log). A departed id with no lookup shouldn't
  *   happen (`departedUpcoming` names exactly the ids to fetch) — treated as no change.
  * - In both, announced start still upcoming, start changed → `rescheduled` change.
@@ -70,7 +70,7 @@ export function departedUpcoming(
 export function diffSnapshot(
   prior: ReadonlyMap<string, SnapshotEntry>,
   current: ReadonlyMap<string, ReminderEvent>,
-  lookups: ReadonlyMap<string, CalendarEventLookup>,
+  lookups: ReadonlyMap<string, MappedEvent>,
   nowMs: number,
 ): SnapshotDiff {
   const changes: CalendarChange[] = [];
@@ -80,7 +80,9 @@ export function diffSnapshot(
     const snap = prior.get(id)!;
     const lookup = lookups.get(id);
     switch (lookup?.kind) {
-      case "cancelled": {
+      case "skipped": {
+        // All-day / bad-start: no timed slot to correct to — nothing.
+        if (lookup.reason !== "cancelled") break;
         const reconstructed: ReminderEvent = {
           id,
           title: snap.title ?? "(event)",
@@ -90,7 +92,7 @@ export function diffSnapshot(
         changes.push({ kind: "cancelled", event: reconstructed });
         break;
       }
-      case "live": {
+      case "event": {
         const moved: ReminderEvent = {
           id,
           title: snap.title ?? "(event)",
@@ -103,8 +105,6 @@ export function diffSnapshot(
       case "invalid":
         invalid.push({ id, reason: lookup.reason });
         break;
-      case "all-day":
-      case "bad-start":
       case undefined:
         break;
     }
