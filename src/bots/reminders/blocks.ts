@@ -2,7 +2,7 @@ import type { AnyMessageBlock, MessageAttachment } from "slack-cloudflare-worker
 import { DateTime } from "luxon";
 import { dateToken } from "../../slack/date";
 import { slackifyMarkdown } from "slackify-markdown";
-import type { ReminderEvent } from "../../events";
+import type { CalendarChange, ReminderEvent } from "../../events";
 
 /**
  * Block Kit builders for event announcements, ported layout-for-layout from the old
@@ -136,7 +136,7 @@ function context(text: string): AnyMessageBlock {
 }
 
 /** Standout notice that an event in the announced window was cancelled. */
-export function buildCancellationMessage(event: ReminderEvent): ReminderMessage {
+function buildCancellationMessage(event: ReminderEvent): ReminderMessage {
   return {
     text: `Cancelled: ${event.title} — ${fallbackDate(event)}`,
     blocks: [],
@@ -154,7 +154,7 @@ export function buildCancellationMessage(event: ReminderEvent): ReminderMessage 
 }
 
 /** Standout notice that an event was rescheduled from oldStartsAt to its new start. */
-export function buildRescheduleMessage(event: ReminderEvent, oldStartsAt: string): ReminderMessage {
+function buildRescheduleMessage(event: ReminderEvent, oldStartsAt: string): ReminderMessage {
   const oldDt = DateTime.fromISO(oldStartsAt, { zone: "utc" });
   return {
     text: `Rescheduled: ${event.title} — now ${fallbackDate(event)}`,
@@ -171,4 +171,14 @@ export function buildRescheduleMessage(event: ReminderEvent, oldStartsAt: string
       },
     ],
   };
+}
+
+/** Render a calendar change as its standout change notice. */
+export function buildChangeNotice(change: CalendarChange): ReminderMessage {
+  switch (change.kind) {
+    case "cancelled":
+      return buildCancellationMessage(change.event);
+    case "rescheduled":
+      return buildRescheduleMessage(change.event, change.from);
+  }
 }

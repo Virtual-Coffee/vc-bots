@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildDailyMessage, buildWeeklyMessage } from "../src/bots/reminders/blocks";
+import {
+  buildChangeNotice,
+  buildDailyMessage,
+  buildWeeklyMessage,
+} from "../src/bots/reminders/blocks";
 import type { ReminderEvent } from "../src/events";
 
 function evt(overrides: Partial<ReminderEvent> = {}): ReminderEvent {
@@ -56,5 +60,40 @@ describe("buildWeeklyMessage", () => {
       "Links to join will be posted in <#C0EVENTS> about 10 minutes before",
     );
     expect(json(blocks)).toContain("<https://virtualcoffee.io/events|VirtualCoffee.IO>");
+  });
+});
+
+describe("buildChangeNotice", () => {
+  const sectionTexts = (message: ReturnType<typeof buildChangeNotice>) =>
+    (message.attachments?.[0]?.blocks ?? []).map(
+      (b) => (b as { text: { text: string } }).text.text,
+    );
+
+  it("renders a cancelled change as a standout attachment", () => {
+    const message = buildChangeNotice({ kind: "cancelled", event: evt() });
+    expect(message.text).toMatch(/^Cancelled: Lunch & Learn — /);
+    expect(message.blocks).toEqual([]);
+    expect(message.attachments).toHaveLength(1);
+    expect(message.attachments![0]!.color).toBe("#d9376e");
+    const [headerText, titleText, body] = sectionTexts(message);
+    expect(headerText).toBe("*:warning: Event Cancelled*");
+    expect(titleText).toMatch(/^\*Lunch & Learn\*\n/);
+    expect(body).toBe("This event has been cancelled.");
+  });
+
+  it("renders a rescheduled change with the old and new start", () => {
+    const message = buildChangeNotice({
+      kind: "rescheduled",
+      event: evt(),
+      from: "2026-05-27T15:00:00.000Z",
+    });
+    expect(message.text).toMatch(/^Rescheduled: Lunch & Learn — now /);
+    expect(message.blocks).toEqual([]);
+    expect(message.attachments![0]!.color).toBe("#d9376e");
+    const [headerText, titleText, was, now] = sectionTexts(message);
+    expect(headerText).toBe("*:calendar: Event Rescheduled*");
+    expect(titleText).toBe("*Lunch & Learn*");
+    expect(was).toMatch(/^\*Was:\* /);
+    expect(now).toMatch(/^\*Now:\* /);
   });
 });

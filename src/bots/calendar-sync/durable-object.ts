@@ -7,6 +7,7 @@ import { log, setLogLevel } from "../../log";
 import { SerialQueue } from "../../serial-queue";
 import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
+import { buildChangeNotice } from "../reminders/blocks";
 import { syncStartingSoon } from "../reminders/starting-soon";
 import { reminderRange } from "../../events";
 import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
@@ -278,15 +279,10 @@ export class CalendarSync extends DurableObject<Env> {
       lookups.set(id, await this.calendar.getEvent(id));
     }
 
-    const { notices, cancellations, reschedules, invalid } = diffSnapshot(
-      prior,
-      currentById,
-      lookups,
-      nowMs,
-    );
+    const { changes, invalid } = diffSnapshot(prior, currentById, lookups, nowMs);
     for (const { id, reason } of invalid) {
       // Still live, but unannounceable (e.g. a Zoom link lost its host key): the adapter has
-      // already alerted #bot-log; it just leaves the snapshot without a notice.
+      // already alerted #bot-log; it just leaves the snapshot without a change notice.
       log.info("calendar_sync.event_invalid", { id, reason });
     }
 
@@ -297,13 +293,14 @@ export class CalendarSync extends DurableObject<Env> {
     const client = createSlackClient(this.env);
     const failures: string[] = [];
 
-    // Announce each notice to all three event channels.
+    // Announce each change notice to all three event channels.
     const channels = [
       this.env.SLACK_ANNOUNCEMENTS_CHANNEL_ID,
       this.env.SLACK_EVENTS_CHANNEL_ID,
       this.env.SLACK_EVENTADMIN_CHANNEL_ID,
     ];
-    for (const notice of notices) {
+    for (const change of changes) {
+      const notice = buildChangeNotice(change);
       for (const channel of channels) {
         try {
           await client.chat.postMessage({
@@ -328,8 +325,8 @@ export class CalendarSync extends DurableObject<Env> {
     }
 
     log.info("calendar_sync.processed", {
-      cancellations,
-      reschedules,
+      cancellations: changes.filter((c) => c.kind === "cancelled").length,
+      reschedules: changes.filter((c) => c.kind === "rescheduled").length,
       currentCount: current.length,
       failures: failures.length,
     });
