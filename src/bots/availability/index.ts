@@ -1,7 +1,7 @@
 import type { ReactionAddedEvent, ReactionRemovedEvent } from "slack-cloudflare-workers";
 import type { Env } from "../../env";
 import { log } from "../../log";
-import { notifyBotLog } from "../../slack/notify";
+import { reportFailure } from "../../slack/notify";
 
 /**
  * Worker-side glue for the availability check-in: the cron / admin entry point that posts the
@@ -56,7 +56,6 @@ export async function handleReactionChange(
     const result = await sheetStub(env).refresh(item.ts, payload.user);
     log.debug("availability.refresh", { ts: item.ts, result });
   } catch (error) {
-    log.error("availability.refresh_failed", { ts: item.ts, error: String(error) });
-    await notifyBotLog(env, "availability.refresh_failed", { ts: item.ts, error: String(error) });
+    await reportFailure(env, "availability.refresh_failed", error, { ts: item.ts });
   }
 }

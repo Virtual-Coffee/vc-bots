@@ -16,8 +16,7 @@ import { JOIN_ACTION_ID } from "../bots/coworking/room-message";
 import { JOIN_EVENT_ACTION_ID } from "../bots/reminders/blocks";
 import { handleAppHomeOpened, handleTeamJoin } from "../bots/welcome";
 import type { Env } from "../env";
-import { log } from "../log";
-import { notifyBotLog } from "./notify";
+import { reportFailure } from "./notify";
 
 /** ACK inside Slack's 3s window with an empty 200; the lazy handler does the real work. */
 const ack: () => Promise<AckResponse> = async () => {};
@@ -53,8 +52,7 @@ export function createSlackApp(env: Env): SlackApp<Env> {
       try {
         await fn(req);
       } catch (err) {
-        log.error("slack.lazy_failed", { handler, err: String(err) });
-        await notifyBotLog(env, "slack.lazy_failed", { handler, err: String(err) });
+        await reportFailure(env, "slack.lazy_failed", err, { handler });
       }
     };
 

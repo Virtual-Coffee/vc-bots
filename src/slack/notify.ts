@@ -3,8 +3,9 @@ import { log, renderFields } from "../log";
 import { createSlackClient } from "./client";
 
 /**
- * Post an error alert to the private `#bot-log` channel (`SLACK_BOTLOG_CHANNEL_ID`). Called
- * explicitly at catch sites with no other surface, not from `log.ts` — see ADR 0006.
+ * Post an alert to the private `#bot-log` channel (`SLACK_BOTLOG_CHANNEL_ID`). For alerts that
+ * aren't a caught exception (e.g. a rejected calendar entry); catch sites call `reportFailure`.
+ * Called explicitly, not from `log.ts` — see ADR 0006.
  *
  * Three guarantees on the failure path: no-op when unconfigured, self-swallowing, no recursion.
  */
@@ -32,4 +33,19 @@ export async function notifyBotLog(
     // Don't re-notify — a failed alert would just loop. Local log only.
     log.warn("botlog.notify_failed", { event, error: String(error) });
   }
+}
+
+/**
+ * The one call for a catch site with no user surface: `log.error`, then alert `#bot-log` with
+ * the same fields plus `error` — see ADR 0006. Inherits `notifyBotLog`'s guarantees.
+ */
+export async function reportFailure(
+  env: Env,
+  event: string,
+  error: unknown,
+  fields?: Record<string, unknown>,
+): Promise<void> {
+  const f = { ...fields, error: String(error) };
+  log.error(event, f);
+  await notifyBotLog(env, event, f);
 }
