@@ -41,8 +41,8 @@ events (ADR 0002). Written twice, those rules diverged.
   stop) and the snapshot; the diff is pure in `diff.ts` (`departedUpcoming` / `diffSnapshot`,
   which returns `CalendarChange`s that `buildChangeNotice` renders) and unit-tested without
   the DO. Tests swap in `test/helpers/calendar-fake.ts`.
-- **`POST /google/notify` (`src/router.ts`) is the push callback.** It authenticates the
-  per-channel token (`GOOGLE_WATCH_TOKEN`), drops the `sync` handshake (and, until the
+- **`POST /google/notify` (`src/google/notify.ts`) is the push callback.** It authenticates the
+  per-channel token (`GOOGLE_WATCH_TOKEN`, compared in constant time), drops the `sync` handshake (and, until the
   2026-10-01 cutover, pushes from a non-Google active source), ACKs `200`, and hands the
   channel id to the DO in `ctx.waitUntil` — alerting `#bot-log` (`google.notify.failed`) if that dispatch rejects
   (ADR 0006).

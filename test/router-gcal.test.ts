@@ -135,6 +135,16 @@ describe("POST /google/notify", () => {
     expect(line).toContain("google.notify.bad_token");
   });
 
+  it("drops a change with no channel token header at all (200, no sync)", async () => {
+    const req = gcalRequest("exists");
+    req.headers.delete("X-Goog-Channel-Token");
+
+    const res = await send(req, googleEnv());
+
+    expect(res.status).toBe(200);
+    expect(untouched()).toBe(true);
+  });
+
   it("404s a non-POST method (route is POST-only)", async () => {
     const ctx = createExecutionContext();
     const res = await route(new Request("https://bots.example/google/notify"), googleEnv(), ctx);
