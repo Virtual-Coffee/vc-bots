@@ -10,21 +10,11 @@ import {
 import {
   type AdminPanelActionPayload,
   type AdminViewSubmissionPayload,
-  COWORKING_MODAL_CALLBACK_ID,
-  handleCoworkingSubmit,
-  handlePanelAvailabilityClick,
-  handlePanelCoworkingClick,
-  handlePanelHomeClick,
-  handlePanelReminderClick,
-  handlePanelWelcomeClick,
-  handleReminderSubmit,
-  handlePanelWatchStatusClick,
-  handleWelcomeSubmit,
-  PANEL_COWORKING_ACTION_ID,
-  PANEL_WATCH_STATUS_ACTION_ID,
-  REMINDER_MODAL_CALLBACK_ID,
-  WELCOME_MODAL_CALLBACK_ID,
+  handlePanelClick,
+  handlePanelSubmit,
+  PANEL_BUTTONS,
 } from "../src/bots/admin/panel";
+import { log } from "../src/log";
 
 /**
  * Unit coverage for the `/vc-bot-admin` panel handlers, using the same stubbed-fetch harness
@@ -58,7 +48,10 @@ beforeEach(() => {
     },
   });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function callsTo(fragment: string): RecordedCall[] {
   return rec.callsTo(fragment);
@@ -111,10 +104,10 @@ function googleEvt(startMs: number): GoogleCalendarEvent {
 
 describe("admin panel — button clicks open modals", () => {
   it("reminder button opens the reminder modal with today's date and the panel response_url", async () => {
-    await handlePanelReminderClick(action("admin_panel_reminder"), env);
+    await handlePanelClick(action("admin_panel_reminder"), env);
     expect(callsTo("/api/views.open")).toHaveLength(1);
     const view = viewsOpenView();
-    expect(view.callback_id).toBe(REMINDER_MODAL_CALLBACK_ID);
+    expect(view.callback_id).toBe("admin_reminder_modal");
     expect(metaResponseUrl(view)).toBe(PANEL_URL);
     const today = DateTime.now().setZone("America/New_York").toISODate();
     expect(inputElement(view, "date").initial_date).toBe(today);
@@ -124,19 +117,19 @@ describe("admin panel — button clicks open modals", () => {
   });
 
   it("welcome button opens the welcome modal pre-selecting the clicking admin", async () => {
-    await handlePanelWelcomeClick(action("admin_panel_welcome"), env);
+    await handlePanelClick(action("admin_panel_welcome"), env);
     const view = viewsOpenView();
-    expect(view.callback_id).toBe(WELCOME_MODAL_CALLBACK_ID);
+    expect(view.callback_id).toBe("admin_welcome_modal");
     expect(inputElement(view, "target").initial_user).toBe("U1");
   });
 
   it("coworking button opens the coworking modal", async () => {
-    await handlePanelCoworkingClick(action(PANEL_COWORKING_ACTION_ID), env);
-    expect(viewsOpenView().callback_id).toBe(COWORKING_MODAL_CALLBACK_ID);
+    await handlePanelClick(action("admin_panel_coworking"), env);
+    expect(viewsOpenView().callback_id).toBe("admin_coworking_modal");
   });
 
   it("publish App Home fires directly and dismisses the panel", async () => {
-    await handlePanelHomeClick(action("admin_panel_home"), env);
+    await handlePanelClick(action("admin_panel_home"), env);
     const publish = callsTo("/api/views.publish");
     expect(publish).toHaveLength(1);
     expect(new URLSearchParams(publish[0]!.body).get("user_id")).toBe("U1");
@@ -144,14 +137,14 @@ describe("admin panel — button clicks open modals", () => {
   });
 
   it("post availability check-in fires directly and dismisses the panel", async () => {
-    await handlePanelAvailabilityClick(action("admin_panel_availability"), env);
+    await handlePanelClick(action("admin_panel_availability"), env);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(3);
     expect(callsTo("/api/reactions.add")).toHaveLength(10);
     expect(panelReply()).toEqual({ delete_original: true });
   });
 
   it("post availability check-in reports the off state instead of dismissing", async () => {
-    await handlePanelAvailabilityClick(action("admin_panel_availability"), {
+    await handlePanelClick(action("admin_panel_availability"), {
       ...env,
       SLACK_AVAILABILITY_CHANNEL_ID: "",
     });
@@ -163,8 +156,8 @@ describe("admin panel — button clicks open modals", () => {
 describe("admin panel — reminder submit", () => {
   it("weekly posts to the channel and replaces the panel with the count", async () => {
     googleEvents = [googleEvt(Date.now() + 3_600_000)];
-    await handleReminderSubmit(
-      submission(REMINDER_MODAL_CALLBACK_ID, {
+    await handlePanelSubmit(
+      submission("admin_reminder_modal", {
         kind: { kind: { selected_option: { value: "weekly" } } },
         date: { date: { selected_date: "2024-06-18" } },
       }),
@@ -179,8 +172,8 @@ describe("admin panel — reminder submit", () => {
   it("the picked date drives the window — a Monday daily run reports the weekly-covers-Monday skip", async () => {
     googleEvents = [];
     // 2024-01-01 is a Monday; noon-Eastern of it lands sendReminder on the Monday-skip path.
-    await handleReminderSubmit(
-      submission(REMINDER_MODAL_CALLBACK_ID, {
+    await handlePanelSubmit(
+      submission("admin_reminder_modal", {
         kind: { kind: { selected_option: { value: "daily" } } },
         date: { date: { selected_date: "2024-01-01" } },
       }),
@@ -193,8 +186,8 @@ describe("admin panel — reminder submit", () => {
 
 describe("admin panel — welcome submit", () => {
   it("to self DMs the user and dismisses the panel", async () => {
-    await handleWelcomeSubmit(
-      submission(WELCOME_MODAL_CALLBACK_ID, {
+    await handlePanelSubmit(
+      submission("admin_welcome_modal", {
         target: { target: { selected_user: "U1" } },
       }),
       env,
@@ -205,8 +198,8 @@ describe("admin panel — welcome submit", () => {
   });
 
   it("to another member DMs them and replaces the panel with a confirmation", async () => {
-    await handleWelcomeSubmit(
-      submission(WELCOME_MODAL_CALLBACK_ID, {
+    await handlePanelSubmit(
+      submission("admin_welcome_modal", {
         target: { target: { selected_user: "U2" } },
       }),
       env,
@@ -228,8 +221,8 @@ describe("admin panel — coworking submit", () => {
   });
 
   it("open posts an announcement and dismisses the panel", async () => {
-    await handleCoworkingSubmit(
-      submission(COWORKING_MODAL_CALLBACK_ID, {
+    await handlePanelSubmit(
+      submission("admin_coworking_modal", {
         op: { op: { selected_option: { value: "open" } } },
       }),
       env,
@@ -239,8 +232,8 @@ describe("admin panel — coworking submit", () => {
   });
 
   it("close with nothing open replaces the panel with the info notice", async () => {
-    await handleCoworkingSubmit(
-      submission(COWORKING_MODAL_CALLBACK_ID, {
+    await handlePanelSubmit(
+      submission("admin_coworking_modal", {
         op: { op: { selected_option: { value: "close" } } },
       }),
       env,
@@ -260,7 +253,7 @@ describe("admin panel — watch buttons", () => {
   });
 
   it("watch status replaces the panel with the status line", async () => {
-    await handlePanelWatchStatusClick(action(PANEL_WATCH_STATUS_ACTION_ID), env);
+    await handlePanelClick(action("admin_panel_watch_status"), env);
     const reply = panelReply()!;
     expect(reply.replace_original).toBe(true);
     expect(reply.text).toContain("Calendar watch is *not active*");
@@ -270,20 +263,20 @@ describe("admin panel — watch buttons", () => {
 describe("admin panel — authorization & errors", () => {
   it("a non-admin click does no work and replaces the panel with the denial", async () => {
     isAdmin = false;
-    await handlePanelReminderClick(action("admin_panel_reminder"), env);
+    await handlePanelClick(action("admin_panel_reminder"), env);
     expect(callsTo("/api/views.open")).toHaveLength(0);
     expect(panelReply()!.text).toContain("admins only");
 
     rec.calls.length = 0;
-    await handlePanelAvailabilityClick(action("admin_panel_availability"), env);
+    await handlePanelClick(action("admin_panel_availability"), env);
     expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
     expect(panelReply()!.text).toContain("admins only");
   });
 
   it("a non-admin submit does no work and replaces the panel with the denial", async () => {
     isAdmin = false;
-    await handleWelcomeSubmit(
-      submission(WELCOME_MODAL_CALLBACK_ID, {
+    await handlePanelSubmit(
+      submission("admin_welcome_modal", {
         target: { target: { selected_user: "U2" } },
       }),
       env,
@@ -294,12 +287,53 @@ describe("admin panel — authorization & errors", () => {
 
   it("a failed submit reports the error back into the panel", async () => {
     postMessageOk = false;
-    await handleWelcomeSubmit(
-      submission(WELCOME_MODAL_CALLBACK_ID, {
+    await handlePanelSubmit(
+      submission("admin_welcome_modal", {
         target: { target: { selected_user: "U2" } },
       }),
       env,
     );
     expect(panelReply()!.text).toContain(":warning:");
   });
+});
+
+describe("admin panel — the table", () => {
+  it("action_ids and callback_ids are unique", () => {
+    const actionIds = PANEL_BUTTONS.map((b) => b.actionId);
+    expect(new Set(actionIds).size).toBe(actionIds.length);
+    const callbackIds = PANEL_BUTTONS.flatMap((b) =>
+      b.click.kind === "modal" ? [b.click.modal.callbackId] : [],
+    );
+    expect(new Set(callbackIds).size).toBe(callbackIds.length);
+  });
+
+  it("an unknown action_id logs and does nothing", async () => {
+    const warn = vi.spyOn(log, "warn");
+    await handlePanelClick(action("admin_panel_nope"), env);
+    expect(warn).toHaveBeenCalledWith("admin.panel.unknown_action", expect.anything());
+    expect(rec.calls).toHaveLength(0);
+  });
+
+  it("an unknown callback_id logs and does nothing", async () => {
+    const warn = vi.spyOn(log, "warn");
+    await handlePanelSubmit(submission("admin_nope_modal", {}), env);
+    expect(warn).toHaveBeenCalledWith("admin.panel.unknown_callback", expect.anything());
+    expect(rec.calls).toHaveLength(0);
+  });
+
+  it.each([
+    ["admin_reminder_modal", { kind: { kind: { selected_option: { value: "monthly" } } } }],
+    ["admin_welcome_modal", {}],
+    ["admin_coworking_modal", { op: { op: { selected_option: { value: "explode" } } } }],
+  ])(
+    "bad %s input logs bad_input and replaces the panel with the failed reply",
+    async (cb, values) => {
+      const warn = vi.spyOn(log, "warn");
+      await handlePanelSubmit(submission(cb, values), env);
+      expect(warn).toHaveBeenCalledWith("admin.panel.bad_input", { user: "U1", cb, values });
+      expect(callsTo("/api/chat.postMessage")).toHaveLength(0);
+      expect(panelReply()!.replace_original).toBe(true);
+      expect(panelReply()!.text).toContain(":warning:");
+    },
+  );
 });

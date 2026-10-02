@@ -5,6 +5,7 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PANEL_BUTTONS } from "../src/bots/admin/panel";
 import { joinPath } from "../src/bots/coworking/invite-link";
 import { publicBaseUrl } from "../src/env";
 import { route } from "../src/router";
@@ -360,6 +361,43 @@ describe("interactivity — view submission", () => {
     const reply = JSON.parse(callsTo(RESPONSE_URL)[0]!.body);
     expect(reply.replace_original).toBe(true);
     expect(reply.text).toContain("Sent the welcome message to <@U999>");
+  });
+});
+
+describe("interactivity — panel buttons", () => {
+  it("a watch-status click acks, then replaces the panel with the status line", async () => {
+    const res = await post(
+      "/slack/interactivity",
+      blockActionBody("admin_panel_watch_status"),
+      "application/x-www-form-urlencoded",
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("");
+    const reply = JSON.parse(callsTo(RESPONSE_URL)[0]!.body);
+    expect(reply.replace_original).toBe(true);
+    expect(reply.text).toContain("Calendar watch is");
+  });
+});
+
+describe("interactivity — panel registrations", () => {
+  it.each(PANEL_BUTTONS.map((b) => b.actionId))("%s click is registered", async (actionId) => {
+    const res = await post(
+      "/slack/interactivity",
+      blockActionBody(actionId),
+      "application/x-www-form-urlencoded",
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it.each(
+    PANEL_BUTTONS.flatMap((b) => (b.click.kind === "modal" ? [b.click.modal.callbackId] : [])),
+  )("%s submit is registered", async (callbackId) => {
+    const res = await post(
+      "/slack/interactivity",
+      viewSubmissionBody(callbackId, {}),
+      "application/x-www-form-urlencoded",
+    );
+    expect(res.status).toBe(200);
   });
 });
 
