@@ -10,7 +10,6 @@ import {
 import {
   type AdminPanelActionPayload,
   type AdminViewSubmissionPayload,
-  adminPanelBlocks,
   handlePanelClick,
   handlePanelSubmit,
   PANEL_BUTTONS,
