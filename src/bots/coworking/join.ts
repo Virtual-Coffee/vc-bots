@@ -50,15 +50,8 @@ export async function handleJoinDismiss(payload: JoinActionPayload, _env: Env): 
 
 /**
  * Room "Join" click → mint the member's personal link and answer with the join ephemeral.
- *
- * `publicBaseUrl` is the base the `/join/<token>` redirect is surfaced under — the public
- * base URL (`PUBLIC_BASE_URL`, may include a path prefix like `/bots`) or the request origin.
  */
-export async function handleJoinClick(
-  payload: JoinActionPayload,
-  env: Env,
-  publicBaseUrl: string,
-): Promise<void> {
+export async function handleJoinClick(payload: JoinActionPayload, env: Env): Promise<void> {
   const slackUserId = payload.user.id;
   const responseUrl = payload.response_url;
 
@@ -83,9 +76,8 @@ export async function handleJoinClick(
   try {
     log.debug("join.request", { user: slackUserId });
     const stub = env.COWORKING_ROOM.getByName(env.ZOOM_MEETING_ID);
-    const { token } = await stub.handleJoinRequest({ slackUserId, displayName });
-    log.info("join.linked", { user: slackUserId }); // never log the token — it resolves to a credential
-    const joinUrl = `${publicBaseUrl}/join/${token}`;
+    const { joinUrl } = await stub.handleJoinRequest({ slackUserId, displayName });
+    log.info("join.linked", { user: slackUserId }); // never log the join url — it carries the token
     const attachments = buildJoinEphemeralAttachments(env, joinUrl);
     await respondEphemeral(responseUrl, joinEphemeralText(env), undefined, attachments);
   } catch (err) {

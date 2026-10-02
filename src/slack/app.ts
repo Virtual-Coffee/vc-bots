@@ -59,12 +59,11 @@ type ActionRequest = Parameters<SourceSpecifiedBlockActionLazyHandler<Env>>[0];
  * `url_verification` handshake, ACKs within Slack's 3s window, and runs the lazy handlers
  * via `ctx.waitUntil`.
  *
- * Instantiated per request: registration is closures-only (no I/O), and it lets handlers
- * close over `publicBaseUrl` (the join-redirect base, which may be the request origin).
+ * Instantiated per request: registration is closures-only (no I/O).
  *
  * Handlers reply through `src/slack/response.ts`, never `context.respond` — see ADR 0004.
  */
-export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
+export function createSlackApp(env: Env): SlackApp<Env> {
   /**
    * Last-resort catch around every lazy handler. slack-edge hands `handler.lazy(request)`
    * straight to `ctx.waitUntil` with no try/catch, so a rejecting lazy handler is silent —
@@ -118,9 +117,7 @@ export function createSlackApp(env: Env, publicBaseUrl: string): SlackApp<Env> {
       .action(
         JOIN_ACTION_ID,
         ack,
-        lazy<ActionRequest>("coworking.join", async ({ payload }) =>
-          handleJoinClick(payload, env, publicBaseUrl),
-        ),
+        lazy<ActionRequest>("coworking.join", async ({ payload }) => handleJoinClick(payload, env)),
       )
       // ☕ Join (url button — the browser is already opening Zoom) and Cancel both dismiss the
       // per-user join ephemeral; deleting THAT original is safe.

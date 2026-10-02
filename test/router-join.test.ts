@@ -1,11 +1,12 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { joinPath } from "../src/bots/coworking/invite-link";
 import { route } from "../src/router";
 import { installFetchRecorder } from "./helpers/fetch-recorder";
 
 /**
  * GET /join/<token> — the opaque per-user redirect behind the ephemeral's ☕ Join button. The
- * token is the credential (minted by the DO on a Join click); it resolves to the personal Zoom
+ * token is the credential (minted by the DO's invite-link store on a Join click); it resolves to the personal Zoom
  * join url and 302s the browser there. Keeps the token-bearing Zoom url out of the Slack UI.
  */
 
@@ -25,16 +26,16 @@ async function get(path: string): Promise<Response> {
 describe("GET /join/<token>", () => {
   it("302s a minted token to the personal Zoom url, uncached", async () => {
     const stub = env.COWORKING_ROOM.getByName(env.ZOOM_MEETING_ID);
-    const { token } = await stub.handleJoinRequest({ slackUserId: "U777", displayName: "Ada" });
+    const { joinUrl } = await stub.handleJoinRequest({ slackUserId: "U777", displayName: "Ada" });
 
-    const res = await get(`/join/${token}`);
+    const res = await get(joinPath(joinUrl.split("/").at(-1)!));
     expect(res.status).toBe(302);
     expect(res.headers.get("Location")).toBe("https://zoom.us/w/personal-7");
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("404s an unknown token", async () => {
-    const res = await get(`/join/${"0".repeat(32)}`);
+    const res = await get(joinPath("0".repeat(32)));
     expect(res.status).toBe(404);
     expect(await res.text()).toMatch(/expired/i);
   });
