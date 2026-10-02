@@ -82,8 +82,14 @@ export async function handleJoinClick(payload: JoinActionPayload, env: Env): Pro
     await respondEphemeral(responseUrl, joinEphemeralText(env), undefined, attachments);
   } catch (err) {
     // Tell maintainers the room join is broken (Zoom invite-link mint / DO call failed).
-    await reportFailure(env, "join.failed", err, { user: slackUserId });
-    await respondEphemeral(responseUrl, joinErrorText(env));
+    // Logged synchronously; the alert runs alongside the reply so a slow #bot-log post never
+    // holds up the member's error message.
+    const reported = reportFailure(env, "join.failed", err, { user: slackUserId });
+    try {
+      await respondEphemeral(responseUrl, joinErrorText(env));
+    } finally {
+      await reported;
+    }
   }
 }
 
