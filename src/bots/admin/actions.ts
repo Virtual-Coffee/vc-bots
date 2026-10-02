@@ -4,7 +4,8 @@ import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { postAvailabilityCheckIn } from "../availability";
 import type { WatchStatus } from "../calendar-sync/durable-object";
-import { type ReminderName, type SendResult, sendReminder } from "../reminders";
+import type { ReminderName } from "../../events";
+import { type SendResult, sendReminder } from "../reminders";
 import { publishHomeTab, sendWelcomeDm } from "../welcome";
 
 /**

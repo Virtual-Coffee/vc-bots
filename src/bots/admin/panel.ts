@@ -4,7 +4,7 @@ import type { Env } from "../../env";
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { deleteOriginal, replaceEphemeral } from "../../slack/response";
-import { EASTERN } from "../reminders";
+import { EASTERN } from "../../events";
 import {
   type AdminAction,
   type AdminResult,

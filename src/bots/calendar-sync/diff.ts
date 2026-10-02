@@ -65,7 +65,7 @@ export function departedUpcoming(
  *   `invalid` (the adapter already alerted #bot-log). A departed id with no lookup shouldn't
  *   happen (`departedUpcoming` names exactly the ids to fetch) — treated as no notice.
  * - In both, announced start still upcoming, start changed → reschedule notice.
- * - New ids → nothing: the scheduling reconcile handles them.
+ * - New ids → nothing: the starting-soon sync handles them.
  *
  * Departed notices come first (in `prior` order), then in-window reschedules (in `current`
  * order). Both notice kinds for a departed event carry no Join Link — the snapshot doesn't

@@ -67,7 +67,7 @@ as a presence card.
 ADR refutes: its class doc claimed the singleton instance serialized push notifications. It does
 not — `processNotification` awaits Google (`listEvents`, `getEvent`) before it commits the
 snapshot, so two pushes (Google sends them in bursts) each diffed the same prior snapshot and
-each posted the same cancellation to all three channels, and both ran `reconcileStartingSoon`
+each posted the same cancellation to all three channels, and both ran `reconcileStartingSoon` (now `syncStartingSoon`, ADR 0005)
 (clear-then-schedule → a duplicate starting-soon pair). `ensureWatch`'s seed raced a
 notification's diff the same way.
 

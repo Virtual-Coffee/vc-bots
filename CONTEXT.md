@@ -92,6 +92,10 @@ _Avoid_: bad event, broken event, failed event
 The public "Starting Soon" message and its event-admin mirror, both queued for ten minutes before an event starts.
 _Avoid_: reminder pair, scheduled messages
 
+**Starting-soon sync**:
+Re-queuing the starting-soon pairs for the next 24h: sweep the bot's pending scheduled messages in the window, then schedule each event's pair. Triggered by the daily run or a calendar change (ADR 0005).
+_Avoid_: reconcile, re-sync
+
 **Event-admin mirror**:
 The copy of a starting-soon message posted to the event-admin channel with moderator extras (the host key, where the public message went).
 _Avoid_: admin copy, admin message

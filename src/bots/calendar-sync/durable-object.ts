@@ -7,8 +7,8 @@ import { log, setLogLevel } from "../../log";
 import { SerialQueue } from "../../serial-queue";
 import { createSlackClient } from "../../slack/client";
 import { notifyBotLog } from "../../slack/notify";
-import { reconcileStartingSoon } from "../reminders/starting-soon";
-import { reminderRange } from "../reminders/source";
+import { syncStartingSoon } from "../reminders/starting-soon";
+import { reminderRange } from "../../events";
 import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
 
 /**
@@ -29,7 +29,7 @@ import { departedUpcoming, diffSnapshot, type SnapshotEntry } from "./diff";
  *   change whose push notification is still queued behind it, so the diff would find nothing.
  * - **Notification handling** (`notify` → `processNotification`): on each push, diff the live
  *   weekly window against the last-known snapshot to detect cancellations / reschedules, persist
- *   the new snapshot, then post standout notices to the three event channels and reconcile the
+ *   the new snapshot, then post standout notices to the three event channels and sync the
  *   scheduled "Starting Soon" queue. The snapshot is committed *before* delivery so a failed Slack
  *   call loses (and alerts on) a notice rather than re-posting it to every channel on the next
  *   push. `notify` drops pushes whose channel id isn't the stored one (stale/replaced channels).
@@ -212,7 +212,8 @@ export class CalendarSync extends DurableObject<Env> {
   }
 
   /**
-   * Overwrite the snapshot to match the current weekly window — no notices, no reconcile. The
+   * Overwrite the snapshot to match the current weekly window — no notices, no starting-soon
+   * sync. The
    * baseline mid-week notifications diff against; `ensureWatch` calls it only when the snapshot is
    * missing or belongs to a previous week (it is never a routine refresh — see the class doc).
    */
@@ -248,11 +249,11 @@ export class CalendarSync extends DurableObject<Env> {
   /**
    * Core push-notification handler. Diffs the live weekly window against the last snapshot
    * (the rules live in `./diff.ts`), persists the new snapshot, then posts standout notices to
-   * the three event channels and reconciles the scheduled "Starting Soon" queue for the daily
+   * the three event channels and syncs the scheduled "Starting Soon" queue for the daily
    * window.
    *
-   * Delivery failures don't stop the run: each post and the reconcile are isolated, and one
-   * aggregate error is thrown at the end so the caller can alert #bot-log.
+   * Delivery failures don't stop the run: each post and the starting-soon sync are isolated, and
+   * one aggregate error is thrown at the end so the caller can alert #bot-log.
    */
   processNotification(nowMs: number = Date.now()): Promise<void> {
     return this.queue.run("process_notification", () => this.processNotificationNow(nowMs));
@@ -261,7 +262,6 @@ export class CalendarSync extends DurableObject<Env> {
   /** `processNotification` body — for callers already inside the queue (`notify`). */
   private async processNotificationNow(nowMs: number): Promise<void> {
     const weekly = reminderRange("weekly", nowMs);
-    const daily = reminderRange("daily", nowMs);
 
     const current = await this.calendar.listEvents(weekly);
 
@@ -320,17 +320,11 @@ export class CalendarSync extends DurableObject<Env> {
     }
 
     // Re-sync the scheduled "Starting Soon" queue for the daily window against the live calendar.
-    // Fetch the daily window directly (rather than filtering `current`) so this matches sendDaily
-    // exactly — the source bounds the events, avoiding a brittle string compare between UTC `…Z`
-    // startsAt and the Eastern-offset range bounds.
     try {
-      const dailyEvents = await this.calendar.listEvents(daily);
-      await reconcileStartingSoon(client, this.env, dailyEvents, nowMs, daily, {
-        immediate: false,
-      });
+      await syncStartingSoon(this.calendar, this.env, nowMs, "calendar-change");
     } catch (error) {
-      log.error("calendar_sync.reconcile_failed", { error: String(error) });
-      failures.push(`reconcile: ${String(error)}`);
+      log.error("calendar_sync.starting_soon_failed", { error: String(error) });
+      failures.push(`starting-soon sync: ${String(error)}`);
     }
 
     log.info("calendar_sync.processed", {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildDailyMessage, buildWeeklyMessage } from "../src/bots/reminders/blocks";
-import type { ReminderEvent } from "../src/bots/reminders/source";
+import type { ReminderEvent } from "../src/events";
 
 function evt(overrides: Partial<ReminderEvent> = {}): ReminderEvent {
   return {

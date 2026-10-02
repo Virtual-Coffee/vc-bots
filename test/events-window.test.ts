@@ -1,6 +1,6 @@
 import { DateTime } from "luxon";
 import { describe, expect, it } from "vitest";
-import { reminderRange } from "../src/bots/reminders/source";
+import { reminderRange } from "../src/events";
 
 // Thursday 2026-05-28, 12:00 UTC = 8:00 EDT (these run in real workerd, so this also
 // verifies Luxon's America/New_York zone works on the ICU build there).

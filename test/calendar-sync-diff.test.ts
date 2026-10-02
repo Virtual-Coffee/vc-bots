@@ -130,7 +130,7 @@ describe("diffSnapshot", () => {
     expect(diff).toEqual({ notices: [], cancellations: 0, reschedules: 0, invalid: [] });
   });
 
-  it("a new id → nothing (the scheduling reconcile handles it)", () => {
+  it("a new id → nothing (the starting-soon sync handles it)", () => {
     const diff = diffSnapshot(snapshot(), live(timedEvent("new", at(48))), NONE, NOW);
     expect(diff).toEqual({ notices: [], cancellations: 0, reschedules: 0, invalid: [] });
   });

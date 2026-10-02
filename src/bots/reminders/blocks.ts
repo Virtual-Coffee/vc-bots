@@ -2,7 +2,7 @@ import type { AnyMessageBlock, MessageAttachment } from "slack-cloudflare-worker
 import { DateTime } from "luxon";
 import { dateToken } from "../../slack/date";
 import { slackifyMarkdown } from "slackify-markdown";
-import type { ReminderEvent } from "./source";
+import type { ReminderEvent } from "../../events";
 
 /**
  * Block Kit builders for event announcements, ported layout-for-layout from the old

@@ -4,12 +4,9 @@ import { type CalendarPort, createGoogleCalendarPort } from "../../google/calend
 import { log } from "../../log";
 import { createSlackClient } from "../../slack/client";
 import { buildDailyMessage, buildWeeklyMessage } from "./blocks";
-import type { ReminderName } from "./source";
-import { reminderRange } from "./source";
-import { reconcileStartingSoon } from "./starting-soon";
-
-export type { ReminderName } from "./source";
-export { EASTERN } from "./source";
+import type { ReminderName } from "../../events";
+import { reminderRange } from "../../events";
+import { syncStartingSoon } from "./starting-soon";
 
 /**
  * Event announcements. `sendReminder` does the actual work and is shared by the cron schedule
@@ -32,28 +29,24 @@ export interface SendResult {
   reason?: "monday" | "no-events";
 }
 
-type Sender = (calendar: CalendarPort, env: Env, nowMs: number) => Promise<SendResult>;
-
-const SENDERS: Record<ReminderName, Sender> = {
-  daily: sendDaily,
-  weekly: sendWeekly,
-};
-
 /** Run one reminder kind. `nowMs` is injectable for tests / the cron's scheduled time. */
 export async function sendReminder(
   name: ReminderName,
   env: Env,
   nowMs: number = Date.now(),
+  calendar: CalendarPort = createGoogleCalendarPort(env),
 ): Promise<SendResult> {
-  return SENDERS[name](createGoogleCalendarPort(env), env, nowMs);
+  switch (name) {
+    case "daily":
+      return sendDaily(calendar, env, nowMs);
+    case "weekly":
+      return sendWeekly(calendar, env, nowMs);
+  }
 }
 
 async function sendDaily(calendar: CalendarPort, env: Env, nowMs: number): Promise<SendResult> {
-  const range = reminderRange("daily", nowMs);
-  const events = await calendar.listEvents(range);
+  const { events, scheduled } = await syncStartingSoon(calendar, env, nowMs, "daily-run");
   const client = createSlackClient(env);
-
-  const scheduled = await reconcileStartingSoon(client, env, events, nowMs, range);
 
   // Mondays get the weekly summary instead; the starting-soon scheduling above still ran.
   if (DateTime.fromMillis(nowMs, { zone: "America/New_York" }).weekday === 1) {

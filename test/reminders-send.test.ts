@@ -1,52 +1,28 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendReminder } from "../src/bots/reminders";
-import type { GoogleCalendarEvent } from "../src/google/calendar";
-import { parseZoomMeetingId } from "../src/zoom/join-link";
-import { type FetchRecorder, HOST_CODE, installFetchRecorder } from "./helpers/fetch-recorder";
+import type { ReminderEvent } from "../src/events";
+import { createCalendarFake } from "./helpers/calendar-fake";
+import { type FetchRecorder, installFetchRecorder } from "./helpers/fetch-recorder";
 
 // Thursday 2026-05-28, 12:00 UTC (8:00 EDT). Monday variant for the daily summary skip.
 const NOW = Date.parse("2026-05-28T12:00:00Z");
 const MONDAY_NOW = Date.parse("2026-05-25T12:00:00Z");
 
-const ZOOM_LOCATION = "https://us02web.zoom.us/j/81323022832?pwd=abc123";
-
 let rec: FetchRecorder;
-let googleEvents: GoogleCalendarEvent[];
-let staleScheduled: Array<{ id: string; channel_id: string; post_at: number }>;
 
 beforeEach(() => {
-  googleEvents = [];
-  staleScheduled = [];
-  rec = installFetchRecorder({
-    googleEvents: () => googleEvents,
-    respond(call) {
-      if (call.url.includes("/api/chat.scheduledMessages.list")) {
-        return Response.json({ ok: true, scheduled_messages: staleScheduled });
-      }
-      return undefined;
-    },
-  });
+  rec = installFetchRecorder();
 });
 afterEach(() => vi.unstubAllGlobals());
 
-/**
- * A timed calendar event at `startUtc` (ISO, UTC); `location` is the Join Link. A Zoom Join
- * Link carries the `HOST_CODE` private property unless `hostCode` overrides it (null = none).
- */
-function evt(
-  id: string,
-  startUtc: string,
-  location?: string,
-  hostCode: string | null = location && parseZoomMeetingId(location) ? HOST_CODE : null,
-): GoogleCalendarEvent {
+/** A timed `ReminderEvent` at `startUtc` (ISO, UTC) with no Join Link. */
+function evt(id: string, startUtc: string): ReminderEvent {
   return {
     id,
-    summary: `Event ${id}`,
-    start: { dateTime: `${startUtc}Z` },
-    end: { dateTime: `${startUtc}Z` },
-    location,
-    ...(hostCode === null ? {} : { extendedProperties: { private: { hostCode } } }),
+    title: `Event ${id}`,
+    startsAt: `${startUtc}.000Z`,
+    join: { kind: "none" },
   };
 }
 
@@ -56,8 +32,8 @@ function forms(fragment: string): URLSearchParams[] {
 
 describe("sendReminder — daily", () => {
   it("skips the summary on Mondays (weekly covers it) but still schedules", async () => {
-    googleEvents = [evt("1", "2026-05-25T18:00:00")];
-    const result = await sendReminder("daily", env, MONDAY_NOW);
+    const calendar = createCalendarFake([evt("1", "2026-05-25T18:00:00")]);
+    const result = await sendReminder("daily", env, MONDAY_NOW, calendar);
     expect(result).toEqual({
       posted: false,
       count: 1,
@@ -69,8 +45,28 @@ describe("sendReminder — daily", () => {
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
   });
 
+  it("posts the summary after the immediate post; count includes started events, scheduled does not", async () => {
+    const calendar = createCalendarFake([
+      evt("1", "2026-05-28T12:08:00"), // slot fired 2 min ago: the daily run posts the pair now
+      evt("2", "2026-05-28T18:00:00"),
+    ]);
+    const started = [evt("3", "2026-05-28T11:00:00")];
+    const listEvents = calendar.listEvents.bind(calendar);
+    calendar.listEvents = async (range) => [...started, ...(await listEvents(range))];
+
+    const result = await sendReminder("daily", env, NOW, calendar);
+    expect(result).toEqual({ posted: true, count: 3, scheduled: 2 });
+
+    const posts = forms("/api/chat.postMessage");
+    // fired pair (public + admin), then the summary
+    expect(posts).toHaveLength(3);
+    expect(posts[0]?.get("text")).toContain("Starting soon:");
+    expect(posts[2]?.get("channel")).toBe(env.SLACK_ANNOUNCEMENTS_CHANNEL_ID);
+    expect(forms("/api/chat.scheduleMessage")).toHaveLength(2);
+  });
+
   it("posts nothing when there are no events", async () => {
-    const result = await sendReminder("daily", env, NOW);
+    const result = await sendReminder("daily", env, NOW, createCalendarFake());
     expect(result).toEqual({
       posted: false,
       count: 0,
@@ -83,11 +79,11 @@ describe("sendReminder — daily", () => {
 
 describe("sendReminder — weekly", () => {
   it("posts one summary to the announcements channel and schedules nothing", async () => {
-    googleEvents = [
+    const calendar = createCalendarFake([
       evt("1", "2026-05-28T18:00:00"),
-      evt("2", "2026-05-30T15:00:00", ZOOM_LOCATION),
-    ];
-    const result = await sendReminder("weekly", env, NOW);
+      evt("2", "2026-05-30T15:00:00"),
+    ]);
+    const result = await sendReminder("weekly", env, NOW, calendar);
     expect(result).toEqual({ posted: true, count: 2 });
 
     const posts = forms("/api/chat.postMessage");
@@ -99,7 +95,7 @@ describe("sendReminder — weekly", () => {
   });
 
   it("posts nothing when the week is empty", async () => {
-    const result = await sendReminder("weekly", env, NOW);
+    const result = await sendReminder("weekly", env, NOW, createCalendarFake());
     expect(result).toEqual({ posted: false, count: 0, reason: "no-events" });
     expect(forms("/api/chat.postMessage")).toHaveLength(0);
   });
