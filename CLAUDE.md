@@ -40,7 +40,7 @@ mirror, day message, sign-up sheet, seed reactions — in code, tests, commits a
 `src/router.ts`, a plain `method + path` switch: `POST /zoom/webhook`
 (`handleZoomWebhook`, `src/zoom/webhook.ts`), `POST /google/notify` (the calendar watch
 callback), the three `POST /slack/*` routes (one path-agnostic `SlackApp` built per request
-by `createSlackApp(env, publicBaseUrl)` in `src/slack/app.ts`, where every `.event()` /
+by `createSlackApp(env)` in `src/slack/app.ts`, where every `.event()` /
 `.action()` / `.command()` / `.viewSubmission()` registration lives — hand it the request
 **unread**, `app.run` reads the body), `GET /join/<token>`, `/health` and `HEAD /`.
 
@@ -62,8 +62,9 @@ Failure paths with no user in front of them alert `#bot-log` through an explicit
 **Co-working room** (`src/bots/coworking/`, `src/zoom/`). `CoworkingRoom` is a SQLite Durable
 Object, one instance per Zoom meeting id (`env.COWORKING_ROOM.getByName(meetingId)`, re-exported
 from `src/index.ts`); the webhook route drops events for any other meeting before a DO is
-touched. The DO owns the session state machine and the join tokens and `enqueue`s everything
-that touches the session or the room message (Zoom events, the alarm, admin announcements);
+touched. The DO owns the session state machine and (via `InviteLinks`, `invite-link.ts`) the
+join tokens, and `enqueue`s everything that touches the session or the room message (Zoom
+events, the alarm, admin announcements);
 `RoomMessage` owns the channel message. Before changing `src/bots/coworking/**`,
 `src/zoom/**` or their tests, read `docs/adr/0003-zoom-events-serialized-in-the-do.md` (why
 a single instance is not race-free) and
