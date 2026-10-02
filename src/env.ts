@@ -33,8 +33,8 @@ export interface Env {
   ZOOM_MEETING_ID: string;
   /**
    * Public base URL the Worker is reachable at (the Netlify rewrite in front of the Worker). May
-   * include a path prefix. Used for the `/join/<token>` redirect surfaced in Slack AND as the base for the
-   * Google Calendar watch address (`${PUBLIC_BASE_URL}/google/notify`) — Google requires a
+   * include a path prefix. Used for the `/join/<token>` redirect surfaced in Slack AND as the base
+   * for the Google Calendar watch address (`${PUBLIC_BASE_URL}/google/notify`) — Google requires a
    * trusted HTTPS certificate there (the push guide lists no domain-registration step; if
    * `watch start` is refused for the domain, verify it under Cloud Console → Domain verification).
    * There is no request-origin fallback: join links and the watch both need it (`publicBaseUrl`).

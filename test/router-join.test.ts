@@ -6,8 +6,9 @@ import { installFetchRecorder } from "./helpers/fetch-recorder";
 
 /**
  * GET /join/<token> — the opaque per-user redirect behind the ephemeral's ☕ Join button. The
- * token is the credential (minted by the DO's invite-link store on a Join click); it resolves to the personal Zoom
- * join url and 302s the browser there. Keeps the token-bearing Zoom url out of the Slack UI.
+ * token is the credential (minted by the DO's invite-link store on a Join click); it resolves to
+ * the personal Zoom join url and 302s the browser there. Keeps the token-bearing Zoom url out of
+ * the Slack UI.
  */
 
 beforeEach(() => {

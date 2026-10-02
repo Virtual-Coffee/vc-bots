@@ -16,12 +16,13 @@ import {
  * Co-working room — one Durable Object instance per Zoom meeting ID. The instance alone does not
  * serialize its handlers; `enqueue` does (ADR 0003).
  *
- * The DO owns the session state machine (the `session` / `participant` / `member_link` /
- * `invite_link` tables, the stale-session alarm, and the join tokens) and mints per-user Zoom
- * invite links through `InviteLinks` (`invite-link.ts`, which owns the TTL, join tokens and urls). Everything about the room message — the cards, the copy,
- * the standing-invite hand-off between sessions and announcements, which card is open — is
- * delegated to `RoomMessage`; the DO never sees a message ts, it only tells RoomMessage what
- * happened. Both are swappable fields so the DO suite runs against in-memory fakes.
+ * The DO owns the session state machine (the `session` / `participant` tables and the stale-session
+ * alarm) and creates the `member_link` / `invite_link` tables; the invite links themselves —
+ * Zoom mint, join tokens, TTL, urls — belong to `InviteLinks` (`invite-link.ts`). Everything
+ * about the room message — the cards, the copy, the standing-invite hand-off between sessions and
+ * announcements, which card is open — is delegated to `RoomMessage`; the DO never sees a message
+ * ts, it only tells RoomMessage what happened. Both are swappable fields so the DO suite runs
+ * against in-memory fakes.
  */
 
 /** Force-end a session this long after it started if `meeting.ended` was never received. */
