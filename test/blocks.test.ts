@@ -64,6 +64,7 @@ describe("buildWeeklyMessage", () => {
 });
 
 describe("buildChangeNotice", () => {
+  const startSecs = (iso: string) => Date.parse(iso) / 1000;
   const sectionTexts = (message: ReturnType<typeof buildChangeNotice>) =>
     (message.attachments?.[0]?.blocks ?? []).map(
       (b) => (b as { text: { text: string } }).text.text,
@@ -77,7 +78,7 @@ describe("buildChangeNotice", () => {
     expect(message.attachments![0]!.color).toBe("#d9376e");
     const [headerText, titleText, body] = sectionTexts(message);
     expect(headerText).toBe("*:warning: Event Cancelled*");
-    expect(titleText).toMatch(/^\*Lunch & Learn\*\n/);
+    expect(titleText).toContain(`*Lunch & Learn*\n<!date^${startSecs(evt().startsAt)}^`);
     expect(body).toBe("This event has been cancelled.");
   });
 
@@ -93,7 +94,7 @@ describe("buildChangeNotice", () => {
     const [headerText, titleText, was, now] = sectionTexts(message);
     expect(headerText).toBe("*:calendar: Event Rescheduled*");
     expect(titleText).toBe("*Lunch & Learn*");
-    expect(was).toMatch(/^\*Was:\* /);
-    expect(now).toMatch(/^\*Now:\* /);
+    expect(was).toContain(`*Was:* <!date^${startSecs("2026-05-27T15:00:00.000Z")}^`);
+    expect(now).toContain(`*Now:* <!date^${startSecs(evt().startsAt)}^`);
   });
 });
