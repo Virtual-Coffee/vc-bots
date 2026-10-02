@@ -55,10 +55,11 @@ export function departedUpcoming(
  * Diff the live window against the snapshot into changes.
  *
  * - Departed (in `prior`, not in `current`, announced start still upcoming), by its lookup:
- *   `skipped` / `cancelled` → `cancelled` change; `event` → `rescheduled` change to the new
- *   start (an out-of-window move); `skipped` for `all-day` / `bad-start` → nothing (no timed slot
- *   to correct to; the adapter already warned about the unparseable start); `invalid` → nothing, reported in
- *   `invalid` (the adapter already alerted #bot-log). A departed id with no lookup shouldn't
+ *   `skipped` with reason `cancelled` → `cancelled` change; `event` → `rescheduled` change to
+ *   the new start (an out-of-window move); `skipped` with `all-day` / `bad-start` → nothing (no
+ *   timed slot to correct to; the adapter already warned about the unparseable start);
+ *   `invalid` → nothing, reported in `invalid` (`listEvents` alerts #bot-log when the event is
+ *   in the window). A departed id with no lookup shouldn't
  *   happen (`departedUpcoming` names exactly the ids to fetch) — treated as no change.
  * - In both, announced start still upcoming, start changed → `rescheduled` change.
  * - New ids → nothing: the starting-soon sync handles them.
@@ -81,7 +82,7 @@ export function diffSnapshot(
     const lookup = lookups.get(id);
     switch (lookup?.kind) {
       case "skipped": {
-        // All-day / bad-start: no timed slot to correct to — nothing.
+        // all-day / bad-start: nothing
         if (lookup.reason !== "cancelled") break;
         const reconstructed: ReminderEvent = {
           id,

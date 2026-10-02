@@ -3,10 +3,12 @@ import type { Env } from "../env";
 import { log } from "../log";
 import { reportFailure } from "../slack/notify";
 
-// Google Calendar push (`watch`) notifications POST here with an empty body — all signal is in
-// X-Goog-* headers. There's no body signature; authenticity is the per-channel token we set when
-// registering the watch. We ACK fast (200) and run the sync via the DO in the background — non-2xx
-// would make Google retry-storm, so even dropped notifications return 200.
+/**
+ * `POST /google/notify`: Google Calendar push (`watch`) notifications arrive with an empty body —
+ * all signal is in X-Goog-* headers. There's no body signature; authenticity is the per-channel
+ * token we set when registering the watch. We ACK fast (200) and run the sync via the DO in the
+ * background — non-2xx would make Google retry-storm, so even dropped notifications return 200.
+ */
 export async function handleGoogleNotify(
   req: Request,
   env: Env,

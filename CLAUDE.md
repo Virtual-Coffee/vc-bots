@@ -39,8 +39,8 @@ mirror, day message, sign-up sheet, seed reactions — in code, tests, commits a
 `src/cron.ts`, whose `CRON_JOBS` map is the single owner of every cron string). `fetch` delegates to
 `src/router.ts`, a plain `method + path` switch: `POST /zoom/webhook`
 (`handleZoomWebhook`, `src/zoom/webhook.ts`), `POST /google/notify` (`handleGoogleNotify`,
-`src/google/notify.ts`, the calendar watch callback), the three `POST /slack/*` routes (one path-agnostic `SlackApp` built per request
-by `createSlackApp(env)` in `src/slack/app.ts`, where every `.event()` /
+`src/google/notify.ts`, the calendar watch callback), the three `POST /slack/*` routes (one
+path-agnostic `SlackApp` built per request by `createSlackApp(env)` in `src/slack/app.ts`, where every `.event()` /
 `.action()` / `.command()` / `.viewSubmission()` registration lives — hand it the request
 **unread**, `app.run` reads the body), `GET /join/<token>`, `/health` and `HEAD /`.
 

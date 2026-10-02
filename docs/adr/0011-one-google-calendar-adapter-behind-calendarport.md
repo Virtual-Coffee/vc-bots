@@ -15,8 +15,8 @@ events (ADR 0002). Written twice, those rules diverged.
 
 - **`createGoogleCalendarPort(env)` (`src/google/calendar.ts`) is the only module that talks
   to the Google Calendar API**, behind the `CalendarPort` seam: `listEvents(range)` (timed,
-  non-cancelled, valid events — invalid ones dropped and alerted), `getEvent(id)` (a `MappedEvent`: `event` /
-  `skipped` / `invalid`; transient failures throw rather than masquerade as a deletion),
+  non-cancelled, valid events — invalid ones dropped and alerted), `getEvent(id)` (a
+  `MappedEvent`: `event` / `skipped` / `invalid`; transient failures throw rather than masquerade as a deletion),
   `watch(address)` and `stopChannel(channelId, resourceId)` (`stopped` / `gone` / `failed`,
   never thrown). `toReminderEvent` is the one mapping from the wire shape to `ReminderEvent`
   (`src/events.ts`).
@@ -42,10 +42,10 @@ events (ADR 0002). Written twice, those rules diverged.
   which returns `CalendarChange`s that `buildChangeNotice` renders) and unit-tested without
   the DO. Tests swap in `test/helpers/calendar-fake.ts`.
 - **`POST /google/notify` (`src/google/notify.ts`) is the push callback.** It authenticates the
-  per-channel token (`GOOGLE_WATCH_TOKEN`, compared in constant time), drops the `sync` handshake (and, until the
-  2026-10-01 cutover, pushes from a non-Google active source), ACKs `200`, and hands the
-  channel id to the DO in `ctx.waitUntil` — alerting `#bot-log` (`google.notify.failed`) if that dispatch rejects
-  (ADR 0006).
+  per-channel token (`GOOGLE_WATCH_TOKEN`, compared in constant time), drops the `sync`
+  handshake (and, until the 2026-10-01 cutover, pushes from a non-Google active source), ACKs
+  `200`, and hands the channel id to the DO in `ctx.waitUntil` — alerting `#bot-log`
+  (`google.notify.failed`) if that dispatch rejects (ADR 0006).
 
 ## Consequences
 

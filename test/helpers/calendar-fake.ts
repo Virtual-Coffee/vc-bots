@@ -10,8 +10,8 @@ import type {
 
 /**
  * An in-memory `CalendarPort`: holds the calendar as a map of `ReminderEvent`s, answers
- * `listEvents` with the ones inside the range, `getEvent` from the same map (missing → skipped/cancelled,
- * or a per-id override), and records every call so a test can assert the watch / stop / list
+ * `listEvents` with the ones inside the range, `getEvent` from the same map (missing →
+ * skipped/cancelled, or a per-id override), and records every call so a test can assert the watch / stop / list
  * traffic without a fetch spy. `failNext` makes one call of a method throw.
  */
 
@@ -27,8 +27,8 @@ export interface FakeCalendar extends CalendarPort {
   callsTo(method: CalendarMethod): CalendarCall[];
   /** Replace the whole calendar. */
   setEvents(events: ReminderEvent[]): void;
-  /** Per-id `getEvent` answers that win over the map (e.g. `{ kind: "skipped", reason: "all-day" }` or
-   *  `{ kind: "invalid", reason: "zoom-no-host-key" }`). */
+  /** Per-id `getEvent` answers that win over the map (e.g.
+   *  `{ kind: "skipped", reason: "all-day" }` or `{ kind: "invalid", reason: "zoom-no-host-key" }`). */
   readonly lookups: Map<string, MappedEvent>;
   /** What the next `watch` returns; missing fields get defaults (fresh uuid, `res-1`, now + 7d). */
   watchResponse: Partial<CalendarWatch>;
