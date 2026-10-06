@@ -114,6 +114,29 @@ describe("the open card", () => {
   });
 });
 
+describe("join reactions", () => {
+  it("react adds the reaction to the open card", async () => {
+    const ts = await openCard();
+    await room.react("crown");
+    expect(port.reactions).toEqual([{ ts, name: "crown" }]);
+  });
+
+  it("react with no open card warns and skips", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await room.react("crown");
+    expect(port.reactions).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("coworking.room_msg.no_open_card"));
+  });
+
+  it("an emoji name Slack doesn't know warns instead of throwing", async () => {
+    await openCard();
+    port.reactResult = "invalid_name";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await room.react("not-an-emoji");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("coworking.room_msg.react_invalid"));
+  });
+});
+
 describe("the open card pointer", () => {
   it("open records the open card; close spends it and remembers the ended card", async () => {
     const ts = await openCard();

@@ -4,6 +4,7 @@ import type { CoworkingRoom } from "../src/bots/coworking/durable-object";
 import { INVITE_LINK_TTL_SECONDS, isJoinToken, joinPath } from "../src/bots/coworking/invite-link";
 import { publicBaseUrl } from "../src/env";
 import type { ZoomMeetingEvent, ZoomMeetingEventType } from "../src/zoom/types";
+import { installFetchRecorder } from "./helpers/fetch-recorder";
 import {
   createInviteLinkFake,
   type FakeInviteLinks,
@@ -745,4 +746,124 @@ describe("CoworkingRoom — event serialization (ADR 0003)", () => {
     expect(port.lastUpdateJson()).toContain("session has ended");
     expect(port.lastUpdateJson()).not.toContain("Bob");
   });
+});
+
+describe("CoworkingRoom — join reactions (#22)", () => {
+  const ada = { user_id: "p1", user_name: "Ada" };
+  const setReaction = (stub: RoomStub, slackUserId: string, emoji: string | null) =>
+    withRoom(stub, (live) => live.setJoinReaction(slackUserId, emoji));
+
+  /** A started session with Ada (U777) able to correlate by name. */
+  async function startWithAda(name: string): Promise<RoomStub> {
+    const stub = room(name);
+    await join(stub, { slackUserId: "U777", displayName: "Ada" });
+    await send(stub, event("meeting.started", "uuid-1"));
+    return stub;
+  }
+
+  it("stores, replaces, reads back and clears a member's join reaction", async () => {
+    const stub = room("r0");
+    expect(await withRoom(stub, (live) => live.getJoinReaction("U777"))).toBeNull();
+
+    await setReaction(stub, "U777", "crown");
+    await setReaction(stub, "U777", "tada");
+    expect(await withRoom(stub, (live) => live.getJoinReaction("U777"))).toBe("tada");
+
+    await setReaction(stub, "U777", null);
+    expect(await withRoom(stub, (live) => live.getJoinReaction("U777"))).toBeNull();
+  });
+
+  it("a member's join adds their reaction to the open card", async () => {
+    const stub = await startWithAda("r1");
+    await setReaction(stub, "U777", "crown");
+
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada));
+
+    expect(port.reactions).toEqual([{ ts: postedTs(0), name: "crown" }]);
+    expect(port.lastUpdateJson()).toContain('"user_id":"U777"'); // presence still rendered
+  });
+
+  it("reacts once per member per session: a rejoin or a second device adds nothing", async () => {
+    const stub = await startWithAda("r2");
+    await setReaction(stub, "U777", "crown");
+
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada));
+    await send(stub, event("meeting.participant_left", "uuid-1", ada));
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada)); // rejoin
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-1", { user_id: "p2", user_name: "Ada" }), // phone
+    );
+
+    expect(port.reactions).toHaveLength(1);
+  });
+
+  it("reacts again in the next session", async () => {
+    const stub = await startWithAda("r3");
+    await setReaction(stub, "U777", "crown");
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada));
+    await send(stub, event("meeting.ended", "uuid-1"));
+
+    await send(stub, event("meeting.started", "uuid-2"));
+    await send(stub, event("meeting.participant_joined", "uuid-2", ada));
+
+    expect(port.reactions).toEqual([
+      { ts: postedTs(0), name: "crown" },
+      { ts: postedTs(1), name: "crown" },
+    ]);
+  });
+
+  it("guests and members without a preference trigger no reaction", async () => {
+    const stub = await startWithAda("r4");
+    await setReaction(stub, "U999", "crown"); // someone else's preference
+
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada)); // member, no pref
+    await send(
+      stub,
+      event("meeting.participant_joined", "uuid-1", { user_id: "p9", user_name: "Guest" }),
+    );
+
+    expect(port.reactions).toHaveLength(0);
+    expect(port.lastUpdateJson()).toContain("Guest");
+  });
+
+  it("a join replayed from the early-join buffer reacts once the card exists", async () => {
+    const stub = room("r5");
+    await join(stub, { slackUserId: "U777", displayName: "Ada" });
+    await setReaction(stub, "U777", "crown");
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada)); // beats the start
+    expect(port.reactions).toHaveLength(0);
+
+    await send(stub, event("meeting.started", "uuid-1"));
+
+    expect(port.reactions).toEqual([{ ts: postedTs(0), name: "crown" }]);
+  });
+
+  it("a Slack failure is reported to #bot-log and never fails the join", async () => {
+    const stub = await startWithAda("r7");
+    await setReaction(stub, "U777", "crown");
+    port.reactError = new Error("ratelimited");
+    const rec = installFetchRecorder(); // the only fetch left is the #bot-log alert
+
+    await send(stub, event("meeting.participant_joined", "uuid-1", ada));
+
+    expect((await participants(stub))[0]?.slack_user_id).toBe("U777");
+    expect(port.lastUpdateJson()).toContain('"user_id":"U777"');
+    const alerts = rec.callsTo("/api/chat.postMessage").map((c) => rec.form(c).get("text"));
+    expect(alerts).toEqual([expect.stringContaining("coworking.join_reaction_failed")]);
+  });
+
+  it.each(["vanished", "invalid_name"] as const)(
+    "a %s answer from Slack is not an alert",
+    async (result) => {
+      const stub = await startWithAda(`r8-${result}`);
+      await setReaction(stub, "U777", "crown");
+      port.reactResult = result;
+
+      // The suite's fetch stub throws: an alert here would fail the test.
+      await send(stub, event("meeting.participant_joined", "uuid-1", ada));
+
+      expect((await participants(stub))[0]?.slack_user_id).toBe("U777");
+    },
+  );
 });

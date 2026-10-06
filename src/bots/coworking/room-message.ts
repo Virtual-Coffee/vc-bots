@@ -13,10 +13,10 @@ import { dateToken } from "../../slack/date";
  * cards, the copy, the standing-invite hand-off between cards, and the message pointers that
  * make both possible — which card is open right now, and which ended card carries the invite.
  * The `CoworkingRoom` Durable Object keeps the session state machine and tells this module *what*
- * happened (`open` / `showPresence` / `close` / `announceOpen` / `announceClose`); the module
- * decides what the channel should look like, and no message ts ever crosses back to the DO.
+ * happened (`open` / `showPresence` / `react` / `close` / `announceOpen` / `announceClose`); the
+ * module decides what the channel should look like, and no message ts ever crosses back to the DO.
  *
- * Slack itself sits behind `RoomChannelPort` — two calls (post / update) against the
+ * Slack itself sits behind `RoomChannelPort` — three calls (post / update / react) against the
  * co-working channel — so the message lifecycle is testable against a fake port with no network.
  *
  * Standing-invite chain: every ended card is rendered with the "start the next session" button,
@@ -28,7 +28,7 @@ import { dateToken } from "../../slack/date";
  * (without invite) by the next takeover.
  */
 
-/** The seam to Slack: the two operations the room message needs against the co-working channel. */
+/** The seam to Slack: the operations the room message needs against the co-working channel. */
 export interface RoomChannelPort {
   /** Post a new message; resolves to its ts, or null when Slack returned none. */
   post(text: string, blocks: AnyMessageBlock[]): Promise<string | null>;
@@ -38,6 +38,12 @@ export interface RoomChannelPort {
    * wedging the room on a dead ts. Any other failure throws.
    */
   update(ts: string, text: string, blocks: AnyMessageBlock[]): Promise<"ok" | "vanished">;
+  /**
+   * Add the bot's reaction `name` to a message. Already reacted counts as `"ok"`; a vanished
+   * target is `"vanished"`, as for `update`; a name Slack doesn't know is `"invalid_name"`. Any
+   * other failure throws.
+   */
+  react(ts: string, name: string): Promise<"ok" | "vanished" | "invalid_name">;
 }
 
 /**
@@ -126,6 +132,21 @@ export class RoomMessage {
       roomOpenText(this.roomTitle),
       buildRoomOpenBlocks(this.roomTitle, present, open.startedAtMs),
     );
+  }
+
+  /**
+   * Add a member's join reaction to the open card. It stays on the message when `close` edits it
+   * into the ended card. No open card warns and skips, like `showPresence`; a vanished card or an
+   * emoji name Slack doesn't know warns. Anything else throws, for the caller to report.
+   */
+  async react(name: string): Promise<void> {
+    const open = await this.storage.get<OpenCard>(OPEN_KEY);
+    if (!open) {
+      log.warn("coworking.room_msg.no_open_card", { op: "react" });
+      return;
+    }
+    const result = await this.port.react(open.ts, name);
+    if (result === "invalid_name") log.warn("coworking.room_msg.react_invalid", { name });
   }
 
   /**
@@ -295,7 +316,22 @@ export function createSlackRoomChannelPort(env: Env): RoomChannelPort {
         return "ok";
       } catch (err) {
         const code = err instanceof SlackAPIError ? err.error : String(err);
-        if (code.includes("message_not_found") || code.includes("channel_not_found")) {
+        if (isVanished(code)) {
+          log.warn("coworking.room_msg.stale_pointer", { ts, error: code });
+          return "vanished";
+        }
+        throw err;
+      }
+    },
+    async react(ts, name) {
+      try {
+        await createSlackClient(env).reactions.add({ channel, timestamp: ts, name });
+        return "ok";
+      } catch (err) {
+        const code = err instanceof SlackAPIError ? err.error : String(err);
+        if (code.includes("already_reacted")) return "ok";
+        if (code.includes("invalid_name")) return "invalid_name";
+        if (isVanished(code)) {
           log.warn("coworking.room_msg.stale_pointer", { ts, error: code });
           return "vanished";
         }
@@ -303,6 +339,11 @@ export function createSlackRoomChannelPort(env: Env): RoomChannelPort {
       }
     },
   };
+}
+
+/** A Slack error code meaning the target message (or its channel) is gone. */
+function isVanished(code: string): boolean {
+  return code.includes("message_not_found") || code.includes("channel_not_found");
 }
 
 // --- Copy ---

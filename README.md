@@ -7,7 +7,7 @@ co-working room, the new-member welcome, the App Home tab, and event announcemen
 
 | Bot | Trigger | Behavior |
 | --- | --- | --- |
-| **Co-working room** | Zoom webhooks + a Slack Join button | Posts a fresh "open room" message in the co-working channel each time a session starts (so the channel gets notified): who's in the room, a ☕ Join button that hands each member a personal Zoom invite link, and a stats summary when the meeting ends — which also carries the button that starts the next session. |
+| **Co-working room** | Zoom webhooks + a Slack Join button | Posts a fresh "open room" message in the co-working channel each time a session starts (so the channel gets notified): who's in the room, a ☕ Join button that hands each member a personal Zoom invite link, and a stats summary when the meeting ends — which also carries the button that starts the next session. Members can pick a join reaction with `/coworking-react :emoji:`; the bot adds it to the room message when they join. |
 | **Welcome** | Slack `team_join` event | DMs new members a welcome message. |
 | **App Home** | Slack `app_home_opened` event | Publishes the bot's App Home tab. |
 | **Availability check-in** | Cron trigger (Mondays) + Slack reaction events | Posts the Monday trio to the hosts channel — an `@channel` intro with the role legend, then a Tuesday and a Thursday message seeded with the five role emoji — and edits each day message as people react so every role line lists who signed up. Slack's reactions are the source of truth (ADR 0013); `/vc-bot-admin availability` posts it on demand. |
@@ -145,9 +145,10 @@ Config and secrets are split deliberately:
 
 - **Slack app**: event subscriptions for `team_join`, `app_home_opened`, `reaction_added`
   and `reaction_removed` pointed at `/slack/events`, interactivity at `/slack/interactivity`,
-  and the `/vc-bot-admin` slash command at `/slack/commands`. The availability check-in needs
-  the `reactions:read` and `reactions:write` bot scopes (reinstall the app after adding them)
-  and the bot invited to `SLACK_AVAILABILITY_CHANNEL_ID`.
+  and the `/vc-bot-admin` and `/coworking-react` slash commands at `/slack/commands`. The
+  availability check-in needs the `reactions:read` and `reactions:write` bot scopes (reinstall
+  the app after adding them) and the bot invited to `SLACK_AVAILABILITY_CHANNEL_ID`; join
+  reactions use the same `reactions:write`.
 - **Zoom app**: webhook subscriptions for `meeting.started`, `meeting.ended`,
   `meeting.participant_joined`, and `meeting.participant_left` pointed at `/zoom/webhook`,
   plus a Server-to-Server OAuth app for the invite-link API (`meeting:write:invite_links:admin`).
