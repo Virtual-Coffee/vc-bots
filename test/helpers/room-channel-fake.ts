@@ -8,7 +8,8 @@ import {
 import type { Env } from "../../src/env";
 
 /**
- * An in-memory `RoomChannelPort`: records every post / update with its text and blocks,
+ * An in-memory `RoomChannelPort`: records every post / update with its text and blocks (and
+ * every reaction),
  * hands out incrementing ts values, and lets a test declare a ts vanished (deleted by hand) so
  * updates against it report `"vanished"` the way the Slack adapter does.
  */
@@ -23,9 +24,20 @@ export interface FakeUpdate extends FakeMessage {
   result: "ok" | "vanished";
 }
 
+export interface FakeReaction {
+  ts: string;
+  name: string;
+}
+
 export interface FakeRoomChannelPort extends RoomChannelPort {
   readonly posts: FakeMessage[];
   readonly updates: FakeUpdate[];
+  /** Reactions added with a non-error result, in order. */
+  readonly reactions: FakeReaction[];
+  /** What `react` answers when it doesn't throw; `"ok"` by default. */
+  reactResult: "ok" | "vanished" | "invalid_name";
+  /** When set, `react` rejects with this error (a Slack failure the caller must report). */
+  reactError: Error | null;
   /** Updates against this ts report `"vanished"` from now on. */
   vanish(ts: string): void;
   /** When true, `post` resolves to null (Slack answered without a ts). */
@@ -48,12 +60,16 @@ export interface FakeRoomChannelPort extends RoomChannelPort {
 export function createFakeRoomChannelPort(): FakeRoomChannelPort {
   const posts: FakeMessage[] = [];
   const updates: FakeUpdate[] = [];
+  const reactions: FakeReaction[] = [];
   const vanished = new Set<string>();
   let nextTs = 1;
 
   const port: FakeRoomChannelPort = {
     posts,
     updates,
+    reactions,
+    reactResult: "ok",
+    reactError: null,
     postWithoutTs: false,
     updateError: null,
     hold: { posts: null, updates: null },
@@ -76,6 +92,11 @@ export function createFakeRoomChannelPort(): FakeRoomChannelPort {
       const result = vanished.has(ts) ? "vanished" : "ok";
       updates.push({ ts, text, blocks, result });
       return result;
+    },
+    async react(ts, name) {
+      if (port.reactError) throw port.reactError;
+      if (port.reactResult === "ok") reactions.push({ ts, name });
+      return port.reactResult;
     },
   };
   return port;
