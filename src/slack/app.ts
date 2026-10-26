@@ -12,6 +12,7 @@ import {
   handleJoinClick,
   handleJoinDismiss,
 } from "../bots/coworking/join";
+import { REACT_COMMAND, handleReactCommand } from "../bots/coworking/react-command";
 import { JOIN_ACTION_ID } from "../bots/coworking/room-message";
 import { JOIN_EVENT_ACTION_ID } from "../bots/reminders/blocks";
 import { handleAppHomeOpened, handleTeamJoin } from "../bots/welcome";
@@ -119,6 +120,11 @@ export function createSlackApp(env: Env): SlackApp<Env> {
       ADMIN_COMMAND,
       ack,
       lazy("admin.command", async ({ payload }) => handleAdminCommand(payload, env)),
+    )
+    .command(
+      REACT_COMMAND,
+      ack,
+      lazy("coworking.react_command", async ({ payload }) => handleReactCommand(payload, env)),
     );
 
   // `/vc-bot-admin` (no args) panel, registered from its table. The panel is a per-user

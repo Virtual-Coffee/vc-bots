@@ -423,4 +423,26 @@ describe("slash command", () => {
     expect(replies).toHaveLength(1);
     expect(JSON.parse(replies[0]!.body).text).toContain("App Home");
   });
+
+  it("/coworking-react saves the member's reaction and replies via response_url", async () => {
+    const body = new URLSearchParams({
+      command: "/coworking-react",
+      text: ":crown:",
+      user_id: "U-route",
+      channel_id: "C9",
+      response_url: RESPONSE_URL,
+      trigger_id: "tr3",
+      team_id: "T1",
+      token: "t",
+      api_app_id: "A1",
+    }).toString();
+    const res = await post("/slack/commands", body, "application/x-www-form-urlencoded");
+    expect(res.status).toBe(200);
+
+    const stub = env.COWORKING_ROOM.getByName(env.ZOOM_MEETING_ID);
+    expect(await stub.getJoinReaction("U-route")).toBe("crown");
+    const replies = callsTo(RESPONSE_URL);
+    expect(replies).toHaveLength(1);
+    expect(JSON.parse(replies[0]!.body).text).toContain(":crown:");
+  });
 });
