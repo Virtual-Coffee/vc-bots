@@ -34,9 +34,10 @@ differently: a Slack edit that fails should never wedge a session.
   live in `test/zoom-invite-links.test.ts`):
   - `InviteLinkPort` (`createZoomInviteLinkPort`, `src/zoom/invite-links.ts`): S2S token +
     `createInviteLink`.
-  - `RoomChannelPort` (`createSlackRoomChannelPort`): post / update on the co-working
-    channel. It classifies `message_not_found` / `channel_not_found` as `"vanished"`, so a
-    hand-deleted card never wedges the room.
+  - `RoomChannelPort` (`createSlackRoomChannelPort`): post / update / react on the
+    co-working channel. It classifies `message_not_found` / `channel_not_found` as
+    `"vanished"`, so a hand-deleted card never wedges the room. `react` adds a member's join
+    reaction to the open card (`RoomMessage.react`), so the DO still never sees a message ts.
 - **Lifecycle.** `meeting.started` → `open` **always posts** a fresh open card (an edit would
   not notify the channel). `participant_joined/left` → `showPresence` edits the presence list.
   `meeting.ended` → `close` edits it into the ended card, which carries the **standing

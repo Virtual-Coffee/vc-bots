@@ -55,6 +55,10 @@ A person in the room matched, by the display name on a recent invite link, to th
 A person in the room who could not be matched to a Slack account.
 _Avoid_: external, unknown participant
 
+**Join reaction**:
+The emoji a member picks with `/coworking-react`. The bot adds it to the room message on the member's first join of each session, so it stays on the ended card too.
+_Avoid_: signature reaction, reaction pref (that is the table name only)
+
 **Invite link**:
 A personal Zoom join link minted for one member, with their name pre-filled. Its lifecycle lives in `src/bots/coworking/invite-link.ts` (ADR 0009).
 _Avoid_: registration link, join url

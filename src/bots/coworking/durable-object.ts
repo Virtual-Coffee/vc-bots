@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env";
 import { log, setLogLevel } from "../../log";
 import { SerialQueue } from "../../serial-queue";
+import { reportFailure } from "../../slack/notify";
 import { createZoomInviteLinkPort } from "../../zoom/invite-links";
 import type { ZoomMeetingEvent, ZoomParticipant } from "../../zoom/types";
 import { type InviteLinks, createInviteLinks } from "./invite-link";
@@ -47,6 +48,9 @@ type SessionRow = {
 };
 
 type PendingJoin = { uuid: string; event: ZoomMeetingEvent; at: number };
+
+/** A stored join, and the join reaction it earned (null for a guest, a rejoin or no preference). */
+type RecordedJoin = { reaction: string | null };
 
 type ParticipantRow = {
   zoom_user_id: string;
@@ -106,6 +110,11 @@ export class CoworkingRoom extends DurableObject<Env> {
         slack_user_id TEXT,
         expires_at    INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS reaction_pref (
+        slack_user_id TEXT PRIMARY KEY,
+        emoji         TEXT NOT NULL,
+        updated_at    INTEGER NOT NULL
+      );
     `);
     // Backfill columns for DOs created before these were added. ADD COLUMN throws on an existing
     // column, so guard with table_info to keep migrate() idempotent under blockConcurrencyWhile.
@@ -163,6 +172,37 @@ export class CoworkingRoom extends DurableObject<Env> {
   /** Resolve a `/join/<token>` redirect to its personal Zoom url, or null if unknown/expired. */
   resolveJoinToken(token: string): { joinUrl: string } | null {
     return this.inviteLinks.resolve(token);
+  }
+
+  /**
+   * `/coworking-react`: set (or, with null, clear) the member's join reaction. Touches only
+   * `reaction_pref`, so like the join-token RPCs it stays outside the queue (ADR 0003).
+   */
+  setJoinReaction(slackUserId: string, emoji: string | null): void {
+    if (emoji === null) {
+      this.sql.exec("DELETE FROM reaction_pref WHERE slack_user_id = ?", slackUserId);
+      return;
+    }
+    this.sql.exec(
+      `INSERT INTO reaction_pref (slack_user_id, emoji, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(slack_user_id) DO UPDATE SET
+         emoji = excluded.emoji, updated_at = excluded.updated_at`,
+      slackUserId,
+      emoji,
+      Date.now(),
+    );
+  }
+
+  /** The member's join reaction, or null when they haven't set one. */
+  getJoinReaction(slackUserId: string): string | null {
+    return (
+      this.sql
+        .exec<{ emoji: string }>(
+          "SELECT emoji FROM reaction_pref WHERE slack_user_id = ?",
+          slackUserId,
+        )
+        .toArray()[0]?.emoji ?? null
+    );
   }
 
   /**
@@ -263,22 +303,25 @@ export class CoworkingRoom extends DurableObject<Env> {
       return; // the instance already ended — a straggler, nothing to replay it into
     }
 
-    if (this.recordJoin(event)) await this.updatePresence(session);
+    const joined = this.recordJoin(event);
+    if (!joined) return;
+    await this.updatePresence(session);
+    await this.addJoinReactions(uuid, [joined]);
   }
 
   /**
-   * Store one join against its (active) session and bump the peak. Presence is left to the
-   * caller, so a replay of several buffered joins re-renders the card once. False when the event
-   * carries no usable participant.
+   * Store one join against its (active) session and bump the peak. Presence and the join
+   * reaction are left to the caller, so a replay of several buffered joins re-renders the card
+   * once. Null when the event carries no usable participant.
    */
-  private recordJoin(event: ZoomMeetingEvent): boolean {
+  private recordJoin(event: ZoomMeetingEvent): RecordedJoin | null {
     const uuid = instanceUuid(event);
     const participant = event.payload.object.participant;
-    if (!participant) return false;
+    if (!participant) return null;
     const id = participantIdentity(participant);
     if (!id.zoomUserId) {
       log.debug("coworking.joined.drop_no_id", { instance: uuid });
-      return false;
+      return null;
     }
 
     log.debug("coworking.join.correlate", { instance: uuid });
@@ -289,6 +332,10 @@ export class CoworkingRoom extends DurableObject<Env> {
       instance: uuid,
       as: slackUserId ? "member" : "guest",
     });
+    // Read before the insert below: a member reacts on their first join of the session only, so
+    // a rejoin, a second device or a duplicate webhook adds nothing.
+    const reaction =
+      slackUserId && !this.hasJoined(uuid, slackUserId) ? this.getJoinReaction(slackUserId) : null;
 
     this.sql.exec(
       `INSERT INTO participant
@@ -314,7 +361,36 @@ export class CoworkingRoom extends DurableObject<Env> {
     );
 
     log.info("coworking.joined", { instance: uuid, as: slackUserId ? "member" : "guest" });
-    return true;
+    return { reaction };
+  }
+
+  /**
+   * Add the join reactions these joins earned to the open card. Best-effort: a failure is
+   * reported to #bot-log and never fails the join that triggered it (ADR 0006).
+   */
+  private async addJoinReactions(uuid: string, joins: RecordedJoin[]): Promise<void> {
+    for (const { reaction } of joins) {
+      if (!reaction) continue;
+      try {
+        await this.roomMessage.react(reaction);
+        log.info("coworking.join_reaction", { instance: uuid });
+      } catch (err) {
+        await reportFailure(this.env, "coworking.join_reaction_failed", err, { instance: uuid });
+      }
+    }
+  }
+
+  /** Whether `slackUserId` already has a participant row in this session. */
+  private hasJoined(uuid: string, slackUserId: string): boolean {
+    return (
+      this.sql
+        .exec(
+          "SELECT 1 FROM participant WHERE instance_uuid = ? AND slack_user_id = ? LIMIT 1",
+          uuid,
+          slackUserId,
+        )
+        .toArray().length > 0
+    );
   }
 
   private async onParticipantLeft(event: ZoomMeetingEvent): Promise<void> {
@@ -378,14 +454,20 @@ export class CoworkingRoom extends DurableObject<Env> {
     const pending = await this.loadPendingJoins();
     const mine = pending.filter((p) => p.uuid === uuid);
 
-    let recorded = 0;
-    for (const p of mine) if (this.recordJoin(p.event)) recorded++;
+    const recorded: RecordedJoin[] = [];
+    for (const p of mine) {
+      const joined = this.recordJoin(p.event);
+      if (joined) recorded.push(joined);
+    }
     await this.savePendingJoins(pending.filter((p) => p.uuid !== uuid)); // also persists the prune
     if (mine.length === 0) return;
 
     const session = this.getSession(uuid);
-    if (recorded > 0 && session) await this.updatePresence(session);
-    log.info("coworking.joined.replayed", { instance: uuid, count: recorded });
+    if (recorded.length > 0 && session) {
+      await this.updatePresence(session);
+      await this.addJoinReactions(uuid, recorded);
+    }
+    log.info("coworking.joined.replayed", { instance: uuid, count: recorded.length });
   }
 
   /**
